@@ -1,0 +1,17 @@
+{
+  "name": "launch27-new-front-end",
+  "private": true,
+  "type": "module",
+  "workspaces": ["server", "web", "capture"],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "npm start -w server",
+    "test": "npm test -w server -w capture",
+    "capture": "npm start -w capture --",
+    "catalog": "npm run catalog -w capture"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
