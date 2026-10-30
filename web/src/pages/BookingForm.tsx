@@ -217,7 +217,8 @@ export function BookingFormPage() {
     queryKey: ['booking-form-fields'],
     queryFn: () => l27<FormField[]>('/v1/staff/booking_form/custom_fields'),
     staleTime: 10 * 60_000,
-    select: (list) => list.filter((f) => f.active && f.control_type !== 'plain_text'),
+    // plain_text is display-only; unlabelled optional fields aren't shown in Launch27's admin either.
+    select: (list) => list.filter((f) => f.active && f.control_type !== 'plain_text' && (f.value_required || stripTags(f.label || ''))),
   });
   const teams = useActiveTeams();
   const customerId = form.customerId;
