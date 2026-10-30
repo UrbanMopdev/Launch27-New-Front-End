@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { l27 } from '../api';
 import type { Booking, BookingComment, Charge } from '../types';
+import { BookingActions } from '../components/BookingActions';
 import { fmtDateTime, fmtMoney, fmtTime } from '../format';
 
 // Same data Launch27's /admin/bookings/:id/edit loads:
@@ -33,6 +34,7 @@ export function BookingDetailPage() {
             {b.completed && <span className="badge">completed</span>}
           </h1>
         </div>
+        <BookingActions booking={b} />
       </header>
 
       <div className="grid-2">

@@ -124,3 +124,30 @@ a:hover { text-decoration: underline; }
   .nav-section { display: none; }
 }
 .clip { display: inline-block; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+
+/* Forms */
+.button { display: inline-block; padding: 8px 14px; border-radius: 6px; background: var(--accent); color: white; font-size: 14px; }
+.button:hover { text-decoration: none; opacity: .92; }
+button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+button.danger { background: var(--danger); }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.actions.end { justify-content: flex-end; margin-top: 12px; }
+.field-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px 12px; margin-bottom: 10px; }
+.field-grid label, label.block, fieldset.block { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
+label.block, fieldset.block { margin-bottom: 10px; }
+fieldset.block { border: 0; padding: 0; }
+.span-2 { grid-column: span 2; }
+label.check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; font-size: 13px; padding: 3px 0; }
+select, textarea { font: inherit; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); }
+textarea { resize: vertical; }
+input.full { width: 100%; margin-bottom: 6px; }
+input.qty { width: 64px; padding: 3px 6px; }
+.service-line { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.extras { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 2px 12px; padding: 6px 0; }
+.team-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; margin-bottom: 4px; }
+.picker-results { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.picker-row { text-align: left; background: none; color: var(--text); padding: 6px 8px; border: 1px solid var(--border); }
+.picker-row:hover { background: #f1f5fd; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: grid; place-items: center; z-index: 10; padding: 16px; }
+.modal { width: min(480px, 100%); }
+@media (max-width: 760px) { .span-2 { grid-column: auto; } }

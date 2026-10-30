@@ -6,6 +6,7 @@ import { Layout } from './components/Layout';
 import { LoginPage } from './pages/Login';
 import { BookingsPage } from './pages/Bookings';
 import { BookingDetailPage } from './pages/BookingDetail';
+import { BookingFormPage } from './pages/BookingForm';
 import { DashboardPage } from './pages/Dashboard';
 import { CustomersPage } from './pages/Customers';
 import { CustomerDetailPage } from './pages/CustomerDetail';
@@ -53,7 +54,9 @@ export function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="bookings" element={<BookingsPage />} />
+        <Route path="bookings/new" element={<BookingFormPage />} />
         <Route path="bookings/:id" element={<BookingDetailPage />} />
+        <Route path="bookings/:id/edit" element={<BookingFormPage />} />
         <Route path="customers" element={<CustomersPage />} />
         <Route path="customers/:id" element={<CustomerDetailPage />} />
         <Route path="teams" element={<TeamsPage />} />

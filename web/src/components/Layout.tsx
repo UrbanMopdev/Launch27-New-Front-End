@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { auth } from '../api';
+import { useCanWrite } from '../hooks';
 
 // Sidebar sections. Add a line here for each page rebuilt from docs/API.md.
 const NAV: { section: string; items: { to: string; label: string }[] }[] = [
@@ -50,6 +51,7 @@ const NAV: { section: string; items: { to: string; label: string }[] }[] = [
 
 export function Layout({ email }: { email: string }) {
   const queryClient = useQueryClient();
+  const canWrite = useCanWrite();
   const logout = async () => {
     await auth.logout();
     queryClient.clear();
@@ -74,6 +76,7 @@ export function Layout({ email }: { email: string }) {
         </nav>
         <div className="sidebar-footer">
           <div className="muted small">{email}</div>
+          <div className="small">{canWrite ? <span className="ok">Editing on</span> : <span className="muted">Read-only</span>}</div>
           <button className="link" onClick={logout}>
             Log out
           </button>

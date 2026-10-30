@@ -9,6 +9,8 @@ const FORWARD_HEADERS = ['accept', 'content-type'];
 
 export function createApp(config, { fetchImpl = fetch, sessions = new SessionStore() } = {}) {
   const app = express();
+  // Behind Railway's (or any) HTTPS proxy: trust X-Forwarded-* so secure cookies work.
+  app.set('trust proxy', 1);
   app.use(cookieParser(config.sessionSecret));
 
   const cookieOptions = {

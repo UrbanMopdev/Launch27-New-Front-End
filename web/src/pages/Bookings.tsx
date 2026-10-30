@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useCanWrite } from '../hooks';
 import { useQuery } from '@tanstack/react-query';
 import { l27All } from '../api';
 import type { Booking } from '../types';
@@ -17,6 +18,7 @@ const FILTERS = [
 // GET /v1/staff/bookings?filter=&from=&to=&sort=asc&limit=100&offset=  (all pages)
 export function BookingsPage() {
   const navigate = useNavigate();
+  const canWrite = useCanWrite();
   const [filter, setFilter] = useState('all');
   const [from, setFrom] = useState(todayISO());
   const [to, setTo] = useState(todayISO());
@@ -53,6 +55,11 @@ export function BookingsPage() {
             To <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
           </label>
           <input placeholder="Search customer, address, team…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          {canWrite && (
+            <Link to="/bookings/new" className="button">
+              New booking
+            </Link>
+          )}
         </div>
       </header>
 

@@ -61,7 +61,7 @@ export interface Booking {
   created_by?: Named;
   location?: Named;
   frequency?: Named;
-  address?: { full_address?: string };
+  address?: { full_address?: string; street?: string; city?: string; state?: string; zip?: string };
   user?: Named & { email?: string; is_new_customer?: boolean; referral_code?: string; is_stripe_card?: boolean };
   teams?: { id?: number; title?: string }[];
   services?: Service[];
@@ -71,6 +71,9 @@ export interface Booking {
   active?: boolean;
   completed?: boolean;
   digest?: string;
+  team_with_key_id?: number | null;
+  team_requested_id?: number | null;
+  sms_notifications?: boolean;
   summary?: {
     services?: number;
     extras?: number;

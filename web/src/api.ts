@@ -2,9 +2,25 @@
 // user's bearer token. Paths after /l27 are Launch27's own paths.
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public fields?: Record<string, unknown>) {
     super(message);
   }
+}
+
+// Launch27 validation errors look like
+//   {"custom_field":[{"type":"invalid","message":"value required: id 267"}]}
+// Flatten them into readable lines.
+export function describeErrors(body: unknown): string {
+  if (!body || typeof body !== 'object') return '';
+  const lines: string[] = [];
+  for (const [field, value] of Object.entries(body as Record<string, unknown>)) {
+    if (field === 'error' || field === 'message') {
+      lines.push(String(value));
+    } else if (Array.isArray(value)) {
+      for (const item of value) lines.push(`${field}: ${(item as { message?: string })?.message ?? JSON.stringify(item)}`);
+    }
+  }
+  return [...new Set(lines)].join('\n');
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -14,7 +30,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, body.error || body.message || `${res.status} ${res.statusText}`);
+    throw new ApiError(res.status, describeErrors(body) || `${res.status} ${res.statusText}`, body);
   }
   return res.status === 204 ? (undefined as T) : res.json();
 }
@@ -35,6 +51,15 @@ export async function l27All<T>(path: string, params: Record<string, string | nu
     all.push(...page);
     if (page.length < pageSize) return all;
   }
+}
+
+// Writes go through the same proxy; the server rejects them unless L27_ALLOW_WRITES=true.
+export function l27Write<T>(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  return request<T>(`/l27${path}`, {
+    method,
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 }
 
 export const auth = {

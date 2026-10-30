@@ -5,6 +5,8 @@ import { l27 } from '../api';
 import type { Booking, Customer, Tag } from '../types';
 import { fmtDateTime, fmtMoney } from '../format';
 import { customerName } from './Customers';
+import { CustomerEditor } from '../components/CustomerEditor';
+import { useCanWrite } from '../hooks';
 
 // Booking tabs on Launch27's customer page, with the exact params it sends.
 const BOOKING_TABS = [
@@ -23,6 +25,8 @@ export function CustomerDetailPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState(0);
   const [page, setPage] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const canWrite = useCanWrite();
 
   const customer = useQuery({ queryKey: ['customer', id], queryFn: () => l27<Customer>(`/v1/staff/customers/${id}`) });
   const phones = useQuery({ queryKey: ['customer', id, 'phones'], queryFn: () => l27<{ id: number; phone: string; label: string | null; preferred: boolean }[]>(`/v1/staff/customers/${id}/phones`) });
@@ -55,7 +59,19 @@ export function CustomerDetailPage() {
             {customerName(c)} {!c.active && <span className="badge danger">inactive</span>}
           </h1>
         </div>
+        {canWrite && !editing && (
+          <div className="actions">
+            <button type="button" className="secondary" onClick={() => setEditing(true)}>
+              Edit customer
+            </button>
+            <Link to={`/bookings/new?customer=${c.id}`} className="button">
+              New booking
+            </Link>
+          </div>
+        )}
       </header>
+
+      {editing && <CustomerEditor customer={c} onDone={() => setEditing(false)} />}
 
       <div className="grid-2">
         <section className="card">
