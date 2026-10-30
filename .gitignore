@@ -4,3 +4,4 @@ dist/
 # Raw captures contain customer PII (names, addresses, phones). Never commit them.
 capture/output/
 capture/.auth/
+*.tsbuildinfo
