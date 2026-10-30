@@ -17,3 +17,15 @@ test('templates collapse ids and dates', () => {
 test('redacts emails and phone numbers', () => {
   assert.equal(redact('Jo jo@ex.com +1 (416) 555-0100'), 'Jo <email> <phone>');
 });
+
+test('headings keep no names or counts', async () => {
+  const { genericHeading } = await import('./catalog.js');
+  assert.equal(genericHeading('Team Availability: (1)(F)Jane Doe'), 'Team Availability');
+  assert.equal(genericHeading('Customers (7820)'), 'Customers');
+  assert.equal(genericHeading('286 Active Bookings'), 'Active Bookings');
+});
+
+test('breadcrumb headings drop the record name', async () => {
+  const { genericHeading } = await import('./catalog.js');
+  assert.equal(genericHeading('Customers / Jane Doe'), 'Customers');
+});

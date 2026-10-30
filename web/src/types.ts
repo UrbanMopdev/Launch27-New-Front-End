@@ -8,6 +8,8 @@ export interface Named {
 }
 
 export interface TimeTracking {
+  id?: number;
+  team?: { id: number; title: string };
   state?: string;
   enroute_started_at?: string;
   enroute_finished_at?: string;
@@ -16,9 +18,36 @@ export interface TimeTracking {
   distance?: number;
 }
 
+export interface Service {
+  id: number;
+  name: string;
+  price?: number;
+  extras?: { id: number; name: string; quantity: number; price: number; total: number }[];
+  pricing_parameters?: { id: number; name: string; quantity: number; price: number; total: number }[];
+}
+
+export interface Charge {
+  id: number;
+  amount?: number;
+  description?: string;
+  status?: string;
+  charged_date?: string;
+  payment_method_info?: { code?: string; text?: string };
+}
+
+// GET /v1/staff/bookings/:id/comments
+export interface BookingComment {
+  id: number;
+  comment: string;
+  author_type?: string;
+  created_at?: string;
+  team_viewable?: boolean;
+  customer_viewable?: boolean;
+}
+
 export interface CustomField {
   title?: string;
-  values?: { label?: string; value?: string }[];
+  values?: { label?: string; value?: string; name?: string; other?: string }[];
 }
 
 export interface Booking {
@@ -35,8 +64,19 @@ export interface Booking {
   address?: { full_address?: string };
   user?: Named & { email?: string; is_new_customer?: boolean; referral_code?: string; is_stripe_card?: boolean };
   teams?: { id?: number; title?: string }[];
-  services?: (Named & { price?: number })[];
+  services?: Service[];
+  staff_notes?: string | null;
+  customer_notes?: string | null;
+  price_adjustment_comment?: string | null;
+  active?: boolean;
+  completed?: boolean;
+  digest?: string;
   summary?: {
+    services?: number;
+    extras?: number;
+    pricing_parameters?: number;
+    adjustment?: number;
+    next_total?: number;
     revenue?: number;
     discount?: number;
     tip?: number;
@@ -46,7 +86,64 @@ export interface Booking {
   payment_method_info?: { code?: string; text?: string };
   actions?: Record<string, boolean>;
   time_tracking?: TimeTracking[];
-  charges?: { charged?: { description?: string; status?: string; charged_date?: string }[] };
+  charges?: {
+    charged?: Charge[];
+    onhold?: Charge[];
+    refunded?: Charge[];
+    marked_paid?: Charge[];
+    outstanding?: number;
+  };
   custom_fields?: CustomField[];
   [key: string]: unknown;
+}
+
+export interface Tag {
+  id: number;
+  name: string;
+  color?: string;
+  type?: string;
+}
+
+// GET /v1/staff/customers
+export interface Customer {
+  id: number;
+  company_name?: string | null;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  notes?: string | null;
+  referral_code?: string;
+  active?: boolean;
+  confirmed?: boolean;
+  is_new_customer?: boolean;
+  created_at?: string;
+  tags_info?: Tag[] | null;
+  quickbooks_customer_id?: string;
+}
+
+// GET /v1/staff/teams
+export interface Team {
+  id: number;
+  title: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  notes?: string;
+  rating?: number;
+  stars?: number;
+  ratings_count?: number;
+  fg_color?: string;
+  bg_color?: string;
+  active?: boolean;
+  share?: number;
+  tags_info?: Tag[] | null;
+  locations?: { id: number; name: string }[];
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import catalog from '../../../docs/api-catalog.json';
+import { useQuery } from '@tanstack/react-query';
 
 interface Endpoint {
   method: string;
@@ -21,10 +21,17 @@ interface Catalog {
 // Browse what `npm run capture` recorded from the Launch27 admin portal:
 // which endpoints each admin page calls, and the shape of each response.
 export function ApiCatalogPage() {
-  const data = catalog as Catalog;
+  // Loaded on demand (it's large) as its own chunk.
+  const catalog = useQuery({
+    queryKey: ['api-catalog'],
+    queryFn: () => import('../../../docs/api-catalog.json').then((m) => m.default as unknown as Catalog),
+    staleTime: Infinity,
+  });
   const [filter, setFilter] = useState('');
   const q = filter.toLowerCase();
 
+  if (!catalog.data) return <div className="muted">Loading…</div>;
+  const data = catalog.data;
   if (!data.generatedAt) {
     return (
       <>

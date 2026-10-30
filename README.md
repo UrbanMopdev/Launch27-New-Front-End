@@ -29,6 +29,12 @@ npm install
 cp .env.example .env        # fill in values; .env is gitignored
 ```
 
+Wrap values containing `#` in single quotes (`L27_PASSWORD='abc#123'`); otherwise
+Node treats the rest of the line as a comment.
+
+Behind an HTTP proxy (e.g. a locked-down cloud sandbox), start the server with
+`NODE_USE_ENV_PROXY=1` so Node's `fetch` uses `HTTPS_PROXY`.
+
 ## 1. Capture the admin portal's API
 
 ```bash
@@ -37,7 +43,14 @@ npm run capture                   # headless, logs in with L27_EMAIL / L27_PASSW
 npm run capture -- --headed       # watch it, or log in by hand if no credentials are set
 ```
 
-Options: `--start /admin` (where to start; also `L27_ADMIN_START`), `--max-pages 200`,
+It starts at `/admin/`, visits every link it finds plus the routes in `capture/seeds.txt`
+(menus that only open on click, taken from the admin app's route definitions), and
+covers both the classic admin and the newer `/app-v2/admin/`. If a CDN the admin app
+needs is unreachable, it serves local copies of jQuery/jQuery UI/Font Awesome and
+stubs out analytics/chat widgets.
+
+Options: `--start /admin/` (where to start; also `L27_ADMIN_START`), `--scope` (allowed
+path prefixes), `--max-pages 200`,
 `--per-template 2` (how many `/bookings/:id`-style pages to visit), `--fresh` (ignore the
 saved login), `--allow-writes`. `CHROMIUM_PATH` points it at an already installed browser.
 
@@ -49,7 +62,7 @@ Output:
 
 | Path | Contents | Commit? |
 | --- | --- | --- |
-| `docs/API.md`, `docs/api-catalog.json` | For each page: the endpoints it calls. For each endpoint: query params, request body and response *shapes* (types only; emails/phones redacted) | Yes |
+| `docs/API.md`, `docs/api-catalog.json` | For each page: the endpoints it calls. For each endpoint: query params, request body and response *shapes* (types only). No names, emails, phones or search text: this repo is public | Yes |
 | `capture/output/` | Raw requests with full response bodies, plus a screenshot of every page | **No.** Contains customer data; gitignored |
 
 `npm run catalog` rebuilds the docs from `capture/output/` without crawling again.
@@ -67,10 +80,33 @@ The proxy only forwards **GET** requests until `L27_ALLOW_WRITES=true` is set.
 
 ### Pages
 
-| Page | Launch27 calls |
+Every page makes the same Launch27 calls as the admin page it replaces (see
+`docs/API.md`). All are read-only for now.
+
+| Section | Pages |
 | --- | --- |
-| Bookings: date range, search, booking details panel, time-tracking status | `GET /v1/staff/bookings?from&to&limit=100&offset` |
-| API catalog: browse `docs/api-catalog.json` | none |
+| Operations | Dashboard, Bookings (filters: all / unassigned / recurring / new customer / cancelled), Booking detail, Time tracking, Quotes, Customers, Customer detail (upcoming / past / cancelled / feedback), Teams |
+| Money | Charge customers, Declined charges, Team payments, Hourly wages, Discount codes, Gift cards |
+| Reports | Customer feedback |
+| Settings | Services, Extras, Pricing parameters, Frequencies, Sales taxes, Closed dates, Tags & service categories, Office staff, Automated tasks, Undeliverable emails |
+| Developer | API catalog (browse `docs/api-catalog.json`) |
+
+Simple list pages live in `web/src/pages/Lists.tsx` and use the shared
+`ResourceList` component (tabs, search, date filters, paging via Launch27's `/count`
+endpoints).
+
+### What Launch27's API looks like
+
+- Base: `https://urbanmop.launch27.com/v1/`, `Authorization: Bearer <token>` from
+  `POST /latest/login` (the admin app itself uses `POST /v1/login`).
+- Lists: `GET /v1/staff/<resource>?limit&offset` return a bare array; `GET
+  /v1/staff/<resource>/count` (same filters) returns `{count}`. Common filters:
+  `filter=active` (omit for all), `query=` (search), `from`/`to` (YYYY-MM-DD).
+- Details: `GET /v1/staff/<resource>/:id`, plus sub-resources such as
+  `/v1/staff/customers/:id/phones|addresses|tags` and `/v1/staff/bookings/:id/comments`.
+- Some read-only calculations are POSTs (`/v1/booking/estimate_price`, `/v1/booking/spots`,
+  `/v1/booking/teams`, `/v1/staff/bookings/available_teams`). They're needed for a
+  booking form and are blocked by the capture tool and proxy until writes are enabled.
 
 ### Adding a page
 

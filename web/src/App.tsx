@@ -5,6 +5,32 @@ import { auth } from './api';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/Login';
 import { BookingsPage } from './pages/Bookings';
+import { BookingDetailPage } from './pages/BookingDetail';
+import { DashboardPage } from './pages/Dashboard';
+import { CustomersPage } from './pages/Customers';
+import { CustomerDetailPage } from './pages/CustomerDetail';
+import { TeamsPage } from './pages/Teams';
+import {
+  TimeTrackingPage,
+  QuotesPage,
+  ChargesPage,
+  DeclinedChargesPage,
+  TeamPaymentsPage,
+  HourlyWagesPage,
+  FeedbackPage,
+  StaffPage,
+  ServicesPage,
+  ExtrasPage,
+  FrequenciesPage,
+  PricingParametersPage,
+  DiscountsPage,
+  GiftCardsPage,
+  TagsPage,
+  TasksPage,
+  SalesTaxesPage,
+  ClosedDatesPage,
+  BouncesPage,
+} from './pages/Lists';
 import { ApiCatalogPage } from './pages/ApiCatalog';
 
 export function App() {
@@ -24,8 +50,32 @@ export function App() {
   return (
     <Routes>
       <Route element={<Layout email={me.data.email} />}>
-        <Route index element={<Navigate to="/bookings" replace />} />
+        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route path="dashboard" element={<DashboardPage />} />
         <Route path="bookings" element={<BookingsPage />} />
+        <Route path="bookings/:id" element={<BookingDetailPage />} />
+        <Route path="customers" element={<CustomersPage />} />
+        <Route path="customers/:id" element={<CustomerDetailPage />} />
+        <Route path="teams" element={<TeamsPage />} />
+        <Route path="time-tracking" element={<TimeTrackingPage />} />
+        <Route path="quotes" element={<QuotesPage />} />
+        <Route path="charges" element={<ChargesPage />} />
+        <Route path="declined-charges" element={<DeclinedChargesPage />} />
+        <Route path="team-payments" element={<TeamPaymentsPage />} />
+        <Route path="hourly-wages" element={<HourlyWagesPage />} />
+        <Route path="feedback" element={<FeedbackPage />} />
+        <Route path="staff" element={<StaffPage />} />
+        <Route path="services" element={<ServicesPage />} />
+        <Route path="extras" element={<ExtrasPage />} />
+        <Route path="frequencies" element={<FrequenciesPage />} />
+        <Route path="pricing-parameters" element={<PricingParametersPage />} />
+        <Route path="discounts" element={<DiscountsPage />} />
+        <Route path="gift-cards" element={<GiftCardsPage />} />
+        <Route path="tags" element={<TagsPage />} />
+        <Route path="tasks" element={<TasksPage />} />
+        <Route path="sales-taxes" element={<SalesTaxesPage />} />
+        <Route path="closed-dates" element={<ClosedDatesPage />} />
+        <Route path="bounces" element={<BouncesPage />} />
         <Route path="api" element={<ApiCatalogPage />} />
         <Route path="*" element={<div className="muted">Page not found.</div>} />
       </Route>

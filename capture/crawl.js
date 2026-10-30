@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { createRequire } from 'node:module';
 import { chromium } from 'playwright';
 import { pageTemplate } from './routes.js';
 import { buildCatalog } from './catalog.js';
@@ -23,10 +24,17 @@ const MAX_BODY_CHARS = 200_000;
 const { values: args } = parseArgs({
   options: {
     headed: { type: 'boolean', default: false },
-    start: { type: 'string', default: process.env.L27_ADMIN_START || '/admin' },
+    start: { type: 'string', default: process.env.L27_ADMIN_START || '/admin/' },
+    // Path prefixes the crawler may visit (comma-separated). Launch27 has the
+    // classic admin at /admin/ and a newer one at /app-v2/admin/.
+    scope: { type: 'string', default: process.env.L27_ADMIN_SCOPE || '/admin/,/app-v2/admin/' },
     'max-pages': { type: 'string', default: '200' },
     'per-template': { type: 'string', default: '2' },
     'allow-writes': { type: 'boolean', default: false },
+    // Extra routes to visit, one per line. Settings pages live in click-to-open
+    // menus the link crawl can't see; seeds.txt lists them (taken from the
+    // admin app's route definitions).
+    seeds: { type: 'string', default: path.join(HERE, 'seeds.txt') },
     fresh: { type: 'boolean', default: false },
   },
 });
@@ -35,10 +43,33 @@ const BASE = (process.env.L27_BASE_URL || 'https://urbanmop.launch27.com').repla
 const ORIGIN = new URL(BASE).origin;
 const MAX_PAGES = Number(args['max-pages']);
 const PER_TEMPLATE = Number(args['per-template']);
+const SCOPE = args.scope.split(',').map((s) => s.trim()).filter(Boolean);
 
 // Links the crawler must never follow: they log out, change data or download files.
-const SKIP_LINK = /(log_?out|sign_?out|delete|remove|destroy|cancel|archive|deactivate|export|download|impersonat|\.(csv|pdf|xlsx?|zip)(\?|$))/i;
+// ("deleted" and "downloads" are plain list pages and are allowed.)
+const SKIP_LINK = /(log_?out|sign_?out|delete(?!d)|remove|destroy|cancel|archive|deactivate|export|download(?!s)|impersonat|\.(csv|pdf|xlsx?|zip)(\?|$))/i;
 const LOGIN_REQUEST = /\/(latest|v\d+)\/login\b|\/login\b|\/sign_?in\b|\/session/i;
+
+// The admin app loads jQuery etc. from CDNs. Where a CDN is unreachable (e.g. a
+// locked-down network), serve a local copy instead; analytics/chat/payment
+// widgets the crawl doesn't need get an empty stub.
+const require = createRequire(import.meta.url);
+const CDN_FALLBACKS = [
+  [/code\.jquery\.com\/jquery-2[\d.]*(\.min)?\.js/, 'jquery/dist/jquery.min.js'],
+  [/code\.jquery\.com\/ui\/.*jquery-ui(\.min)?\.js/, 'jquery-ui-dist/jquery-ui.min.js'],
+  [/code\.jquery\.com\/ui\/.*\.css/, 'jquery-ui-dist/jquery-ui.min.css'],
+  [/font-awesome.*\.css/, 'font-awesome/css/font-awesome.min.css'],
+];
+const STUB_HOSTS = /(js\.stripe\.com|fullstory\.com|intercom\.io|intercomcdn\.com|google-analytics\.com|googletagmanager\.com|rollbar|fonts\.googleapis\.com|fonts\.gstatic\.com|hotjar|facebook\.net)/;
+
+async function fallback(route, url) {
+  const match = CDN_FALLBACKS.find(([pattern]) => pattern.test(url));
+  if (match) {
+    return route.fulfill({ path: require.resolve(match[1]), contentType: url.includes('.css') ? 'text/css' : 'application/javascript' });
+  }
+  if (STUB_HOSTS.test(url)) return route.fulfill({ status: 200, body: '', contentType: 'application/javascript' });
+  return route.abort();
+}
 
 fs.mkdirSync(path.join(OUTPUT, 'screens'), { recursive: true });
 fs.mkdirSync(path.dirname(AUTH_STATE), { recursive: true });
@@ -63,7 +94,12 @@ await context.route('**/*', async (route) => {
     record({ page: currentPage, method: req.method(), url: req.url(), requestBody: req.postData(), blocked: true });
     return route.abort('blockedbyclient');
   }
-  return route.continue();
+  if (new URL(req.url()).origin === ORIGIN) return route.continue();
+  try {
+    return await route.fulfill({ response: await route.fetch({ timeout: 15_000 }) });
+  } catch {
+    return fallback(route, req.url());
+  }
 });
 
 context.on('response', async (response) => {
@@ -120,20 +156,26 @@ async function login(page) {
 
   if (process.env.L27_EMAIL && process.env.L27_PASSWORD) {
     console.log('Logging in with L27_EMAIL');
-    await page.locator('input[type="email"], input[name*="email" i], input[name*="login" i], input[type="text"]').first().fill(process.env.L27_EMAIL);
+    const emailBox = page.locator('input[type="email"], input[placeholder*="mail" i], input[name*="email" i]').filter({ visible: true });
+    await ((await emailBox.count()) ? emailBox : page.locator('input[type="text"]').filter({ visible: true })).first().fill(process.env.L27_EMAIL);
     await page.locator('input[type="password"]').first().fill(process.env.L27_PASSWORD);
-    await page.locator('button[type="submit"], input[type="submit"], button:has-text("Log in"), button:has-text("Sign in")').first().click();
+    // Launch27's shared sign-in page submits on Enter.
+    await page.locator('input[type="password"]').first().press('Enter');
   } else if (args.headed) {
     console.log('No L27_EMAIL/L27_PASSWORD set: log in in the browser window (waiting up to 5 minutes).');
   } else {
     throw new Error('Login page shown and no credentials set. Set L27_EMAIL/L27_PASSWORD or run with --headed.');
   }
 
-  await page.waitForFunction(() => !document.querySelector('input[type="password"]'), null, { timeout: 5 * 60_000 });
+  // Automatic login either works within a minute or the credentials are wrong.
+  const loginTimeout = process.env.L27_EMAIL && process.env.L27_PASSWORD ? 60_000 : 5 * 60_000;
+  await page.waitForFunction(() => !document.querySelector('input[type="password"]'), null, { timeout: loginTimeout }).catch(() => {
+    throw new Error('Still on the login page. Check L27_EMAIL / L27_PASSWORD (quote values containing #).');
+  });
   await settle(page);
   await context.storageState({ path: AUTH_STATE });
   console.log('Logged in; session saved for next run.');
-  if (!page.url().startsWith(BASE + args.start)) {
+  if (!SCOPE.some((prefix) => new URL(page.url()).pathname.startsWith(prefix))) {
     await page.goto(BASE + args.start, { waitUntil: 'domcontentloaded' });
     await settle(page);
   }
@@ -151,7 +193,7 @@ async function collectLinks(page) {
     }
     if (u.origin !== ORIGIN || SKIP_LINK.test(u.pathname + u.hash) || !/^https?:/.test(u.protocol)) continue;
     // Stay inside the admin area.
-    if (!(u.pathname + u.hash).includes(args.start.replace(/\/+$/, ''))) continue;
+    if (!SCOPE.some((prefix) => u.pathname.startsWith(prefix))) continue;
     out.add(u.href);
   }
   return [...out];
@@ -160,7 +202,10 @@ async function collectLinks(page) {
 const page = await context.newPage();
 await login(page);
 
-const queue = [page.url()];
+const seeds = fs.existsSync(args.seeds)
+  ? fs.readFileSync(args.seeds, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).map((l) => new URL(l, BASE).href)
+  : [];
+const queue = [page.url(), ...seeds];
 const seenUrls = new Set();
 const visitsPerTemplate = new Map();
 const pages = [];

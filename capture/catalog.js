@@ -13,6 +13,17 @@ const MAX_DEPTH = 8;
 // Query values that are safe to show as examples; anything else is replaced by its type.
 const SAFE_QUERY_VALUE = /^(\d{1,6}|true|false|asc|desc|\d{4}-\d{2}-\d{2}([T ][\d:.]+Z?)?|[a-z_]{1,30})$/i;
 
+// Search boxes: whatever was typed is never kept.
+const FREE_TEXT_PARAM = /^(query|q|search|term|email|phone|name)$/i;
+
+// Headings like "Team Availability: Jane Doe", "Customers / Jane Doe" or "Customers (7820)" -> the section name.
+// This repo is public, so no names or counts go into the catalog.
+export function genericHeading(heading) {
+  if (!heading) return null;
+  // Breadcrumbs ("Customers / Jane Doe") keep only the section.
+  return redact(heading.split(/[:/]/)[0].replace(/\(.*?\)/g, '').replace(/#?\d[\d,]*/g, '').replace(/\s+/g, ' ').trim()) || null;
+}
+
 // Response "shape": the same structure with every value replaced by its type.
 export function shapeOf(value, depth = 0) {
   if (value === null) return 'null';
@@ -94,7 +105,7 @@ export function buildCatalog() {
     if (entry.blocked) ep.blocked = true;
     for (const [name, value] of u.searchParams) {
       ep.query[name] ??= new Set();
-      if (ep.query[name].size < 5) ep.query[name].add(SAFE_QUERY_VALUE.test(value) ? value : `<${redact(value) === value ? 'string' : 'redacted'}>`);
+      if (ep.query[name].size < 5) ep.query[name].add(!FREE_TEXT_PARAM.test(name) && SAFE_QUERY_VALUE.test(value) ? value : value ? '<string>' : '');
     }
     const body = parseBody(entry.requestBody);
     if (body && typeof body === 'object') ep.requestShape = mergeShapes(ep.requestShape, shapeOf(body));
@@ -118,7 +129,7 @@ export function buildCatalog() {
   for (const ep of list) {
     for (const p of ep.pages) (byPage[p] ??= []).push(`${ep.method} ${ep.endpoint}${ep.blocked ? ' (blocked: write)' : ''}`);
   }
-  const pages = [...new Map(visited.map((p) => [p.template, { template: p.template, heading: p.heading ? redact(p.heading) : null, title: p.title }])).values()].map((p) => ({
+  const pages = [...new Map(visited.map((p) => [p.template, { template: p.template, heading: genericHeading(p.heading) }])).values()].map((p) => ({
     ...p,
     requests: byPage[p.template] || [],
   }));

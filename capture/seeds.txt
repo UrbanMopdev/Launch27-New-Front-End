@@ -1,0 +1,94 @@
+# Admin routes the crawler visits in addition to the links it finds.
+# Taken from the route definitions in Launch27's admin bundle
+# (/admin/js/app-*.min.js). Detail pages (/:id/edit) are reached via links.
+
+# Bookings & scheduling
+/admin/dashboard
+/admin/bookings
+/admin/bookings/deleted
+/admin/bookings/new
+/admin/new-scheduler
+/admin/quotes
+/admin/spots
+/admin/spots/daily
+/admin/spots/maximum
+/admin/spots/closed-dates
+/admin/tasks
+
+# Customers
+/admin/customers
+/admin/customers/deleted
+/admin/tags
+/admin/bounces
+/admin/emails_log
+
+# Money
+/admin/charges
+/admin/payments
+/admin/discounts
+/admin/giftcards
+/admin/giftcards/active
+/admin/giftcards/redeemed
+/admin/giftcards/sold
+/admin/giftcards/settings
+/admin/referral_programs
+/admin/subscriptions
+
+# Reports & downloads
+/admin/reports/bookings
+/admin/reports/charges
+/admin/reports/payments
+/admin/reports/money_transferred
+/admin/reports/hourly_wages
+/admin/reports/promotions
+/admin/reports/ratings
+/admin/reports/team-time-tracking-logs
+/admin/downloads
+/admin/downloads/bookings
+/admin/downloads/customers
+/admin/downloads/team-payments
+
+# Staff & teams
+/admin/staff
+/admin/staff/deleted
+/admin/teams
+/admin/teams/deleted
+/admin/wages_methods
+/admin/checklists
+
+# Services & pricing
+/admin/services
+/admin/service_categories
+/admin/extras
+/admin/frequencies
+/admin/pricing_parameters
+/admin/sales_taxes
+/admin/locations
+/admin/locations/off
+/admin/locations/promo
+
+# Forms & communication
+/admin/booking_form_setups
+/admin/booking_form_setups/system
+/admin/booking_form_setups/custom
+/admin/booking_form_setups/headings
+/admin/booking_form_setups/premium_headings
+/admin/quote_form_setups
+/admin/quote_form_setups/system
+/admin/quote_form_setups/custom
+/admin/templates/customer
+/admin/templates/team
+/admin/templates/admin
+/admin/master_templates
+/admin/sms_templates
+/admin/reputation-management
+
+# Integrations & account
+/admin/settings
+/admin/zapier
+/admin/twilio/edit
+/admin/quickbooks/edit
+/admin/google_calendar/edit
+/admin/google_analytics/edit
+/admin/custom_script/edit
+/admin/clients/setup
