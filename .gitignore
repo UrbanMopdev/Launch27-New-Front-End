@@ -5,3 +5,4 @@ dist/
 capture/output/
 capture/.auth/
 *.tsbuildinfo
+.data/

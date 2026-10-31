@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       '/auth': 'http://localhost:8787',
       '/l27': 'http://localhost:8787',
+      '/api': 'http://localhost:8787',
     },
   },
 });

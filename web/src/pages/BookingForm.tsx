@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { inbox } from '../inbox/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { l27, l27Write } from '../api';
 import { useActiveTeams, useCanWrite, useLocations } from '../hooks';
@@ -294,6 +295,19 @@ export function BookingFormPage() {
         : await l27Write<{ id: number }>('POST', '/v1/staff/bookings', body);
       await queryClient.invalidateQueries({ queryKey: ['booking'] });
       await queryClient.invalidateQueries({ queryKey: ['bookings'] });
+      // Opened from a support conversation: log the change there and go back to it.
+      const conversationId = params.get('conversation');
+      if (conversationId) {
+        const after = saved as Booking;
+        const when = String(body.service_date || '').replace('T', ' ').slice(0, 16);
+        const before = existing.data?.summary?.total;
+        const price = editing && before !== undefined && after.summary?.total !== undefined && before !== after.summary.total ? `, price ${fmtMoney(before)} → ${fmtMoney(after.summary.total)}` : '';
+        const summary = `${editing ? 'Updated' : 'Created'} booking #${saved.id} for ${when}${editing && form.is_mass_update ? ' (this and future visits)' : ''}${price}`;
+        await inbox.addEvent(Number(conversationId), summary, { type: 'booking', booking_id: saved.id, action: editing ? 'updated' : 'created' }).catch(() => {});
+        if (!editing) await inbox.patch(Number(conversationId), { l27_booking_id: saved.id }).catch(() => {});
+        navigate(params.get('return') || `/inbox/${conversationId}`);
+        return;
+      }
       navigate(`/bookings/${saved.id}`);
     } catch (err) {
       setError((err as Error).message);

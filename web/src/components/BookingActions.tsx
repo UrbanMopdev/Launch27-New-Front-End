@@ -8,7 +8,8 @@ import type { Booking } from '../types';
 // Edit / cancel / restore buttons for a booking.
 //   POST /v1/staff/bookings/:id/cancel  { confirmed_recurring: { cancel_future }, reason }
 //   POST /v1/staff/bookings/:id/restore
-export function BookingActions({ booking }: { booking: Booking }) {
+// onDone lets the support workspace log what happened on the conversation's timeline.
+export function BookingActions({ booking, onDone, editLink }: { booking: Booking; onDone?: (summary: string) => void; editLink?: string }) {
   const canWrite = useCanWrite();
   const queryClient = useQueryClient();
   const [cancelling, setCancelling] = useState(false);
@@ -20,12 +21,13 @@ export function BookingActions({ booking }: { booking: Booking }) {
   if (!canWrite) return null;
   const actions = booking.actions || {};
 
-  const run = async (fn: () => Promise<unknown>) => {
+  const run = async (fn: () => Promise<unknown>, summary?: string) => {
     setBusy(true);
     setError(null);
     try {
       await fn();
       setCancelling(false);
+      if (summary) onDone?.(summary);
       await queryClient.invalidateQueries({ queryKey: ['booking', String(booking.id)] });
       await queryClient.invalidateQueries({ queryKey: ['bookings'] });
     } catch (err) {
@@ -38,7 +40,7 @@ export function BookingActions({ booking }: { booking: Booking }) {
   return (
     <div className="actions">
       {actions.edit && (
-        <Link to={`/bookings/${booking.id}/edit`} className="button">
+        <Link to={editLink || `/bookings/${booking.id}/edit`} className="button">
           Edit
         </Link>
       )}
@@ -48,7 +50,7 @@ export function BookingActions({ booking }: { booking: Booking }) {
         </button>
       )}
       {!booking.active && (
-        <button type="button" className="secondary" disabled={busy} onClick={() => run(() => l27Write('POST', `/v1/staff/bookings/${booking.id}/restore`, {}))}>
+        <button type="button" className="secondary" disabled={busy} onClick={() => run(() => l27Write('POST', `/v1/staff/bookings/${booking.id}/restore`, {}), `Restored booking #${booking.id}`)}>
           Restore booking
         </button>
       )}
@@ -77,7 +79,7 @@ export function BookingActions({ booking }: { booking: Booking }) {
                 type="button"
                 className="danger"
                 disabled={busy}
-                onClick={() => run(() => l27Write('POST', `/v1/staff/bookings/${booking.id}/cancel`, { confirmed_recurring: { cancel_future: cancelFuture }, reason: reason || null }))}
+                onClick={() => run(() => l27Write('POST', `/v1/staff/bookings/${booking.id}/cancel`, { confirmed_recurring: { cancel_future: cancelFuture }, reason: reason || null }), `Cancelled booking #${booking.id}${cancelFuture ? ' and future visits' : ''}${reason ? ` (${reason})` : ''}`)}
               >
                 {busy ? 'Cancelling…' : 'Cancel booking'}
               </button>

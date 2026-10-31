@@ -7,6 +7,7 @@ import { fmtDateTime, fmtMoney } from '../format';
 import { customerName } from './Customers';
 import { CustomerEditor } from '../components/CustomerEditor';
 import { useCanWrite } from '../hooks';
+import { OpenL27Contact } from './SupportPages';
 
 // Booking tabs on Launch27's customer page, with the exact params it sends.
 const BOOKING_TABS = [
@@ -58,6 +59,9 @@ export function CustomerDetailPage() {
           <h1>
             {customerName(c)} {!c.active && <span className="badge danger">inactive</span>}
           </h1>
+        </div>
+        <div className="actions">
+          <OpenL27Contact customerId={c.id} label="Support profile & messages" />
         </div>
         {canWrite && !editing && (
           <div className="actions">

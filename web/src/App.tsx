@@ -37,6 +37,8 @@ import {
   BouncesPage,
 } from './pages/Lists';
 import { ApiCatalogPage } from './pages/ApiCatalog';
+import { InboxPage } from './pages/Inbox';
+import { ContactPage, InboxSettingsPage, SimulatorPage, SupervisorPage } from './pages/SupportPages';
 
 // The map library is large, so the Routes page loads on demand.
 const RoutesPage = lazy(() => import('./pages/Routes').then((m) => ({ default: m.RoutesPage })));
@@ -59,6 +61,12 @@ export function App() {
     <Routes>
       <Route element={<Layout email={me.data.email} />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route path="inbox" element={<InboxPage />} />
+        <Route path="inbox/:id" element={<InboxPage />} />
+        <Route path="contacts/:id" element={<ContactPage />} />
+        <Route path="supervisor" element={<SupervisorPage />} />
+        <Route path="inbox-simulator" element={<SimulatorPage />} />
+        <Route path="inbox-settings" element={<InboxSettingsPage />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="dispatch" element={<DispatchPage />} />
         <Route

@@ -78,6 +78,41 @@ Production: `npm run build && NODE_ENV=production npm start`. The server then al
 
 The proxy only forwards **GET** requests until `L27_ALLOW_WRITES=true` is set.
 
+## Support workspace (phase 1)
+
+A one-stop place to handle customer and cleaner conversations next to their bookings,
+replacing Kustomer for UrbanMop. It adds conversations to this app rather than being a
+separate inbox: the same login, the same Launch27 data, and booking changes made from
+inside a conversation.
+
+| Part | What it does |
+| --- | --- |
+| Inbox (`/inbox`) | Three panes: work list (mine, unassigned, mentions, late, "who is this?", each queue), the conversation with every channel in one thread, and the customer or cleaner 360 |
+| Customer 360 | Health strip (frequency, lifetime spend, cleans, cancellations, last rating, risk flag), next or pinned booking with live en-route/check-in status and lateness, booking tabs, ratings and cleaners they liked or didn't, card on file, home notes, all conversations |
+| Cleaner 360 | Today's bookings with time tracking, availability, rating and happy %, late check-ins in 30 days, unhappy comments, quick texts (ask for ETA, confirm arrival) |
+| Booking actions | From the pinned booking: edit/reschedule (booking form), cancel, restore, new booking, text the assigned cleaner. Each change is logged on the conversation |
+| Composer | Reply by text or email from any UrbanMop identity, "/" for saved replies with `{{first_name}}`, internal notes with @mentions, SMS segment count, drafts kept per conversation, STOP-blocked numbers refused |
+| Work handling | Push routing to available agents, claim (race-safe), assign, move queue, snooze, done with who/reason/outcome, complaint record with cost to us |
+| Routing | 15 ordered rules rebuilt from the Kustomer audit (Kustomer had 14 queues and 72 rules), editable in Support settings with warnings for rules that can never match and a live preview |
+| Reply targets | Business-hours SLAs (Toronto hours, Ontario holidays, DST-safe), warnings and breach alerts, paused while snoozed, stopped only by human replies |
+| Supervisor (`/supervisor`) | Live queue depth, unassigned, late, oldest waiting, per-agent load, median first reply |
+| Phone | RingCentral Embeddable widget (loads when `RINGCENTRAL_CLIENT_ID` is set): calls ring in the browser, the caller's profile pops, finished calls are logged; click-to-call from a profile |
+| Search | Ctrl+K: people by name, phone or email; message text; jump to a booking number |
+
+**Phase 1 boundary: no channels are connected.** Replies are saved and shown as "not
+sent: channel not connected". Inbound traffic comes from the Channel simulator
+(`/inbox-simulator`), which runs the same matching, threading, routing and SLA code a
+real webhook will. Phase 2 adds connectors in `server/src/inbox/channels.js` (Gmail for
+email, Twilio for SMS) and webhook routes that call `ingestInbound()`.
+
+Data: Launch27 stays the record for bookings, customers, cleaners and money. The workspace
+stores only people's channel identities, conversations, notes, routing, SLAs and an audit
+log (`server/src/db/schema.sql`). Each agent's own Launch27 login is used for lookups, so
+Launch27 permissions still apply.
+
+Setup: set `DATABASE_URL` (Railway Postgres) and `ADMIN_EMAILS`; see `.env.example`.
+Without `DATABASE_URL` it runs on an embedded Postgres, which is handy locally.
+
 ### Pages
 
 Every page makes the same Launch27 calls as the admin page it replaces (see
@@ -85,6 +120,7 @@ Every page makes the same Launch27 calls as the admin page it replaces (see
 
 | Section | Pages |
 | --- | --- |
+| Support | Inbox, Contact profile (360), Supervisor, Channel simulator, Support settings (routing rules, reply targets, saved replies, team and queues) |
 | Operations | Dashboard, Dispatch board (drag-and-drop cleaner assignment, travel per cleaner), Routes & travel (map, legs, tight connections, closer cleaners), Bookings (filters: all / unassigned / recurring / new customer / cancelled), Booking detail, Time tracking, Quotes, Customers, Customer detail (upcoming / past / cancelled / feedback), Teams |
 | Money | Job profitability (gross margin per job, flags, cost assumptions), Charge customers, Declined charges, Team payments, Hourly wages, Discount codes, Gift cards |
 | Reports | Customer feedback |

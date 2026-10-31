@@ -1,13 +1,15 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { SessionStore, COOKIE_MAX_AGE_MS } from './sessions.js';
+import { createInboxRouter } from './inbox/api.js';
+import { createL27Client } from './inbox/lookup.js';
 
 const COOKIE = 'l27_session';
 const UPSTREAM_TIMEOUT_MS = 30_000;
 // Request headers worth passing through to Launch27. Cookies and auth never are.
 const FORWARD_HEADERS = ['accept', 'content-type'];
 
-export function createApp(config, { fetchImpl = fetch, sessions = new SessionStore() } = {}) {
+export function createApp(config, { fetchImpl = fetch, sessions = new SessionStore(), db = null, connectors = {} } = {}) {
   const app = express();
   // Behind Railway's (or any) HTTPS proxy: trust X-Forwarded-* so secure cookies work.
   app.set('trust proxy', 1);
@@ -97,6 +99,12 @@ export function createApp(config, { fetchImpl = fetch, sessions = new SessionSto
     if (contentType) res.type(contentType);
     res.send(Buffer.from(await upstream.arrayBuffer()));
   });
+
+  // The support workspace (conversations, contacts, routing). Needs a database.
+  if (db) {
+    const l27 = createL27Client({ baseUrl: config.l27BaseUrl, fetchImpl });
+    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors }));
+  }
 
   return app;
 }
