@@ -616,3 +616,12 @@ label.check, label.inline { flex-direction: row; align-items: center; gap: 6px; 
 .env-banner { grid-column: 1 / -1; padding: 6px 16px; font-size: 13px; text-align: center; color: #1f2937; background: #fde68a; border-bottom: 1px solid #f59e0b; }
 .env-banner.env-development { background: #bfdbfe; border-color: #3b82f6; }
 .shell:has(> .env-banner) { grid-template-rows: auto 1fr; }
+
+/* ---------- Customer page (full-width 360) ---------- */
+.card.flush { padding: 0; overflow: hidden; }
+@media (min-width: 900px) {
+  .p360.full { display: grid; grid-template-columns: 1fr 1fr; }
+  .p360.full > .p360-block { border-right: 1px solid var(--border); }
+  .p360.full > .p360-block:first-child, .p360.full > .health, .p360.full > .pinned, .p360.full > .bookings { grid-column: 1 / -1; border-right: 0; }
+  .p360.full > .health { grid-template-columns: repeat(5, 1fr); }
+}

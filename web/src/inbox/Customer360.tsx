@@ -14,40 +14,44 @@ const STALE = 15 * 60_000;
 // Customer 360: who they are, what they've booked, how it's going, what we last said.
 // Launch27 is the record for bookings and money; each block loads on its own so a slow
 // call never blocks the conversation.
-export function Customer360({ contact, conversationId, pinnedBookingId, onInsert }: { contact: Contact; conversationId?: number; pinnedBookingId?: number | null; onInsert?: (text: string) => void }) {
+// `full` is the standalone customer page (/customers/:id): wider layout, complete history.
+type Props = { contact: Contact; conversationId?: number; pinnedBookingId?: number | null; onInsert?: (text: string) => void; full?: boolean };
+
+export function Customer360({ contact, conversationId, pinnedBookingId, onInsert, full }: Props) {
   const cid = contact.l27_customer_id;
   if (!cid) return <LinkToLaunch27 contact={contact} />;
-  return <CustomerBlocks cid={cid} contact={contact} conversationId={conversationId} pinnedBookingId={pinnedBookingId} onInsert={onInsert} />;
+  return <CustomerBlocks cid={cid} contact={contact} conversationId={conversationId} pinnedBookingId={pinnedBookingId} onInsert={onInsert} full={full} />;
 }
 
-function CustomerBlocks({ cid, contact, conversationId, pinnedBookingId, onInsert }: { cid: number; contact: Contact; conversationId?: number; pinnedBookingId?: number | null; onInsert?: (text: string) => void }) {
+function CustomerBlocks({ cid, contact, conversationId, pinnedBookingId, onInsert, full }: Props & { cid: number }) {
   const [tab, setTab] = useState<'upcoming' | 'past' | 'cancelled'>('upcoming');
+  const [shown, setShown] = useState(10);
   const customer = useQuery({ queryKey: ['customer', String(cid)], queryFn: () => l27<Customer>(`/v1/staff/customers/${cid}`), staleTime: STALE });
   const tags = useQuery({ queryKey: ['customer', String(cid), 'tags'], queryFn: () => l27<Tag[]>(`/v1/staff/customers/${cid}/tags`), staleTime: STALE });
   const addresses = useQuery({ queryKey: ['customer', String(cid), 'addresses'], queryFn: () => l27<{ id: number; address: string; city: string; state: string; zip: string; preferred: boolean }[]>(`/v1/staff/customers/${cid}/addresses`), staleTime: STALE });
   const billing = useQuery({ queryKey: ['customer', String(cid), 'billing'], queryFn: () => l27<{ cards?: { id: string; brand: string; last4: string; exp_month: number; exp_year: number; is_default: boolean; is_deleted: boolean }[] }>(`/v1/staff/customers/${cid}/setup/billing`), staleTime: STALE });
-  const upcoming = useQuery({ queryKey: ['customer', String(cid), '360', 'upcoming'], queryFn: () => l27<Booking[]>('/v1/staff/bookings', { customers: cid, options: 'not_completed', sort: 'asc', limit: 10 }), staleTime: 60_000 });
+  const upcoming = useQuery({ queryKey: ['customer', String(cid), '360', 'upcoming', full ? 'all' : 10], queryFn: () => l27<Booking[]>('/v1/staff/bookings', { customers: cid, options: 'not_completed', sort: 'asc', limit: full ? 50 : 10 }), staleTime: 60_000 });
   const past = useQuery({ queryKey: ['customer', String(cid), '360', 'past'], queryFn: () => l27All<RatedBooking>('/v1/staff/bookings', { customers: cid, options: 'completed,exclude_forecasted', sort: 'desc' }), staleTime: STALE });
   const cancelled = useQuery({ queryKey: ['customer', String(cid), '360', 'cancelled'], queryFn: () => l27<{ count: number }>('/v1/staff/bookings/count', { customers: cid, filter: 'cancelled' }), staleTime: STALE });
-  const cancelledList = useQuery({ queryKey: ['customer', String(cid), '360', 'cancelled-list'], queryFn: () => l27<Booking[]>('/v1/staff/bookings', { customers: cid, filter: 'cancelled', sort: 'desc', limit: 10 }), enabled: tab === 'cancelled', staleTime: STALE });
+  const cancelledList = useQuery({ queryKey: ['customer', String(cid), '360', 'cancelled-list', full ? 'all' : 10], queryFn: () => l27<Booking[]>('/v1/staff/bookings', { customers: cid, filter: 'cancelled', sort: 'desc', limit: full ? 100 : 10 }), enabled: tab === 'cancelled', staleTime: STALE });
 
   const health = useMemo(() => summarize(past.data || [], upcoming.data || [], cancelled.data?.count ?? 0), [past.data, upcoming.data, cancelled.data]);
   const pinnedId = pinnedBookingId || upcoming.data?.[0]?.id || null;
   const c = customer.data;
 
   return (
-    <div className="p360">
+    <div className={full ? 'p360 full' : 'p360'}>
       <section className="p360-block">
         <div className="p360-title">
           <div>
-            <h3>{c ? [c.first_name, c.last_name].filter(Boolean).join(' ') || c.company_name : contact.name}</h3>
+            {!full && <h3>{c ? [c.first_name, c.last_name].filter(Boolean).join(' ') || c.company_name : contact.name}</h3>}
             <div className="muted small">
               Customer since {c?.created_at ? new Date(c.created_at).getFullYear() : '…'}
               {c && !c.active && <span className="badge danger">inactive</span>}
               {c?.company_name && <> · {c.company_name}</>}
             </div>
           </div>
-          <Link to={`/customers/${cid}`} className="small">Launch27 →</Link>
+          {!full && <Link to={`/customers/${cid}`} className="small">Full profile →</Link>}
         </div>
         <div className="p360-ids">
           {contact.identities.map((i) => (
@@ -72,7 +76,7 @@ function CustomerBlocks({ cid, contact, conversationId, pinnedBookingId, onInser
 
       {pinnedId && <PinnedBooking id={pinnedId} pinned={!!pinnedBookingId} contact={contact} conversationId={conversationId} onInsert={onInsert} />}
 
-      <section className="p360-block">
+      <section className="p360-block bookings">
         <div className="tabs compact">
           {(['upcoming', 'past', 'cancelled'] as const).map((t) => (
             <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => setTab(t)}>
@@ -80,7 +84,14 @@ function CustomerBlocks({ cid, contact, conversationId, pinnedBookingId, onInser
             </button>
           ))}
         </div>
-        <BookingList bookings={tab === 'upcoming' ? upcoming.data : tab === 'past' ? past.data?.slice(0, 10) : cancelledList.data} conversationId={conversationId} pinnedId={pinnedBookingId} />
+        <BookingList bookings={tab === 'upcoming' ? upcoming.data : tab === 'past' ? past.data?.slice(0, shown) : cancelledList.data} conversationId={conversationId} pinnedId={pinnedBookingId} />
+        {tab === 'past' && (past.data?.length ?? 0) > shown && (
+          full ? (
+            <button type="button" className="link small" onClick={() => setShown(shown + 25)}>Show more ({(past.data?.length ?? 0) - shown} older)</button>
+          ) : (
+            <Link to={`/customers/${cid}`} className="small">All {past.data?.length} past cleans →</Link>
+          )
+        )}
       </section>
 
       <section className="p360-block">

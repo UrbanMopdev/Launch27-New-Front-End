@@ -173,3 +173,24 @@ describe('synthetic Launch27', () => {
     assert.equal((await mock('https://mock/v1/staff/teams')).status, 401);
   });
 });
+
+describe('sample inbox', () => {
+  test('loads synthetic conversations once, linked to synthetic Launch27 people, and never in production', async () => {
+    const { loadSampleInbox, SAMPLE_MESSAGES } = await import('../src/sample/inbox.js');
+    const { seed } = await import('../src/inbox/seed.js');
+    const db = await openDb();
+    await seed(db);
+    const fetchImpl = createMockLaunch27({ password: 'demo' });
+    const first = await loadSampleInbox(db, { fetchImpl, baseUrl: 'https://mock' });
+    assert.equal(first.loaded, SAMPLE_MESSAGES.length);
+    const again = await loadSampleInbox(db, { fetchImpl, baseUrl: 'https://mock' });
+    assert.equal(again.loaded, 0, 'does not duplicate on restart');
+    const convs = (await db.query('SELECT count(*)::int AS n FROM conversations')).rows[0].n;
+    assert.ok(convs >= 10 && convs < SAMPLE_MESSAGES.length, 'repeat senders thread together');
+    const linked = (await db.query('SELECT count(*)::int AS n FROM contacts WHERE l27_customer_id IS NOT NULL OR l27_team_id IS NOT NULL')).rows[0].n;
+    assert.ok(linked >= 10, 'senders matched to synthetic Launch27 customers/cleaners');
+    await db.close();
+    assert.equal(loadConfig({ APP_ENV: 'production', SAMPLE_DATA: 'true' }).sampleData, false);
+    assert.equal(loadConfig({ APP_ENV: 'development', SAMPLE_DATA: 'true' }).sampleData, true);
+  });
+});
