@@ -419,3 +419,11 @@ input.qty { width: 64px; padding: 3px 6px; }
 @media (min-width: 761px) { .timeline { max-height: calc(100vh - 330px); min-height: 320px; overflow: auto; } }
 .tl-block.projected { border-style: dashed; background-color: #f7f9fc; opacity: .85; cursor: default; }
 .legend-chip.projected { border: 1px dashed #9aa3af; background: #f7f9fc; }
+/* Job profitability */
+.flag-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.chip-btn { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 16px; padding: 5px 12px; font-size: 13px; }
+.chip-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+.list-tools { margin-bottom: 8px; }
+.field-grid label .small { font-weight: 400; }
+td.wrap { white-space: normal; min-width: 120px; }
+td.wrap .verdict { margin: 1px 2px; }

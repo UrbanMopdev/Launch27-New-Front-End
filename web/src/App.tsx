@@ -15,6 +15,7 @@ import { ChargesPage } from './pages/Charges';
 import { TimeTrackingPage } from './pages/TimeTracking';
 import { FeedbackPage } from './pages/Feedback';
 import { DispatchPage } from './pages/Dispatch';
+import { MarginsPage } from './pages/Margins';
 import {
   QuotesPage,
   DeclinedChargesPage,
@@ -65,6 +66,7 @@ export function App() {
         <Route path="time-tracking" element={<TimeTrackingPage />} />
         <Route path="quotes" element={<QuotesPage />} />
         <Route path="charges" element={<ChargesPage />} />
+        <Route path="profitability" element={<MarginsPage />} />
         <Route path="declined-charges" element={<DeclinedChargesPage />} />
         <Route path="team-payments" element={<TeamPaymentsPage />} />
         <Route path="hourly-wages" element={<HourlyWagesPage />} />

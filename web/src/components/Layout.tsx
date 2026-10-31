@@ -21,6 +21,7 @@ const NAV: { section: string; items: { to: string; label: string }[] }[] = [
   {
     section: 'Money',
     items: [
+      { to: '/profitability', label: 'Job profitability' },
       { to: '/charges', label: 'Charge customers' },
       { to: '/declined-charges', label: 'Declined charges' },
       { to: '/team-payments', label: 'Team payments' },
