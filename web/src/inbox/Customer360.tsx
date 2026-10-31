@@ -7,6 +7,7 @@ import type { RatedBooking } from '../lib/feedbackModel';
 import { fmtDateTime, fmtMoney, fmtTime } from '../format';
 import { BookingActions } from '../components/BookingActions';
 import { Icon } from '../components/Icon';
+import { CallButton } from '../components/CallButton';
 import { insights, rhythmLabel, summarySentence, visitStatus, type Insights, type Stage } from '../lib/customer360';
 import { inbox, type Contact } from './api';
 import { ago, displayIdentity } from './util';
@@ -93,6 +94,11 @@ function CustomerView({ cid, contact, conversationId, pinnedBookingId, onInsert,
             </div>
             <Link to={`/customers/${cid}`} className="small">Full profile</Link>
           </div>
+          {(contact.identities.find((i) => i.kind === 'phone')?.value || c?.phone) && (
+            <div className="rail-actions">
+              <CallButton phone={contact.identities.find((i) => i.kind === 'phone')?.value || c?.phone} />
+            </div>
+          )}
           {!loading && (
             <p className="rail-summary">
               {summary.lead} {summary.emphasis && <strong>{summary.emphasis}</strong>}
@@ -256,7 +262,7 @@ const STAGES: { key: Stage; label: string }[] = [
   { key: 'done', label: 'Checked out' },
 ];
 
-function Stepper({ booking, compact }: { booking: Booking; compact?: boolean }) {
+export function Stepper({ booking, compact }: { booking: Booking; compact?: boolean }) {
   const s = visitStatus(booking);
   const idx = STAGES.findIndex((x) => x.key === s.stage);
   const times: Record<Stage, string | undefined> = {

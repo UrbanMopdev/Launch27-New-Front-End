@@ -8,7 +8,7 @@ import { CustomerEditor } from '../components/CustomerEditor';
 import { Icon } from '../components/Icon';
 import { Customer360 } from '../inbox/Customer360';
 import { inbox } from '../inbox/api';
-import { useMeta } from '../inbox/util';
+import { CallButton } from '../components/CallButton';
 
 // The one customer page: the full Customer 360. Every customer link in the app lands here.
 export function CustomerProfilePage() {
@@ -16,7 +16,6 @@ export function CustomerProfilePage() {
   const cid = Number(id);
   const navigate = useNavigate();
   const canWrite = useCanWrite();
-  const meta = useMeta();
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const customer = useQuery({ queryKey: ['customer', String(cid)], queryFn: () => l27<Customer>(`/v1/staff/customers/${cid}`), staleTime: 15 * 60_000 });
@@ -47,11 +46,7 @@ export function CustomerProfilePage() {
       <button type="button" className="secondary" onClick={() => start('email')} disabled={!contact.data}>
         <Icon name="email" /> Email
       </button>
-      {phone && meta.data?.ringcentral && (
-        <button type="button" className="secondary" onClick={() => window.dispatchEvent(new CustomEvent('workspace:dial', { detail: phone }))}>
-          <Icon name="voice" /> Call
-        </button>
-      )}
+      <CallButton phone={phone || c?.phone} />
       {canWrite && (
         <Link to={`/bookings/new?customer=${cid}`} className="button secondary-link">
           New booking
