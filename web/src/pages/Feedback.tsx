@@ -38,12 +38,15 @@ const PRESETS = [
 ];
 type Tab = 'overview' | 'drivers' | 'cleaners' | 'comments' | 'customers';
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'drivers', label: 'Drivers & extras' },
+  { id: 'overview', label: 'Summary' },
+  { id: 'drivers', label: 'What upsets customers' },
   { id: 'cleaners', label: 'Cleaners' },
-  { id: 'comments', label: 'Comments' },
-  { id: 'customers', label: 'Customers at risk' },
+  { id: 'comments', label: 'What customers say' },
+  { id: 'customers', label: 'Customers to call' },
 ];
+
+// Cleaner titles in Launch27 carry codes like "(1)(F)(FT)"; drop them for readability.
+const cleanName = (name: string) => name.replace(/^(\s*(\([^)]*\)|ON HOLD))+\s*/i, '') || name;
 
 function isoDay(offset = 0) {
   const d = new Date();
@@ -56,6 +59,20 @@ export function FeedbackPage() {
   const [days, setDays] = useState(90);
   const [locationId, setLocationId] = useState<number | 'all'>('all');
   const [tab, setTab] = useState<Tab>('overview');
+  const [math, setMath] = useState(() => {
+    try {
+      return localStorage.getItem('feedback:math') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('feedback:math', math ? '1' : '0');
+    } catch {
+      /* private mode */
+    }
+  }, [math]);
   const from = isoDay(-(days - 1));
   const to = isoDay(0);
   const prevFrom = isoDay(-(2 * days - 1));
@@ -121,6 +138,9 @@ export function FeedbackPage() {
               ))}
             </select>
           </label>
+          <label className="check math-toggle">
+            <input type="checkbox" checked={math} onChange={(e) => setMath(e.target.checked)} /> Show the math
+          </label>
         </div>
       </header>
 
@@ -132,17 +152,17 @@ export function FeedbackPage() {
         ))}
       </div>
 
-      {cur.isLoading && <div className="muted">Loading ratings… (a year of data takes ~10 seconds)</div>}
+      {cur.isLoading && <div className="muted">Loading ratings… (a year of data takes about 10 seconds)</div>}
       {cur.error && <div className="error">{(cur.error as Error).message}</div>}
       {cur.data && !a && <div className="muted">No ratings in this period.</div>}
 
-      {a && tab === 'overview' && <Overview rows={rows} prevRows={prev.data ? prevRows : undefined} a={a} ins={ins} completed={locationId === 'all' ? completed.data?.count : undefined} from={from} to={to} onTab={setTab} />}
-      {a && tab === 'drivers' && <Drivers drivers={a.drivers} baseRate={a.baseRate} n={rows.length} />}
-      {a && tab === 'cleaners' && <Cleaners cleaners={a.cleaners} baseRate={a.baseRate} />}
+      {a && tab === 'overview' && <Overview rows={rows} prevRows={prev.data ? prevRows : undefined} a={a} ins={ins} completed={locationId === 'all' ? completed.data?.count : undefined} from={from} to={to} onTab={setTab} math={math} />}
+      {a && tab === 'drivers' && <Drivers drivers={a.drivers} baseRate={a.baseRate} n={rows.length} math={math} />}
+      {a && tab === 'cleaners' && <Cleaners cleaners={a.cleaners} baseRate={a.baseRate} math={math} />}
       {a && tab === 'comments' && <Comments rows={rows} themes={a.themes} words={a.words} />}
       {a && tab === 'customers' && <Customers atRisk={a.atRisk} />}
 
-      {a && (
+      {a && math && (
         <p className="muted small method">
           Method: dissatisfied = rated Okay or Unhappy. Intervals are 95% Wilson; factor tests use two-proportion z-tests with Benjamini–Hochberg false-discovery control (q &lt; 0.1),
           confirmed by an L2-regularised logistic regression across all factors at once. Cleaner rates use empirical-Bayes (beta-binomial) shrinkage; "likely below average" means
@@ -165,52 +185,66 @@ interface Analysis {
 
 // ---------------- Overview ----------------
 
-function Overview({ rows, prevRows, a, ins, completed, from, to, onTab }: { rows: RatedBooking[]; prevRows?: RatedBooking[]; a: Analysis; ins: ReturnType<typeof insights>; completed?: number; from: string; to: string; onTab: (t: Tab) => void }) {
+function Overview({ rows, prevRows, a, ins, completed, from, to, onTab, math }: { rows: RatedBooking[]; prevRows?: RatedBooking[]; a: Analysis; ins: ReturnType<typeof insights>; completed?: number; from: string; to: string; onTab: (t: Tab) => void; math: boolean }) {
   const happy = rows.filter((r) => r.feedback.rating === 2).length;
   const okay = rows.filter((r) => r.feedback.rating === 1).length;
   const unhappy = rows.filter((r) => r.feedback.rating === 0).length;
-  const net = (happy - unhappy) / rows.length;
   const prevDis = prevRows?.length ? prevRows.filter(isDissatisfied).length / prevRows.length : null;
   const [lo, hi] = wilson(rows.filter(isDissatisfied).length, rows.length);
   const recurringRisk = a.atRisk.filter((c) => c.recurring);
+  const change = prevDis === null ? null : a.baseRate - prevDis;
+  const groups: { tone: 'bad' | 'info' | 'good'; title: string }[] = [
+    { tone: 'bad', title: 'Act now' },
+    { tone: 'info', title: 'Worth knowing' },
+    { tone: 'good', title: 'Going well' },
+  ];
 
   return (
     <>
       <div className="tiles">
-        <Tile label="Dissatisfied (okay + unhappy)" value={pct(a.baseRate)} sub={`95% CI ${pct(lo)}–${pct(hi)}${prevDis !== null ? ` · prev ${pct(prevDis)}` : ''}`} tone={prevDis !== null && a.baseRate > prevDis ? 'neg' : 'ok'} />
-        <Tile label="Net satisfaction" value={`${net >= 0 ? '+' : ''}${(net * 100).toFixed(0)}`} sub={`${happy} happy · ${okay} okay · ${unhappy} unhappy`} />
-        <Tile label="Response rate" value={completed ? pct(rows.length / completed) : '—'} sub={completed ? `${rows.length} of ${completed} visits rated · ${from} → ${to}` : `${rows.length} ratings`} />
-        <Tile label="Revenue at risk / yr" value={fmtMoney(recurringRisk.reduce((s, c) => s + c.annual, 0)).replace(/\.\d\d$/, '')} sub={`${recurringRisk.length} recurring customers, latest rating negative`} tone={recurringRisk.length ? 'neg' : undefined} />
+        <Tile
+          label="Not happy (okay or unhappy)"
+          value={pct(a.baseRate)}
+          sub={change === null ? `${rows.length} ratings` : `${change > 0 ? '▲ up' : '▼ down'} from ${pct(prevDis!)} last period${math ? ` · 95% CI ${pct(lo)}–${pct(hi)}` : ''}`}
+          tone={change !== null && change > 0.01 ? 'neg' : 'ok'}
+        />
+        <Tile label="Happy customers" value={pct(happy / rows.length)} sub={`${happy} happy · ${okay} okay · ${unhappy} unhappy`} />
+        <Tile label="Visits that get rated" value={completed ? pct(rows.length / completed) : '—'} sub={completed ? `${rows.length} of ${completed} visits · ${from} → ${to}` : `${rows.length} ratings`} />
+        <Tile label="Business at risk (per year)" value={`$${Math.round(recurringRisk.reduce((s, c) => s + c.annual, 0) / 1000)}k`} sub={`${recurringRisk.length} regular customers to call`} tone={recurringRisk.length ? 'neg' : undefined} />
       </div>
 
-      <section className="card">
-        <h2>What the data says</h2>
-        <ul className="insights">
-          {ins.map((i, n) => (
-            <li key={n} className={`insight ${i.tone}`}>
-              {i.text}
-            </li>
-          ))}
-        </ul>
-        <div className="actions">
-          <button className="secondary" onClick={() => onTab('drivers')}>
-            See all drivers
-          </button>
-          <button className="secondary" onClick={() => onTab('cleaners')}>
-            Cleaner ranking
-          </button>
-          <button className="secondary" onClick={() => onTab('customers')}>
-            Customers to call
-          </button>
-        </div>
-      </section>
+      {groups.map((g) => {
+        const list = ins.filter((i) => i.tone === g.tone);
+        if (!list.length) return null;
+        return (
+          <section key={g.tone} className={`card insight-group ${g.tone}`}>
+            <h2>{g.title}</h2>
+            {list.map((i, n) => (
+              <div key={n} className={`insight-card ${i.tone}`}>
+                <div className="insight-title">{i.title}</div>
+                {i.action && (
+                  <div className="insight-action">
+                    <strong>What to do:</strong> {i.action}
+                  </div>
+                )}
+                {math && i.math && <div className="insight-math">{i.math}</div>}
+                {i.tab && (
+                  <button className="link small" onClick={() => onTab(i.tab!)}>
+                    See the details →
+                  </button>
+                )}
+              </div>
+            ))}
+          </section>
+        );
+      })}
 
       <section className="card">
-        <h2>Weekly dissatisfaction — control chart</h2>
+        <h2>Week by week</h2>
         <ControlChart control={a.control} />
         <p className="muted small">
-          Dots are each week's dissatisfaction rate; the dashed line is the 3σ upper control limit for that week's sample size. A dot above it (red) is unlikely to be chance and deserves a root-cause
-          look.
+          Each dot is one week: the share of customers who weren't happy. A <span className="neg">red dot</span> means that week was unusually bad — worth asking what happened.
+          {math && ' Dashed line: 3σ upper control limit (p-chart) for that week\'s sample size; dotted line: period average.'}
         </p>
       </section>
     </>
@@ -260,13 +294,18 @@ function ControlChart({ control }: { control: ReturnType<typeof weeklyControl> }
 
 const GROUP_ORDER = ['Extras', 'Service', 'Home', 'Frequency', 'Scheduling', 'Execution', 'Price', 'Location'];
 const VERDICT: Record<Driver['verdict'], { label: string; cls: string; tip: string }> = {
-  confirmed: { label: 'Confirmed', cls: 'v-confirmed', tip: 'Significant on its own and after controlling for every other factor' },
-  raw: { label: 'Likely confounded', cls: 'v-raw', tip: 'Raw difference is significant but mostly explained by other factors' },
-  reference: { label: 'Baseline', cls: 'v-ref', tip: 'Comparison category for the multivariate model' },
-  ns: { label: 'Not significant', cls: 'v-ns', tip: 'Could be chance with this sample size' },
+  confirmed: { label: 'Real problem', cls: 'v-bad', tip: 'Holds up even after accounting for everything else about the visit' },
+  raw: { label: "Looks bad, but it's something else", cls: 'v-raw', tip: 'The difference is real, but mostly explained by other things (e.g. one-time or bigger jobs)' },
+  reference: { label: 'Comparison group', cls: 'v-ref', tip: 'Used as the point of comparison' },
+  ns: { label: 'Not enough evidence', cls: 'v-ns', tip: 'Could be chance with this many ratings' },
+};
+const verdictOf = (d: Driver) => {
+  if (d.rate < d.rateWithout && d.verdict === 'confirmed') return { label: 'Real strength', cls: 'v-confirmed', tip: VERDICT.confirmed.tip };
+  if (d.rate < d.rateWithout && d.verdict === 'raw') return { label: "Looks good, but it's something else", cls: 'v-ns', tip: VERDICT.raw.tip };
+  return VERDICT[d.verdict];
 };
 
-function Drivers({ drivers, baseRate, n }: { drivers: Driver[]; baseRate: number; n: number }) {
+function Drivers({ drivers, baseRate, n, math }: { drivers: Driver[]; baseRate: number; n: number; math: boolean }) {
   const [onlySig, setOnlySig] = useState(false);
   const groups = GROUP_ORDER.map((g) => ({
     g,
@@ -278,21 +317,21 @@ function Drivers({ drivers, baseRate, n }: { drivers: Driver[]; baseRate: number
     <>
       <section className="card">
         <div className="row-line no-border">
-          <h2>What drives dissatisfaction</h2>
+          <h2>What makes customers unhappy</h2>
           <label className="check">
-            <input type="checkbox" checked={onlySig} onChange={(e) => setOnlySig(e.target.checked)} /> Significant only
+            <input type="checkbox" checked={onlySig} onChange={(e) => setOnlySig(e.target.checked)} /> Only clear findings
           </label>
         </div>
         <p className="muted small">
-          Each factor's dissatisfaction rate (bar, with 95% interval) against the company average of <strong>{pct(baseRate)}</strong> (grey line), from {n} ratings. "Adj. odds" controls for all other
-          factors at once — e.g. it separates the effect of an extra from the fact that extras are often booked on one-time jobs. Factors need 12+ ratings to be shown.
+          For each part of a visit — an extra, the type of home, when it was booked, whether the cleaner was late — the % of customers who weren't happy. The grey line is the company average (
+          <strong>{pct(baseRate)}</strong>). Red dots are worse than average, green better.
+          {math && ` Bars show 95% Wilson intervals; ${n} ratings; factors need 12+ ratings. "Adj. odds" is from a logistic regression on all factors at once; verdicts use Benjamini–Hochberg q < 0.1 plus the adjusted CI.`}
         </p>
         <div className="legend small">
-          {Object.values(VERDICT).map((v) => (
-            <span key={v.label} className={`verdict ${v.cls}`} title={v.tip}>
-              {v.label}
-            </span>
-          ))}
+          <span className="verdict v-bad">Real problem — fix it</span>
+          <span className="verdict v-confirmed">Real strength</span>
+          <span className="verdict v-raw">Looks bad, but it's something else</span>
+          <span className="verdict v-ns">Not enough evidence yet</span>
         </div>
       </section>
 
@@ -300,18 +339,18 @@ function Drivers({ drivers, baseRate, n }: { drivers: Driver[]; baseRate: number
         <section key={g} className="card">
           <h2>{g === 'Extras' ? 'Extras (add-ons)' : g}</h2>
           <div className="driver-table">
-            <div className="driver-row head">
-              <span>Factor</span>
-              <span>Dissatisfied when present</span>
-              <span className="num">Without</span>
-              <span className="num">Raw</span>
-              <span className="num">Adj. odds (95% CI)</span>
-              <span>Verdict</span>
+            <div className={`driver-row head ${math ? 'math' : ''}`}>
+              <span>&nbsp;</span>
+              <span>Not happy when included</span>
+              <span className="num">Otherwise</span>
+              {math && <span className="num">Raw</span>}
+              {math && <span className="num">Adj. odds (95% CI)</span>}
+              <span>What it means</span>
             </div>
             {list.map((d) => (
-              <div key={d.key} className="driver-row">
+              <div key={d.key} className={`driver-row ${math ? 'math' : ''}`}>
                 <span className="driver-label">
-                  {d.label} <span className="muted small">n={d.n}</span>
+                  {d.label} <span className="muted small">{d.n} ratings</span>
                 </span>
                 <span className="rate-cell">
                   <span className="rate-bar">
@@ -321,12 +360,12 @@ function Drivers({ drivers, baseRate, n }: { drivers: Driver[]; baseRate: number
                   </span>
                   <span className="small">{pct(d.rate)}</span>
                 </span>
-                <span className="num small" data-label="without">{pct(d.rateWithout)}</span>
-                <span data-label="raw" className={`num small ${d.ratio > 1.2 ? 'neg' : d.ratio < 0.8 ? 'ok' : ''}`}>{Number.isFinite(d.ratio) ? `${d.ratio.toFixed(1)}×` : '—'}</span>
-                <span className="num small" data-label="adj. odds">{d.adjOdds ? `${d.adjOdds.toFixed(2)} (${d.adjOddsCi![0].toFixed(2)}–${d.adjOddsCi![1].toFixed(2)})` : '—'}</span>
+                <span className="num small" data-label="otherwise">{pct(d.rateWithout)}</span>
+                {math && <span data-label="raw" className={`num small ${d.ratio > 1.2 ? 'neg' : d.ratio < 0.8 ? 'ok' : ''}`}>{Number.isFinite(d.ratio) ? `${d.ratio.toFixed(1)}×` : '—'}</span>}
+                {math && <span className="num small" data-label="adj. odds">{d.adjOdds ? `${d.adjOdds.toFixed(2)} (${d.adjOddsCi![0].toFixed(2)}–${d.adjOddsCi![1].toFixed(2)})` : '—'}</span>}
                 <span>
-                  <span className={`verdict ${VERDICT[d.verdict].cls}`} title={`${VERDICT[d.verdict].tip}. q=${d.qValue.toFixed(3)}`}>
-                    {VERDICT[d.verdict].label}
+                  <span className={`verdict ${verdictOf(d).cls}`} title={`${verdictOf(d).tip}${math ? `. q=${d.qValue.toFixed(3)}` : ''}`}>
+                    {verdictOf(d).label}
                   </span>
                 </span>
               </div>
@@ -340,7 +379,7 @@ function Drivers({ drivers, baseRate, n }: { drivers: Driver[]; baseRate: number
 
 // ---------------- Cleaners ----------------
 
-function Cleaners({ cleaners, baseRate }: { cleaners: ReturnType<typeof scoreCleaners>; baseRate: number }) {
+function Cleaners({ cleaners, baseRate, math }: { cleaners: ReturnType<typeof scoreCleaners>; baseRate: number; math: boolean }) {
   const [minN, setMinN] = useState(5);
   const [view, setView] = useState<'all' | 'worse' | 'better'>('all');
   const list = cleaners.filter((c) => c.n >= minN && (view === 'all' || c.flag === view));
@@ -351,7 +390,7 @@ function Cleaners({ cleaners, baseRate }: { cleaners: ReturnType<typeof scoreCle
         <div className="tabs inline">
           {(['all', 'worse', 'better'] as const).map((v) => (
             <button key={v} className={v === view ? 'tab active' : 'tab'} onClick={() => setView(v)}>
-              {v === 'all' ? 'All' : v === 'worse' ? `Likely below average (${cleaners.filter((c) => c.flag === 'worse').length})` : `Consistently strong (${cleaners.filter((c) => c.flag === 'better').length})`}
+              {v === 'all' ? 'All cleaners' : v === 'worse' ? `Needs coaching (${cleaners.filter((c) => c.flag === 'worse').length})` : `Top performers (${cleaners.filter((c) => c.flag === 'better').length})`}
             </button>
           ))}
         </div>
@@ -365,46 +404,43 @@ function Cleaners({ cleaners, baseRate }: { cleaners: ReturnType<typeof scoreCle
         </label>
       </div>
       <p className="muted small">
-        Adjusted rate shrinks small samples toward the company average ({pct(baseRate)}), so 1 bad rating out of 2 doesn't rank someone last. The bar shows the 90% credible range; "P(worse)" is the
-        probability the cleaner's true rate is above average.
+        Sorted by how often customers aren't happy, compared with the team average ({pct(baseRate)}, grey line). We take the number of ratings into account, so one bad review out of two doesn't
+        make someone look terrible — a cleaner is only marked <strong>Needs coaching</strong> when the pattern is clear.
+        {math && ' Adjusted rate = empirical-Bayes (beta-binomial) posterior mean; bar = 90% credible range; flagged when P(rate > average) > 90% with ≥5 ratings.'}
       </p>
       <div className="cards-on-mobile nested">
         <table>
           <thead>
             <tr>
               <th>Cleaner</th>
-              <th className="num">Ratings</th>
-              <th className="num">Dissatisfied</th>
-              <th>Adjusted rate (90% range)</th>
-              <th className="num">P(worse)</th>
-              <th>Latest critical comment</th>
+              <th className="num">Not happy</th>
+              <th>Compared with the team</th>
+              <th>{math ? 'P(worse)' : 'How sure'}</th>
+              <th>Latest complaint</th>
             </tr>
           </thead>
           <tbody>
             {list.map((c) => (
               <tr key={c.id} className="static">
                 <td data-label="Cleaner">
-                  {c.name} {c.flag === 'worse' && <span className="verdict v-raw">below avg</span>}
-                  {c.flag === 'better' && <span className="verdict v-confirmed">strong</span>}
+                  {cleanName(c.name)} {c.flag === 'worse' && <span className="verdict v-bad">needs coaching</span>}
+                  {c.flag === 'better' && <span className="verdict v-confirmed">top performer</span>}
                 </td>
-                <td data-label="Ratings" className="num">
-                  {c.n}
+                <td data-label="Not happy" className="num">
+                  {c.k} of {c.n}
                 </td>
-                <td data-label="Dissatisfied" className="num">
-                  {c.k} <span className="muted small">({pct(c.rawRate)})</span>
-                </td>
-                <td data-label="Adjusted rate">
+                <td data-label="Compared with team">
                   <span className="rate-cell">
                     <span className="rate-bar">
                       <span className="ci" style={{ left: `${(c.lo / maxHi) * 100}%`, width: `${((c.hi - c.lo) / maxHi) * 100}%` }} />
                       <span className={`pt ${c.adjRate > baseRate ? 'bad' : 'good'}`} style={{ left: `${(c.adjRate / maxHi) * 100}%` }} />
                       <span className="base" style={{ left: `${(baseRate / maxHi) * 100}%` }} />
                     </span>
-                    <span className="small">{pct(c.adjRate)}</span>
+                    {math && <span className="small">{pct(c.adjRate)}</span>}
                   </span>
                 </td>
-                <td data-label="P(worse)" className={`num ${c.probWorse > 0.9 ? 'neg' : c.probWorse < 0.1 ? 'ok' : ''}`}>
-                  {pct(c.probWorse)}
+                <td data-label={math ? 'P(worse)' : 'How sure'} className={c.probWorse > 0.9 ? 'neg' : c.probWorse < 0.1 ? 'ok' : 'muted'}>
+                  {math ? pct(c.probWorse) : sureness(c)}
                 </td>
                 <td data-label="Comment">{c.lastComment ? <span className="clip" title={c.lastComment}>“{c.lastComment}”</span> : <span className="muted">—</span>}</td>
               </tr>
@@ -414,6 +450,12 @@ function Cleaners({ cleaners, baseRate }: { cleaners: ReturnType<typeof scoreCle
       </div>
     </section>
   );
+}
+
+function sureness(c: ReturnType<typeof scoreCleaners>[number]) {
+  if (c.flag === 'worse') return c.probWorse > 0.97 ? 'Very sure' : 'Fairly sure';
+  if (c.flag === 'better') return c.probWorse < 0.03 ? 'Very sure' : 'Fairly sure';
+  return c.n < 5 ? 'Too few ratings' : 'In line with team';
 }
 
 // ---------------- Comments ----------------
@@ -441,8 +483,8 @@ function Comments({ rows, themes, words }: { rows: RatedBooking[]; themes: Retur
     <>
       <div className="grid-2">
         <section className="card">
-          <h2>Complaint themes</h2>
-          <p className="muted small">Share of critical comments (okay/unhappy) mentioning each theme. Tap a theme to read those comments.</p>
+          <h2>What people complain about</h2>
+          <p className="muted small">Out of every negative comment, how many mention each topic. Tap a topic to read those comments.</p>
           {themes
             .filter((t) => t.key !== 'praise')
             .map((t) => (
@@ -456,11 +498,11 @@ function Comments({ rows, themes, words }: { rows: RatedBooking[]; themes: Retur
             ))}
         </section>
         <section className="card">
-          <h2>Words that separate complaints from praise</h2>
-          <p className="muted small">Ranked by weighted log-odds; bigger = more distinctive.</p>
+          <h2>The words customers use</h2>
+          <p className="muted small">Words that show up much more in unhappy comments than happy ones (and vice versa). Bigger = stronger signal.</p>
           <div className="word-cols">
             <div>
-              <h3 className="neg">In complaints</h3>
+              <h3 className="neg">When unhappy</h3>
               {words.complaints.map((w) => (
                 <span key={w.word} className="word neg" style={{ fontSize: `${12 + (w.score / maxZ) * 8}px` }} title={`${w.a} critical vs ${w.b} happy comments`}>
                   {w.word}
@@ -468,7 +510,7 @@ function Comments({ rows, themes, words }: { rows: RatedBooking[]; themes: Retur
               ))}
             </div>
             <div>
-              <h3 className="ok">In praise</h3>
+              <h3 className="ok">When happy</h3>
               {words.praise.map((w) => (
                 <span key={w.word} className="word ok" style={{ fontSize: `${12 + (-w.score / maxZ) * 8}px` }} title={`${w.b} happy vs ${w.a} critical comments`}>
                   {w.word}
@@ -569,8 +611,8 @@ function Customers({ atRisk }: { atRisk: ReturnType<typeof customersAtRisk> }) {
         </div>
       </div>
       <p className="muted small">
-        Customers whose most recent rating was Okay or Unhappy, ranked by annual value (visit price × visits per year) — about <strong>{fmtMoney(total).replace(/\.\d\d$/, '')}</strong> a year. Repeat
-        complainers are the highest churn risk.
+        Customers whose last rating was okay or unhappy, biggest accounts first — about <strong>{fmtMoney(total).replace(/\.\d\d$/, '')}</strong> a year of business. Call them, listen, and fix it;
+        anyone unhappy more than once (red number) is most likely to leave.
       </p>
       <div className="cards-on-mobile nested">
         <table>
