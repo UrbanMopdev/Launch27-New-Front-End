@@ -12,8 +12,8 @@ import { CustomersPage } from './pages/Customers';
 import { CustomerDetailPage } from './pages/CustomerDetail';
 import { TeamsPage } from './pages/Teams';
 import { ChargesPage } from './pages/Charges';
+import { TimeTrackingPage } from './pages/TimeTracking';
 import {
-  TimeTrackingPage,
   QuotesPage,
   DeclinedChargesPage,
   TeamPaymentsPage,

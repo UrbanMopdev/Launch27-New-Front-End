@@ -81,30 +81,6 @@ export function TeamPaymentsPage() {
   );
 }
 
-// /admin/reports/team-time-tracking-logs: GET /v1/staff/bookings/time_tracking?filter=active&from&to (+ /count)
-export function TimeTrackingPage() {
-  const navigate = useNavigate();
-  const t = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString('en-CA', { timeZone: TIMEZONE, hour: 'numeric', minute: '2-digit' }) : '—');
-  return (
-    <ResourceList<Row>
-      title="Time tracking"
-      path="/v1/staff/bookings/time_tracking"
-      params={{ filter: 'active' }}
-      dates="range"
-      onRowClick={(b) => navigate(`/bookings/${b.id}`)}
-      columns={[
-        { header: 'Booking', render: (b) => fmtDateTime(b.service_date) },
-        { header: 'Customer', render: (b) => person(b.user) },
-        { header: 'Team', render: (b) => b.time_tracking?.map((x: Row) => x.team?.title).join(', ') || b.teams?.map((x: Row) => x.title).join(', ') || '—' },
-        { header: 'En route', render: (b) => t(b.time_tracking?.[0]?.enroute_started_at) },
-        { header: 'Check in', render: (b) => t(b.time_tracking?.[0]?.checkin_at) },
-        { header: 'Check out', render: (b) => t(b.time_tracking?.[0]?.checkout_at) },
-        { header: 'Est. hours', render: (b) => (b.duration ? (b.duration / 60).toFixed(1) : '—'), className: 'num' },
-      ]}
-    />
-  );
-}
-
 // /admin/reports/ratings: GET /v1/staff/reports/customer_feedbacks?group=team (+ /count)
 export function FeedbackPage() {
   return (
