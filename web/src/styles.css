@@ -232,3 +232,8 @@ input.qty { width: 64px; padding: 3px 6px; }
   /* Trends table on the dashboard stays a table but fits */
   section.card table th, section.card table td { padding: 6px 4px; font-size: 13px; }
 }
+.list-header { margin-top: 6px; }
+.list-header h2 { font-size: 17px; margin: 0; }
+.filters label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+.tile-value.ok { color: var(--ok); }
+.tile-value.neg { color: var(--danger); }

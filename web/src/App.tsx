@@ -11,10 +11,10 @@ import { DashboardPage } from './pages/Dashboard';
 import { CustomersPage } from './pages/Customers';
 import { CustomerDetailPage } from './pages/CustomerDetail';
 import { TeamsPage } from './pages/Teams';
+import { ChargesPage } from './pages/Charges';
 import {
   TimeTrackingPage,
   QuotesPage,
-  ChargesPage,
   DeclinedChargesPage,
   TeamPaymentsPage,
   HourlyWagesPage,

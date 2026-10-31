@@ -38,28 +38,6 @@ export function QuotesPage() {
   );
 }
 
-// /admin/charges: GET /v1/staff/charges?filter=all&from&to (+ /count). Bookings to charge.
-export function ChargesPage() {
-  const navigate = useNavigate();
-  return (
-    <ResourceList<Row>
-      title="Charge customers"
-      path="/v1/staff/charges"
-      params={{ filter: 'all' }}
-      dates="range"
-      onRowClick={(b) => navigate(`/bookings/${b.id}`)}
-      columns={[
-        { header: 'Date', render: (b) => fmtDateTime(b.service_date) },
-        { header: 'Customer', render: (b) => person(b.user) },
-        { header: 'Service', render: (b) => b.services?.map((s: Row) => s.name).join(', ') },
-        { header: 'Payment', render: (b) => b.payment_method_info?.text || '—' },
-        { header: 'Outstanding', render: (b) => fmtMoney(b.charges?.outstanding), className: 'num' },
-        { header: 'Total', render: (b) => fmtMoney(b.summary?.total), className: 'num' },
-      ]}
-    />
-  );
-}
-
 // /admin/reports/charges: GET /v1/staff/reports/declined_charges (+ /count)
 export function DeclinedChargesPage() {
   const navigate = useNavigate();
