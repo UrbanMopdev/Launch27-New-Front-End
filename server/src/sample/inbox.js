@@ -1,7 +1,7 @@
 // Sample support-inbox traffic for dev/QA, so the Inbox, 360 and Supervisor pages have
 // something to show. Every sender is one of the synthetic Launch27 customers or cleaners
 // (example.com emails, 555 numbers), so the 360 panels link up with synthetic bookings.
-// Runs only when SAMPLE_DATA=true, never in production, and only on an empty inbox.
+// Runs only when SAMPLE_DATA=true, never in production, and only once per database.
 
 import { createL27Client } from '../inbox/lookup.js';
 import { kindForChannel, normalizeIdentity } from '../inbox/normalize.js';
@@ -32,8 +32,12 @@ export const SAMPLE_MESSAGES = [
 ];
 
 export async function loadSampleInbox(db, { fetchImpl, baseUrl, bearer = 'mock-bearer', log = () => {}, now = new Date(), messages = SAMPLE_MESSAGES } = {}) {
-  const existing = await db.query('SELECT count(*)::int AS n FROM conversations');
-  if (existing.rows[0].n > 0) return { loaded: 0, skipped: 'inbox not empty' };
+  // Skip if the samples were loaded before (they carry external ids sample-N).
+  const existing = await db.query("SELECT count(*)::int AS n FROM messages WHERE external_id LIKE 'sample-%'");
+  if (existing.rows[0].n > 0) {
+    log('info', 'sample inbox already loaded');
+    return { loaded: 0, skipped: 'already loaded' };
+  }
   const l27 = createL27Client({ baseUrl, fetchImpl });
   let loaded = 0;
   // Oldest first, so threads build up in order.

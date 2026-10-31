@@ -54,7 +54,7 @@ Dev and QA never contain real customer data:
   the service restarts.
 - Each environment's Postgres starts empty. With `SAMPLE_DATA=true` the server loads about
   15 sample support conversations from synthetic customers and cleaners into an empty
-  inbox at startup (`server/src/sample/inbox.js`); more can be sent from the Channel
+  inbox at startup, once per database (`server/src/sample/inbox.js`); more can be sent from the Channel
   simulator. `SAMPLE_DATA` is ignored in production.
 - **Never** restore a production backup into dev or staging. There is no approved
   anonymization process; if one is needed later, it must be designed, reviewed and
