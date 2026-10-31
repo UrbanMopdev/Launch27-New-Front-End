@@ -52,8 +52,10 @@ Dev and QA never contain real customer data:
   emails, `555` phone numbers, plausible Ottawa addresses, deterministic per date so QA
   can reproduce issues. Edits made in the app apply to an in-memory copy and reset when
   the service restarts.
-- Each environment's Postgres starts empty and is filled by the app and the Channel
-  simulator.
+- Each environment's Postgres starts empty. With `SAMPLE_DATA=true` the server loads about
+  15 sample support conversations from synthetic customers and cleaners into an empty
+  inbox at startup (`server/src/sample/inbox.js`); more can be sent from the Channel
+  simulator. `SAMPLE_DATA` is ignored in production.
 - **Never** restore a production backup into dev or staging. There is no approved
   anonymization process; if one is needed later, it must be designed, reviewed and
   documented here first.

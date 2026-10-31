@@ -249,7 +249,10 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
 
   function customersFor(q) {
     const text = (q.get('query') || '').toLowerCase();
-    return text ? customers.filter((c) => `${c.first_name} ${c.last_name} ${c.email} ${c.phone}`.toLowerCase().includes(text)) : customers;
+    const digits = text.replace(/\D/g, '');
+    if (!text) return customers;
+    // Like Launch27, match a phone number typed with or without formatting.
+    return customers.filter((c) => `${c.first_name} ${c.last_name} ${c.email} ${c.phone}`.toLowerCase().includes(text) || (digits.length >= 7 && `1${c.phone.replace(/\D/g, '')}`.endsWith(digits)));
   }
 
   function route(method, path, q, body) {
