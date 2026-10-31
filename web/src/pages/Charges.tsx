@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { l27All } from '../api';
@@ -15,6 +15,8 @@ type ChargeRow = Booking & {
   location_id: number;
   refunds?: { amount: number; status: string }[];
 };
+
+const PAGE = 50;
 
 const STATUS_TABS = [
   { id: 'all', label: 'All' },
@@ -124,6 +126,7 @@ export function ChargesPage() {
   const [status, setStatus] = useState('all');
   const [locationId, setLocationId] = useState<number | 'all'>('all');
   const [search, setSearch] = useState('');
+  const [shown, setShown] = useState(PAGE);
 
   const locations = useLocations();
   const locationName = (id: number) => locations.data?.find((l) => l.id === id)?.name || `Location ${id}`;
@@ -141,6 +144,7 @@ export function ChargesPage() {
   }, [inLocation, search]);
 
   const totals = useMemo(() => totalsOf(inLocation), [inLocation]);
+  useEffect(() => setShown(PAGE), [status, from, to, locationId, search]);
   const byLocation = useMemo(() => {
     const groups = new Map<number, ChargeRow[]>();
     for (const r of charges.data || []) groups.set(r.location_id, [...(groups.get(r.location_id) || []), r]);
@@ -261,6 +265,7 @@ export function ChargesPage() {
             </section>
             <section className="card">
               <h2>By payment method</h2>
+              <div className="cards-on-mobile nested">
               <table>
                 <thead>
                   <tr>
@@ -273,22 +278,24 @@ export function ChargesPage() {
                 <tbody>
                   {byMethod.map((m) => (
                     <tr key={m.method} className="static">
-                      <td>
+                      <td data-label="Method">
                         {m.method} <span className="muted small">({m.bookings})</span>
                       </td>
-                      <td className="num">{fmtMoney(m.billed)}</td>
-                      <td className="num">{fmtMoney(m.collected - m.refunded)}</td>
-                      <td className="num">{fmtMoney(m.outstanding)}</td>
+                      <td data-label="Billed" className="num">{fmtMoney(m.billed)}</td>
+                      <td data-label="Collected" className="num">{fmtMoney(m.collected - m.refunded)}</td>
+                      <td data-label="Outstanding" className="num">{fmtMoney(m.outstanding)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             </section>
           </div>
 
           {locationId === 'all' && byLocation.length > 1 && (
             <section className="card">
               <h2>By location</h2>
+              <div className="cards-on-mobile nested">
               <table>
                 <thead>
                   <tr>
@@ -302,15 +309,16 @@ export function ChargesPage() {
                 <tbody>
                   {byLocation.map((l) => (
                     <tr key={l.id} onClick={() => setLocationId(l.id)}>
-                      <td>{locationName(l.id)}</td>
-                      <td className="num">{l.bookings}</td>
-                      <td className="num">{fmtMoney(l.billed)}</td>
-                      <td className="num">{fmtMoney(l.collected - l.refunded)}</td>
-                      <td className={`num ${l.outstanding > 0 ? 'neg' : ''}`}>{fmtMoney(l.outstanding)}</td>
+                      <td data-label="Location">{locationName(l.id)}</td>
+                      <td data-label="Bookings" className="num">{l.bookings}</td>
+                      <td data-label="Billed" className="num">{fmtMoney(l.billed)}</td>
+                      <td data-label="Collected" className="num">{fmtMoney(l.collected - l.refunded)}</td>
+                      <td data-label="Outstanding" className={`num ${l.outstanding > 0 ? 'neg' : ''}`}>{fmtMoney(l.outstanding)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
               <p className="muted small">Tap a location to filter the page to it.</p>
             </section>
           )}
@@ -347,7 +355,7 @@ export function ChargesPage() {
                     </td>
                   </tr>
                 )}
-                {rows.map((r) => {
+                {rows.slice(0, shown).map((r) => {
                   const st = paymentStatus(r);
                   return (
                     <tr key={r.id} onClick={() => navigate(`/bookings/${r.id}`)}>
@@ -370,6 +378,11 @@ export function ChargesPage() {
               </tbody>
             </table>
           </div>
+          {rows.length > shown && (
+            <button type="button" className="secondary show-more" onClick={() => setShown(shown + PAGE)}>
+              Show more ({rows.length - shown} left)
+            </button>
+          )}
         </>
       )}
     </>
