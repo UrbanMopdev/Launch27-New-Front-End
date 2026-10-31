@@ -54,13 +54,20 @@ const STATUS_LABEL: Record<Status, { label: string; cls: string }> = {
   unassigned: { label: 'Unassigned', cls: 'warn' },
 };
 
-const TABS: { id: 'all' | Status | 'attention'; label: string }[] = [
+const TABS: { id: 'all' | Status | 'attention' | 'ran_long' | 'finished_early'; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'attention', label: 'Needs attention' },
   { id: 'onsite', label: 'On site' },
   { id: 'done', label: 'Done' },
+  { id: 'ran_long', label: 'Ran long' },
+  { id: 'finished_early', label: 'Finished early' },
   { id: 'not_started', label: 'Not started' },
 ];
+
+// Worked vs scheduled, for finished visits: more than 30 minutes either way.
+const TOLERANCE_H = 0.5;
+const ranLong = (v: Visit) => v.worked !== null && !!v.scheduled && v.worked > v.scheduled + TOLERANCE_H;
+const finishedEarly = (v: Visit) => v.worked !== null && !!v.scheduled && v.worked < v.scheduled - TOLERANCE_H;
 
 const NEEDS_ATTENTION: Status[] = ['late', 'no_checkout', 'unassigned'];
 
@@ -123,6 +130,8 @@ export function TimeTrackingPage() {
     for (const v of visits) {
       c[v.status] = (c[v.status] || 0) + 1;
       if (NEEDS_ATTENTION.includes(v.status)) c.attention += 1;
+      if (ranLong(v)) c.ran_long = (c.ran_long || 0) + 1;
+      if (finishedEarly(v)) c.finished_early = (c.finished_early || 0) + 1;
     }
     return c;
   }, [visits]);
@@ -131,18 +140,25 @@ export function TimeTrackingPage() {
     return {
       worked: done.reduce((s, v) => s + (v.worked || 0), 0),
       scheduled: done.reduce((s, v) => s + (v.scheduled || 0), 0),
-      overruns: done.filter((v) => v.scheduled && v.worked! > v.scheduled + 0.5).length,
-      short: done.filter((v) => v.scheduled && v.worked! < v.scheduled - 0.5).length,
+      overruns: done.filter(ranLong).length,
+      short: done.filter(finishedEarly).length,
     };
   }, [visits]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return visits.filter((v) => {
+    const matches = (v: Visit) => !q || [v.booking.id, v.booking.user?.name, v.team?.title].join(' ').toLowerCase().includes(q);
+    const list = visits.filter((v) => {
       if (tab === 'attention' && !NEEDS_ATTENTION.includes(v.status)) return false;
+      if (tab === 'ran_long') return ranLong(v) && matches(v);
+      if (tab === 'finished_early') return finishedEarly(v) && matches(v);
       if (tab !== 'all' && tab !== 'attention' && v.status !== tab) return false;
-      return !q || [v.booking.id, v.booking.user?.name, v.team?.title].join(' ').toLowerCase().includes(q);
+      return matches(v);
     });
+    // Biggest differences first on the over/under tabs.
+    if (tab === 'ran_long') list.sort((a, b) => b.worked! - b.scheduled! - (a.worked! - a.scheduled!));
+    if (tab === 'finished_early') list.sort((a, b) => a.worked! - a.scheduled! - (b.worked! - b.scheduled!));
+    return list;
   }, [visits, tab, search]);
 
   return (
@@ -174,7 +190,18 @@ export function TimeTrackingPage() {
             <Tile
               label="Hours worked / scheduled"
               value={`${hours.worked.toFixed(1)} / ${hours.scheduled.toFixed(1)}`}
-              sub={`${hours.overruns} ran long · ${hours.short} finished early (±30 min)`}
+              sub={
+                <>
+                  <button type="button" className="link small" onClick={() => setTab('ran_long')}>
+                    {hours.overruns} ran long
+                  </button>{' '}
+                  ·{' '}
+                  <button type="button" className="link small" onClick={() => setTab('finished_early')}>
+                    {hours.short} finished early
+                  </button>{' '}
+                  (±30 min)
+                </>
+              }
             />
           </div>
 
@@ -255,7 +282,7 @@ export function TimeTrackingPage() {
   );
 }
 
-function Tile({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'neg' }) {
+function Tile({ label, value, sub, tone }: { label: string; value: string; sub?: React.ReactNode; tone?: 'neg' }) {
   return (
     <div className="card tile">
       <div className="muted small">{label}</div>
