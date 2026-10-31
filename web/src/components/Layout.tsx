@@ -11,6 +11,7 @@ const NAV: { section: string; items: { to: string; label: string }[] }[] = [
     items: [
       { to: '/dashboard', label: 'Dashboard' },
       { to: '/dispatch', label: 'Dispatch board' },
+      { to: '/routes', label: 'Routes & travel' },
       { to: '/bookings', label: 'Bookings' },
       { to: '/time-tracking', label: 'Time tracking' },
       { to: '/quotes', label: 'Quotes' },

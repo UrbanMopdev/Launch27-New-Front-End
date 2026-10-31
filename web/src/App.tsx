@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
+
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { auth } from './api';
@@ -16,6 +17,7 @@ import { TimeTrackingPage } from './pages/TimeTracking';
 import { FeedbackPage } from './pages/Feedback';
 import { DispatchPage } from './pages/Dispatch';
 import { MarginsPage } from './pages/Margins';
+
 import {
   QuotesPage,
   DeclinedChargesPage,
@@ -35,6 +37,9 @@ import {
   BouncesPage,
 } from './pages/Lists';
 import { ApiCatalogPage } from './pages/ApiCatalog';
+
+// The map library is large, so the Routes page loads on demand.
+const RoutesPage = lazy(() => import('./pages/Routes').then((m) => ({ default: m.RoutesPage })));
 
 export function App() {
   const queryClient = useQueryClient();
@@ -56,6 +61,14 @@ export function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="dispatch" element={<DispatchPage />} />
+        <Route
+          path="routes"
+          element={
+            <Suspense fallback={<div className="muted">Loading map…</div>}>
+              <RoutesPage />
+            </Suspense>
+          }
+        />
         <Route path="bookings" element={<BookingsPage />} />
         <Route path="bookings/new" element={<BookingFormPage />} />
         <Route path="bookings/:id" element={<BookingDetailPage />} />

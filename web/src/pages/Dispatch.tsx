@@ -17,6 +17,7 @@ import {
   type DispatchBooking,
   type DispatchTeam,
 } from '../lib/dispatch';
+import { buildRoutes, fmtKm, fmtMin, type CleanerRoute } from '../lib/routes';
 
 // Dispatch board: one row per cleaner, the day's bookings as blocks on a timeline.
 //   GET  /v1/staff/bookings?from=D&to=D                 (refreshes every minute)
@@ -122,6 +123,8 @@ export function DispatchPage() {
     [bookingsQ.data, locationId],
   );
   const board = useMemo(() => buildBoard(bookings, availability, date, now), [bookings, availability, date, now]);
+  // Approximate driving per cleaner for the day (home → jobs → home).
+  const routesByTeam = useMemo(() => new Map(buildRoutes(bookings, teams).map((r) => [r.team.id, r])), [bookings, teams]);
 
   const q = search.trim().toLowerCase();
   const matches = (b: DispatchBooking) => !q || [b.id, b.user?.name, b.address?.full_address, b.address?.city].join(' ').toLowerCase().includes(q);
@@ -354,6 +357,7 @@ export function DispatchPage() {
                     {cleanName(team.title)}
                     <span className="muted small">
                       {win === 'off' ? 'Day off' : win ? `${fmtClock(win.start)}–${fmtClock(win.end)}` : 'No hours set'} · {blocks.length} job{blocks.length === 1 ? '' : 's'} · {(bookedMin / 60).toFixed(1)}h
+                      {routesByTeam.get(team.id)?.km ? ` · ~${fmtKm(routesByTeam.get(team.id)!.km)}` : ''}
                     </span>
                   </span>
                 </div>
@@ -400,6 +404,7 @@ export function DispatchPage() {
           booking={selectedBooking}
           focusTeamId={selected!.teamId}
           teams={teams}
+          routes={routesByTeam}
           board={board}
           availability={availability}
           date={date}
@@ -473,6 +478,7 @@ function BookingDrawer({
   booking: b,
   focusTeamId,
   teams,
+  routes,
   board,
   availability,
   date,
@@ -485,6 +491,7 @@ function BookingDrawer({
   booking: DispatchBooking;
   focusTeamId: number | null;
   teams: DispatchTeam[];
+  routes: Map<number, CleanerRoute>;
   board: Map<number | null, Block[]>;
   availability: Map<number, AvailabilityRow[]>;
   date: string;
@@ -571,6 +578,15 @@ function BookingDrawer({
               {bl?.conflict && <span className="chip conflict">double-booked</span>}
               {bl?.outside && <span className="chip outside">outside hours</span>}
               <span className="muted small"> {t.hours ? `${t.hours}h` : ''}</span>
+              {(() => {
+                const stop = routes.get(t.id)?.stops.find((st) => st.booking === b || (b.id && st.booking.id === b.id));
+                return stop?.legIn.km != null ? (
+                  <div className={`muted small ${stop.tight ? 'neg' : ''}`}>
+                    🚗 ~{fmtKm(stop.legIn.km)} ({fmtMin(stop.legIn.minutes)}) {stop.legIn.from === 'Home' ? 'from home' : `from ${stop.legIn.from}`}
+                    {stop.tight && ` — only ${Math.max(0, stop.gapBefore ?? 0)} min between jobs`}
+                  </div>
+                ) : null;
+              })()}
             </span>
             <span className="actions">
               {teamPhone(t.id) && (

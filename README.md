@@ -85,7 +85,7 @@ Every page makes the same Launch27 calls as the admin page it replaces (see
 
 | Section | Pages |
 | --- | --- |
-| Operations | Dashboard, Dispatch board (drag-and-drop cleaner assignment), Bookings (filters: all / unassigned / recurring / new customer / cancelled), Booking detail, Time tracking, Quotes, Customers, Customer detail (upcoming / past / cancelled / feedback), Teams |
+| Operations | Dashboard, Dispatch board (drag-and-drop cleaner assignment, travel per cleaner), Routes & travel (map, legs, tight connections, closer cleaners), Bookings (filters: all / unassigned / recurring / new customer / cancelled), Booking detail, Time tracking, Quotes, Customers, Customer detail (upcoming / past / cancelled / feedback), Teams |
 | Money | Job profitability (gross margin per job, flags, cost assumptions), Charge customers, Declined charges, Team payments, Hourly wages, Discount codes, Gift cards |
 | Reports | Customer feedback |
 | Settings | Services, Extras, Pricing parameters, Frequencies, Sales taxes, Closed dates, Tags & service categories, Office staff, Automated tasks, Undeliverable emails |
