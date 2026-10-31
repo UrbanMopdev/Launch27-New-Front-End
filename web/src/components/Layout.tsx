@@ -10,6 +10,7 @@ const NAV: { section: string; items: { to: string; label: string }[] }[] = [
     section: 'Operations',
     items: [
       { to: '/dashboard', label: 'Dashboard' },
+      { to: '/dispatch', label: 'Dispatch board' },
       { to: '/bookings', label: 'Bookings' },
       { to: '/time-tracking', label: 'Time tracking' },
       { to: '/quotes', label: 'Quotes' },

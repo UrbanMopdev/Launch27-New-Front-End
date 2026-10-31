@@ -14,6 +14,7 @@ import { TeamsPage } from './pages/Teams';
 import { ChargesPage } from './pages/Charges';
 import { TimeTrackingPage } from './pages/TimeTracking';
 import { FeedbackPage } from './pages/Feedback';
+import { DispatchPage } from './pages/Dispatch';
 import {
   QuotesPage,
   DeclinedChargesPage,
@@ -53,6 +54,7 @@ export function App() {
       <Route element={<Layout email={me.data.email} />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
+        <Route path="dispatch" element={<DispatchPage />} />
         <Route path="bookings" element={<BookingsPage />} />
         <Route path="bookings/new" element={<BookingFormPage />} />
         <Route path="bookings/:id" element={<BookingDetailPage />} />
