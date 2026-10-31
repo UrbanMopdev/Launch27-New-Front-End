@@ -28,9 +28,19 @@ export interface MarginInput {
   payment_method_info?: { code?: string; text?: string };
   summary?: { revenue?: number; total?: number; discount?: number; adjustment?: number; tip?: number };
   teams?: { id: number; title?: string; hours?: number; share?: number; earned?: number; time_tracking?: { checkin_at?: string | null; checkout_at?: string | null } | null }[];
+  duration?: number; // booked minutes
 }
 
-export type Flag = 'loss' | 'low_margin' | 'low_rate' | 'zero_revenue' | 'prepaid' | 'ran_over' | 'discounted' | 'no_pay';
+/**
+ * For a booking with no cleaner yet, a stand-in cleaner paid `payRate` for the booked
+ * hours, so its margin can be forecast. The job is flagged as estimated.
+ */
+export function withEstimatedPay(job: MarginInput, payRate: number): MarginInput & { estimated: true } {
+  const hours = job.duration ? job.duration / 60 : 0;
+  return { ...job, estimated: true, teams: [{ id: 0, title: 'No cleaner yet', hours, share: payRate, earned: hours * payRate }] };
+}
+
+export type Flag = 'loss' | 'low_margin' | 'low_rate' | 'zero_revenue' | 'prepaid' | 'ran_over' | 'discounted' | 'no_pay' | 'estimated';
 
 export const FLAG_LABEL: Record<Flag, string> = {
   loss: 'Losing money',
@@ -41,6 +51,7 @@ export const FLAG_LABEL: Record<Flag, string> = {
   ran_over: 'Ran over time',
   discounted: 'Big discount / price cut',
   no_pay: 'No cleaner pay recorded',
+  estimated: 'No cleaner yet (pay estimated)',
 };
 
 export interface JobMargin {
@@ -94,6 +105,7 @@ export function jobMargin(job: MarginInput, s: CostSettings): JobMargin {
     if (ratePaid !== null && ratePaid < s.targetRate) flags.push('low_rate');
   }
   if (!pay && teams.length && !excluded) flags.push('no_pay');
+  if ((job as { estimated?: boolean }).estimated) flags.push('estimated');
   if (actualHours !== null && paidHours > 0 && actualHours > paidHours + 0.5) flags.push('ran_over');
   const listPrice = revenue + (job.summary?.discount || 0) - Math.min(0, job.summary?.adjustment || 0);
   if (!excluded && listPrice > 0 && (listPrice - revenue) / listPrice >= 0.2) flags.push('discounted');

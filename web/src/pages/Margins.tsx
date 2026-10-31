@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { l27All } from '../api';
 import { useLocations } from '../hooks';
 import { fmtDateTime, TIMEZONE } from '../format';
-import { DEFAULT_SETTINGS, FLAG_LABEL, jobMargin, marginGap, needsAttention, rollup, summarise, visitsPerYear, type CostSettings, type Flag, type JobMargin, type MarginInput, type Rollup } from '../lib/margin';
+import { DEFAULT_SETTINGS, FLAG_LABEL, jobMargin, marginGap, needsAttention, rollup, summarise, visitsPerYear, withEstimatedPay, type CostSettings, type Flag, type JobMargin, type MarginInput, type Rollup } from '../lib/margin';
 
 // Job profitability.
 //   GET /v1/staff/bookings/time_tracking?filter=active&from&to   cleaner pay per job (teams[].earned = rate × paid hours), check-in/out
@@ -27,6 +27,7 @@ function isoDay(offset = 0, base = new Date()) {
 function presets() {
   const t = new Date();
   return [
+    { label: 'Next 7 days', from: isoDay(0), to: isoDay(6), upcoming: true },
     { label: 'Last 7 days', from: isoDay(-7), to: isoDay(-1) },
     { label: 'Last 30 days', from: isoDay(-30), to: isoDay(-1) },
     { label: 'This month', from: isoDay(0, new Date(t.getFullYear(), t.getMonth(), 1)), to: isoDay(0) },
@@ -54,7 +55,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 export function MarginsPage() {
   const ranges = useMemo(presets, []);
-  const [range, setRange] = useState(ranges[1]);
+  const [range, setRange] = useState(ranges[2]); // Last 30 days
   const [locationId, setLocationId] = useState<number | 'all'>('all');
   const [settings, setSettings] = useState<CostSettings>(loadSettings);
   const [showSettings, setShowSettings] = useState(false);
@@ -81,13 +82,20 @@ export function MarginsPage() {
   const items = useMemo(() => {
     if (!pay.data || !details.data) return [];
     const byId = new Map(details.data.filter((b) => b.id).map((b) => [b.id, b]));
-    return pay.data
+    const assigned = pay.data
       .filter((j) => j.active !== false)
       .map((j) => {
         const d = byId.get(j.id);
         return jobMargin({ ...j, location: d?.location, frequency: d?.frequency, payment_method_info: d?.payment_method_info, user: { ...j.user, ...d?.user } }, settings);
-      })
-      .filter((m) => locationId === 'all' || m.job.location?.id === locationId);
+      });
+    // Bookings with no cleaner yet aren't in the pay data: forecast them at the average pay rate.
+    const inPay = new Set(pay.data.map((j) => j.id));
+    const rates = assigned.map((m) => m.payRate).filter((r): r is number => r !== null && r > 0);
+    const avgRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : 22;
+    const unassigned = details.data
+      .filter((b) => b.id && !inPay.has(b.id) && b.active !== false && !(b.teams || []).length)
+      .map((b) => jobMargin(withEstimatedPay(b, avgRate), settings));
+    return [...assigned, ...unassigned].filter((m) => locationId === 'all' || m.job.location?.id === locationId);
   }, [pay.data, details.data, settings, locationId]);
 
   const total = useMemo(() => summarise(items), [items]);
@@ -126,6 +134,11 @@ export function MarginsPage() {
       {showSettings && <Settings settings={settings} onChange={setSettings} />}
 
       <p className="muted small">
+        {'upcoming' in range && (
+          <>
+            <strong>Forecast:</strong> upcoming jobs use their planned paid hours; jobs with no cleaner yet use the average pay rate.{' '}
+          </>
+        )}
         Gross margin = what the client paid for the visit (after discounts, before tax and tips) minus cleaner pay
         {settings.onCostPct ? ` + ${settings.onCostPct}% payroll costs` : ''}
         {settings.cardPct ? `, card fees` : ''}
@@ -145,7 +158,7 @@ export function MarginsPage() {
             <Tile label="Needs attention" value={String(total.flagged)} sub={`losing money or under ${settings.targetMarginPct}% margin`} tone={total.flagged ? 'neg' : undefined} />
           </div>
 
-          <Insights items={items} total={total} settings={settings} onTab={setTab} onFlag={(f) => { setTab('jobs'); setFlagFilter(f); }} />
+          <Insights items={items} total={total} settings={settings} upcoming={'upcoming' in range} onTab={setTab} onFlag={(f) => { setTab('jobs'); setFlagFilter(f); }} />
 
           <div className="tabs">
             {TABS.map((t) => (
@@ -213,7 +226,7 @@ function Settings({ settings, onChange }: { settings: CostSettings; onChange: (s
   );
 }
 
-function Insights({ items, total, settings, onTab, onFlag }: { items: JobMargin[]; total: Rollup; settings: CostSettings; onTab: (t: Tab) => void; onFlag: (f: Flag | 'flagged') => void }) {
+function Insights({ items, total, settings, upcoming, onTab, onFlag }: { items: JobMargin[]; total: Rollup; settings: CostSettings; upcoming: boolean; onTab: (t: Tab) => void; onFlag: (f: Flag | 'flagged') => void }) {
   const cards: { tone: 'bad' | 'good' | 'info'; title: string; action?: string; go?: () => void }[] = [];
   const target = settings.targetMarginPct / 100;
   const low = items.filter((m) => m.flags.includes('low_margin') || m.flags.includes('loss'));
@@ -221,7 +234,7 @@ function Insights({ items, total, settings, onTab, onFlag }: { items: JobMargin[
   if (low.length)
     cards.push({
       tone: 'bad',
-      title: `${low.length} of ${items.filter((m) => !m.excluded).length} jobs made less than ${settings.targetMarginPct}% margin. Bringing them up to target would have added ${money(gap)} in this period.`,
+      title: `${low.length} of ${items.filter((m) => !m.excluded).length} jobs ${upcoming ? 'are priced under' : 'made less than'} ${settings.targetMarginPct}% margin. Bringing them up to target would ${upcoming ? 'add' : 'have added'} ${money(gap)} in this period.`,
       action: 'Look at which services and customers they come from (tabs below) — usually a pricing or time-allowance issue.',
       go: () => onFlag('low_margin'),
     });
@@ -249,6 +262,8 @@ function Insights({ items, total, settings, onTab, onFlag }: { items: JobMargin[
 
   const over = items.filter((m) => m.flags.includes('ran_over'));
   if (over.length) cards.push({ tone: 'info', title: `${over.length} jobs ran more than 30 minutes past their paid hours.`, action: 'Either the job is underquoted (price/time), or cleaners aren\'t being paid for real time worked. Check both.', go: () => onFlag('ran_over') });
+  const est = items.filter((m) => m.flags.includes('estimated'));
+  if (est.length) cards.push({ tone: 'info', title: `${est.length} upcoming job${est.length > 1 ? 's have' : ' has'} no cleaner yet — margin is estimated at the average pay rate.`, action: 'Assign them on the Dispatch board; the margin updates once a cleaner and hours are set.', go: () => onFlag('estimated') });
   const lowRate = items.filter((m) => m.flags.includes('low_rate'));
   if (lowRate.length) cards.push({ tone: 'info', title: `${lowRate.length} jobs charged under $${settings.targetRate} per cleaner-hour (company average $${total.rate?.toFixed(0)}).`, action: 'Often hourly or contract work (e.g. homemaking) priced close to cost — check those rates at renewal.', go: () => onFlag('low_rate') });
   const zero = items.filter((m) => m.flags.includes('zero_revenue'));
@@ -318,7 +333,7 @@ function Jobs({ items, settings, flagFilter, setFlagFilter }: { items: JobMargin
     a.click();
   };
 
-  const chips: (Flag | 'flagged' | 'all')[] = ['flagged', 'loss', 'low_margin', 'low_rate', 'ran_over', 'discounted', 'zero_revenue', 'prepaid', 'all'];
+  const chips: (Flag | 'flagged' | 'all')[] = ['flagged', 'loss', 'low_margin', 'low_rate', 'ran_over', 'discounted', 'estimated', 'zero_revenue', 'prepaid', 'all'];
   return (
     <>
       <div className="flag-chips">

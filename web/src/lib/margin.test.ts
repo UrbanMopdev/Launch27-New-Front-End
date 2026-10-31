@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SETTINGS, jobMargin, marginGap, summarise, visitsPerYear, type MarginInput } from './margin';
+import { DEFAULT_SETTINGS, jobMargin, marginGap, summarise, visitsPerYear, withEstimatedPay, type MarginInput } from './margin';
 
 const job = (over: Partial<MarginInput> = {}): MarginInput => ({
   id: 1,
@@ -65,6 +65,13 @@ describe('margin', () => {
     expect(m.flags).toEqual(['prepaid']);
     expect(marginGap(m, s)).toBe(0);
     expect(summarise([m, jobMargin(job(), s)]).revenue).toBe(150);
+  });
+
+  it('estimates pay for a job with no cleaner yet', () => {
+    const m = jobMargin(withEstimatedPay(job({ teams: [], duration: 180 }), 22), s);
+    expect(m.labour).toBe(66);
+    expect(m.paidHours).toBe(3);
+    expect(m.flags).toContain('estimated');
   });
 
   it('maps frequencies to visits per year', () => {
