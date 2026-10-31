@@ -13,7 +13,8 @@ import { fmtDateTime, fmtMoney, TIMEZONE } from '../format';
 
 type ChargeRow = Booking & {
   location_id: number;
-  refunds?: { amount: number; status: string }[];
+  refunds?: { amount: number; status: string; booking_charge_non_captured?: boolean }[];
+  cancellation?: { fee?: number; date?: string; reason?: string; cancelled_by?: { name?: string } } | null;
 };
 
 const PAGE = 50;
@@ -49,6 +50,20 @@ function presets() {
 const ok = (c: Charge) => !c.status || c.status === 'succeeded';
 const sum = (list: Charge[] | undefined) => (list || []).filter(ok).reduce((s, c) => s + (c.amount || 0), 0);
 
+// Launch27 places a card hold a few days before each visit. When the hold is let go
+// (booking cancelled, or re-authorized) it shows up in charges.refunded with a
+// description like "On Hold for UrbanMop - 10/28/2026 8:00am". No money moved, so
+// these are not refunds.
+const isHoldRelease = (c: Charge) => /^on hold\b/i.test(c.description || '');
+const realRefunds = (r: ChargeRow) => sum((r.charges?.refunded || []).filter((c) => !isHoldRelease(c)));
+const holdReleases = (r: ChargeRow) => sum((r.charges?.refunded || []).filter(isHoldRelease));
+const captured = (r: ChargeRow) => sum(r.charges?.charged) + sum(r.charges?.marked_paid);
+const netCollected = (r: ChargeRow) => captured(r) - realRefunds(r);
+const isCancelled = (r: ChargeRow) => r.active === false;
+
+// Cancelled with money still kept beyond any cancellation fee: refund or credit owed?
+export const keptOnCancelled = (r: ChargeRow) => (isCancelled(r) ? Math.max(0, netCollected(r) - (r.cancellation?.fee || 0)) : 0);
+
 interface Totals {
   bookings: number;
   billed: number;
@@ -58,46 +73,79 @@ interface Totals {
   discounts: number;
   collected: number;
   refunded: number;
+  holdsReleased: number;
   outstanding: number;
   credit: number;
   onhold: number;
   unpaidCount: number;
+  cancelledCount: number;
+  cancelledValue: number;
+  cancelFees: number;
+  review: number;
+  reviewCount: number;
 }
 
 function totalsOf(rows: ChargeRow[]): Totals {
-  const t: Totals = { bookings: 0, billed: 0, revenue: 0, tax: 0, tips: 0, discounts: 0, collected: 0, refunded: 0, outstanding: 0, credit: 0, onhold: 0, unpaidCount: 0 };
+  const t: Totals = {
+    bookings: 0, billed: 0, revenue: 0, tax: 0, tips: 0, discounts: 0, collected: 0, refunded: 0, holdsReleased: 0,
+    outstanding: 0, credit: 0, onhold: 0, unpaidCount: 0, cancelledCount: 0, cancelledValue: 0, cancelFees: 0, review: 0, reviewCount: 0,
+  };
   for (const r of rows) {
     const s = r.summary || {};
     const c = r.charges || {};
+    // Money actually taken or given back counts whatever the booking's state.
+    t.collected += captured(r);
+    t.refunded += realRefunds(r);
+    t.holdsReleased += holdReleases(r);
+    t.onhold += sum(c.onhold);
+
+    if (isCancelled(r)) {
+      // A cancelled booking isn't billed; its price is shown separately.
+      t.cancelledCount += 1;
+      t.cancelledValue += s.total || 0;
+      t.cancelFees += r.cancellation?.fee || 0;
+      const kept = keptOnCancelled(r);
+      if (kept > 0) {
+        t.review += kept;
+        t.reviewCount += 1;
+      }
+      continue;
+    }
     t.bookings += 1;
     t.billed += s.total || 0;
     t.revenue += s.revenue || 0;
     t.tax += s.tax?.tax_amount || 0;
     t.tips += s.tip || 0;
     t.discounts += s.discount || 0;
-    t.collected += sum(c.charged) + sum(c.marked_paid);
-    t.refunded += sum(c.refunded);
-    // Launch27 reports overpayment (e.g. price lowered after charging) as negative outstanding.
+    // Negative outstanding = paid more than the booking now costs (e.g. price lowered after charging).
     const due = c.outstanding || 0;
-    if (due > 0) t.outstanding += due;
-    else t.credit -= due;
-    t.onhold += sum(c.onhold);
-    if ((c.outstanding || 0) > 0) t.unpaidCount += 1;
+    if (due > 0) {
+      t.outstanding += due;
+      t.unpaidCount += 1;
+    } else t.credit -= due;
   }
   return t;
 }
 
-function paymentStatus(r: ChargeRow) {
+function paymentStatus(r: ChargeRow): { label: string; cls: string; note?: string } {
   const c = r.charges || {};
+  if (isCancelled(r)) {
+    const kept = keptOnCancelled(r);
+    if (kept > 0) return { label: 'Cancelled · charged', cls: 'neg', note: `${fmtMoney(kept)} kept, no fee — refund or credit?` };
+    if (r.cancellation?.fee) return { label: 'Cancelled · fee', cls: 'warn', note: `Fee ${fmtMoney(r.cancellation.fee)}` };
+    if (holdReleases(r)) return { label: 'Cancelled', cls: 'muted', note: 'Card hold released' };
+    if (realRefunds(r)) return { label: 'Cancelled · refunded', cls: 'muted' };
+    return { label: 'Cancelled', cls: 'muted' };
+  }
   if (c.onhold?.length) return { label: 'On hold', cls: 'warn' };
-  if (c.refunded?.length) return { label: 'Refunded', cls: 'muted' };
   if ((c.outstanding || 0) > 0) return { label: 'Unpaid', cls: 'neg' };
-  if (c.charged?.length || c.marked_paid?.length) return { label: 'Paid', cls: 'ok' };
+  if (realRefunds(r)) return { label: captured(r) > realRefunds(r) ? 'Partly refunded' : 'Refunded', cls: 'muted' };
+  if (captured(r)) return { label: 'Paid', cls: 'ok' };
   return { label: (r.summary?.total || 0) > 0 ? 'Not charged' : 'No charge', cls: 'muted' };
 }
 
 function toCsv(rows: ChargeRow[], locationName: (id: number) => string) {
-  const head = ['Booking', 'Date', 'Location', 'Customer', 'Service', 'Payment method', 'Status', 'Total', 'Collected', 'Outstanding'];
+  const head = ['Booking', 'Date', 'Location', 'Customer', 'Service', 'Payment method', 'Status', 'Note', 'Cancellation reason', 'Total', 'Collected (net)', 'Outstanding'];
   const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const lines = rows.map((r) =>
     [
@@ -108,9 +156,11 @@ function toCsv(rows: ChargeRow[], locationName: (id: number) => string) {
       r.services?.map((s) => s.name).join('; '),
       r.payment_method_info?.text,
       paymentStatus(r).label,
+      paymentStatus(r).note,
+      r.cancellation?.reason,
       (r.summary?.total || 0).toFixed(2),
-      (sum(r.charges?.charged) + sum(r.charges?.marked_paid) - sum(r.charges?.refunded)).toFixed(2),
-      (r.charges?.outstanding || 0).toFixed(2),
+      netCollected(r).toFixed(2),
+      isCancelled(r) ? '' : (r.charges?.outstanding || 0).toFixed(2),
     ]
       .map(esc)
       .join(','),
@@ -127,6 +177,7 @@ export function ChargesPage() {
   const [locationId, setLocationId] = useState<number | 'all'>('all');
   const [search, setSearch] = useState('');
   const [shown, setShown] = useState(PAGE);
+  const [reviewOnly, setReviewOnly] = useState(false);
 
   const locations = useLocations();
   const locationName = (id: number) => locations.data?.find((l) => l.id === id)?.name || `Location ${id}`;
@@ -139,12 +190,14 @@ export function ChargesPage() {
   const inLocation = useMemo(() => (charges.data || []).filter((r) => locationId === 'all' || r.location_id === locationId), [charges.data, locationId]);
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = q ? inLocation.filter((r) => [r.id, r.user?.name, r.user?.email, r.payment_method_info?.text].join(' ').toLowerCase().includes(q)) : inLocation;
+    let list = q ? inLocation.filter((r) => [r.id, r.user?.name, r.user?.email, r.payment_method_info?.text].join(' ').toLowerCase().includes(q)) : inLocation;
+    if (reviewOnly) list = list.filter((r) => keptOnCancelled(r) > 0);
     return [...list].sort((a, b) => (a.service_date || '').localeCompare(b.service_date || ''));
-  }, [inLocation, search]);
+  }, [inLocation, search, reviewOnly]);
 
   const totals = useMemo(() => totalsOf(inLocation), [inLocation]);
-  useEffect(() => setShown(PAGE), [status, from, to, locationId, search]);
+  useEffect(() => setShown(PAGE), [status, from, to, locationId, search, reviewOnly]);
+  useEffect(() => setReviewOnly(false), [status, from, to, locationId]);
   const byLocation = useMemo(() => {
     const groups = new Map<number, ChargeRow[]>();
     for (const r of charges.data || []) groups.set(r.location_id, [...(groups.get(r.location_id) || []), r]);
@@ -233,11 +286,30 @@ export function ChargesPage() {
       {charges.data && (
         <>
           <div className="tiles">
-            <Tile label="Billed" value={fmtMoney(totals.billed)} sub={`${totals.bookings} bookings`} />
+            <Tile label="Billed" value={fmtMoney(totals.billed)} sub={`${totals.bookings} active bookings`} />
             <Tile label="Collected (net)" value={fmtMoney(collectedNet)} sub={`${collectedPct}% of billed${totals.refunded ? ` · ${fmtMoney(totals.refunded)} refunded` : ''}`} tone="ok" />
             <Tile label="Outstanding" value={fmtMoney(totals.outstanding)} sub={`${totals.unpaidCount} bookings unpaid`} tone={totals.outstanding > 0 ? 'neg' : undefined} />
-            <Tile label="On hold (authorized)" value={fmtMoney(totals.onhold)} sub={totals.credit ? `${fmtMoney(totals.credit)} overpaid / credit` : undefined} />
+            <Tile label="On hold (authorized)" value={fmtMoney(totals.onhold)} sub={totals.holdsReleased ? `${fmtMoney(totals.holdsReleased)} in holds released` : undefined} />
+            <Tile
+              label="Cancelled"
+              value={String(totals.cancelledCount)}
+              sub={`${fmtMoney(totals.cancelledValue)} not billed${totals.cancelFees ? ` · ${fmtMoney(totals.cancelFees)} in fees` : ''}`}
+            />
           </div>
+
+          {totals.reviewCount > 0 && (
+            <div className="alert">
+              <div>
+                <strong>
+                  {totals.reviewCount} cancelled booking{totals.reviewCount > 1 ? 's' : ''} still {totals.reviewCount > 1 ? 'have' : 'has'} {fmtMoney(totals.review)} charged
+                </strong>
+                <div className="small">No cancellation fee and no refund — refund the customer, apply it as credit, or record a fee.</div>
+              </div>
+              <button type="button" className="secondary" onClick={() => setReviewOnly(!reviewOnly)}>
+                {reviewOnly ? 'Show all' : 'Review them'}
+              </button>
+            </div>
+          )}
 
           <div className="grid-2">
             <section className="card">
@@ -364,13 +436,17 @@ export function ChargesPage() {
                       <td data-label="Location">{locationName(r.location_id)}</td>
                       <td data-label="Payment">{r.payment_method_info?.text || '—'}</td>
                       <td data-label="Status">
-                        <span className={st.cls}>{st.label}</span>
+                        <span className="status-cell">
+                          <span className={st.cls}>{st.label}</span>
+                          {st.note && <span className="muted small">{st.note}</span>}
+                          {r.cancellation?.reason && <span className="muted small clip" title={r.cancellation.reason}>“{r.cancellation.reason}”{r.cancellation.cancelled_by?.name ? ` — ${r.cancellation.cancelled_by.name}` : ''}</span>}
+                        </span>
                       </td>
                       <td data-label="Total" className="num">
                         {fmtMoney(r.summary?.total)}
                       </td>
-                      <td data-label="Outstanding" className={`num ${(r.charges?.outstanding || 0) > 0 ? 'neg' : ''}`}>
-                        {fmtMoney(r.charges?.outstanding)}
+                      <td data-label={isCancelled(r) ? 'Kept' : 'Outstanding'} className={`num ${(r.charges?.outstanding || 0) > 0 && !isCancelled(r) ? 'neg' : ''}`}>
+                        {isCancelled(r) ? (netCollected(r) ? fmtMoney(netCollected(r)) : '—') : fmtMoney(r.charges?.outstanding)}
                       </td>
                     </tr>
                   );

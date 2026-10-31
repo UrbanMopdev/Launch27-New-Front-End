@@ -39,6 +39,9 @@ export function BookingDetailPage() {
 
       <div className="grid-2">
         <section className="card">
+          {(b as Booking & { cancellation?: { fee?: number; date?: string; reason?: string; cancelled_by?: { name?: string } } }).cancellation && (
+            <CancellationNote c={(b as Booking & { cancellation: { fee?: number; date?: string; reason?: string; cancelled_by?: { name?: string } } }).cancellation} />
+          )}
           <h2>When & where</h2>
           <dl className="kv">
             <dt>Date</dt>
@@ -144,7 +147,7 @@ export function BookingDetailPage() {
           {charges.map((c) => (
             <div key={`${c.kind}${c.id}`} className="small row-line">
               <span>
-                {fmtDateTime(c.charged_date)} · {c.payment_method_info?.text || c.description} <span className="pill">{c.kind === 'charged' ? c.status : c.kind}</span>
+                {fmtDateTime(c.charged_date)} · {c.payment_method_info?.text || c.description} <span className="pill">{c.kind === 'refunded' && /^on hold\b/i.test(c.description || '') ? 'hold released' : c.kind === 'charged' ? c.status : c.kind.replace('_', ' ')}</span>
               </span>
               <span>{fmtMoney(c.amount)}</span>
             </div>
@@ -206,5 +209,17 @@ function Line({ label, value }: { label: string; value?: number }) {
       <td className="muted">{label}</td>
       <td className="num">{fmtMoney(value)}</td>
     </tr>
+  );
+}
+
+function CancellationNote({ c }: { c: { fee?: number; date?: string; reason?: string; cancelled_by?: { name?: string } } }) {
+  return (
+    <div className="alert small">
+      <div>
+        <strong>Cancelled</strong> {fmtDateTime(c.date)}
+        {c.cancelled_by?.name && ` by ${c.cancelled_by.name}`} · fee {fmtMoney(c.fee || 0)}
+        {c.reason && <div>“{c.reason}”</div>}
+      </div>
+    </div>
   );
 }
