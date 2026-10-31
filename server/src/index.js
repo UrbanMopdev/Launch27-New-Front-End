@@ -8,6 +8,7 @@ import { createLogger } from './log.js';
 import { createMockLaunch27 } from './mock/launch27.js';
 import { SessionStore } from './sessions.js';
 import { seed } from './inbox/seed.js';
+import { loadSampleInbox } from './sample/inbox.js';
 import { tick } from './inbox/service.js';
 
 const config = loadConfig();
@@ -26,6 +27,9 @@ const sessions = new SessionStore({ db, secret: config.sessionSecret, log });
 const fetchImpl = config.l27Mode === 'mock' ? createMockLaunch27({ password: config.mockPassword }) : fetch;
 const jobs = { consecutiveFailures: 0, lastSuccessAt: null, lastError: null };
 const app = createApp(config, { db, sessions, fetchImpl, log, jobs });
+if (config.sampleData && config.l27Mode === 'mock') {
+  await loadSampleInbox(db, { fetchImpl, baseUrl: config.l27BaseUrl, log: (level, msg, fields) => log[level](msg, fields) }).catch((err) => log.error('sample inbox failed', { error: err.message }));
+}
 
 // In production the server also hosts the built front end.
 const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web/dist');

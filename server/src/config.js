@@ -70,6 +70,8 @@ export function loadConfig(env = process.env) {
     adminEmails: env.ADMIN_EMAILS || '',
     supervisorEmails: env.SUPERVISOR_EMAILS || '',
     simulator: env.INBOX_SIMULATOR === undefined ? !isProd : truthy(env.INBOX_SIMULATOR),
+    // Sample inbox conversations on an empty database. Never in production.
+    sampleData: !isProd && truthy(env.SAMPLE_DATA),
     ringcentralClientId,
     ringcentralServer,
     workerIntervalMs: Number(env.INBOX_WORKER_INTERVAL_MS || 30_000),
