@@ -611,3 +611,8 @@ label.check, label.inline { flex-direction: row; align-items: center; gap: 6px; 
 }
 .mobile-only { display: none; }
 @media (max-width: 760px) { .mobile-only { display: block; margin-bottom: 4px; } }
+
+/* ---------- Environment banner (dev / QA only) ---------- */
+.env-banner { grid-column: 1 / -1; padding: 6px 16px; font-size: 13px; text-align: center; color: #1f2937; background: #fde68a; border-bottom: 1px solid #f59e0b; }
+.env-banner.env-development { background: #bfdbfe; border-color: #3b82f6; }
+.shell:has(> .env-banner) { grid-template-rows: auto 1fr; }

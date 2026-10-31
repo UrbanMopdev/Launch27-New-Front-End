@@ -133,7 +133,7 @@ function Timeline({ messages }: { messages: Message[] }) {
             <div className="tl-meta">
               {m.channel && CHANNEL_ICON[m.channel]} {m.direction === 'out' ? m.author_name || 'Agent' : displayIdentity(m.from_addr)}
               {m.direction === 'out' && <> → {displayIdentity(m.to_addr)}</>} · {fmtDateTime(m.created_at)}
-              {m.direction === 'out' && <span className={notSent ? 'delivery bad' : 'delivery'}> · {m.delivery_state === 'not_connected' ? 'not sent: channel not connected' : m.delivery_state}</span>}
+              {m.direction === 'out' && <span className={notSent ? 'delivery bad' : 'delivery'}> · {m.delivery_state === 'not_connected' ? 'not sent: channel not connected' : m.delivery_state === 'sandbox' ? 'sandbox: not sent to customer' : m.delivery_state}</span>}
             </div>
             {m.subject && m.channel === 'email' && <div className="small"><b>{m.subject}</b></div>}
             <div className="pre">{m.body}</div>
@@ -209,6 +209,7 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
     }
   };
 
+  // eslint-disable-next-line no-control-regex -- detecting non-GSM (non-ASCII) characters
   const segments = channel === 'sms' ? Math.max(1, Math.ceil(text.length / (/[^\x00-\x7F]/.test(text) ? 67 : 153))) : 0;
 
   return (

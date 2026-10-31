@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { auth } from '../api';
 import { useCanWrite } from '../hooks';
+import { EnvBanner } from './EnvBanner';
 import { SupportStatus } from '../inbox/SupportStatus';
 import { CommandBar } from '../inbox/CommandBar';
 import { RingCentralPhone } from '../inbox/RingCentralPhone';
@@ -85,6 +86,7 @@ export function Layout({ email }: { email: string }) {
 
   return (
     <div className="shell">
+      <EnvBanner />
       <header className="topbar">
         <button className="menu-button" aria-label="Open menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}>
           <span />

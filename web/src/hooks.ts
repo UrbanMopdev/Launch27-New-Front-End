@@ -3,9 +3,12 @@ import { auth, l27, l27All } from './api';
 import type { Team } from './types';
 
 // Whether the server lets writes through (L27_ALLOW_WRITES). Edit buttons hide when it doesn't.
+export function useMe() {
+  return useQuery({ queryKey: ['me'], queryFn: auth.me, retry: false });
+}
+
 export function useCanWrite() {
-  const me = useQuery({ queryKey: ['me'], queryFn: auth.me, retry: false });
-  return !!me.data?.allowWrites;
+  return !!useMe().data?.allowWrites;
 }
 
 export interface Location {

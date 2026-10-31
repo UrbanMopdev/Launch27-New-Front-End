@@ -249,7 +249,7 @@ describe('/api end to end', () => {
   let cookie;
   const config = { l27BaseUrl: 'https://l27.invalid', sessionSecret: 's', allowWrites: false, production: false, adminEmails: 'boss@urbanmop.ca' };
   // Fake Launch27: one login, one cleaner, one customer.
-  const fetchImpl = async (url, init = {}) => {
+  const fetchImpl = async (url, _init = {}) => {
     if (url.endsWith('/latest/login')) return Response.json({ bearer: 'tok' });
     if (url.includes('/v1/staff/teams')) return Response.json(url.includes('offset=0') ? [{ id: 4760, title: 'Casey', first_name: 'Casey', last_name: 'C', phone: '613-555-0111' }] : []);
     if (url.includes('/v1/staff/customers/77/phones')) return Response.json([]);

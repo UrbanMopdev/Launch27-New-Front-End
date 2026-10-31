@@ -62,8 +62,16 @@ export function l27Write<T>(method: 'POST' | 'PUT' | 'DELETE', path: string, bod
   });
 }
 
+export interface Me {
+  email: string;
+  allowWrites: boolean;
+  env?: 'development' | 'staging' | 'production';
+  l27Mode?: 'live' | 'mock';
+  notificationsMode?: 'live' | 'sandbox';
+}
+
 export const auth = {
-  me: () => request<{ email: string; allowWrites: boolean }>('/auth/me'),
+  me: () => request<Me>('/auth/me'),
   login: (email: string, password: string) =>
     request<{ email: string }>('/auth/login', {
       method: 'POST',

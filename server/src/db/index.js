@@ -1,22 +1,25 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const SCHEMA = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'schema.sql'), 'utf8');
+import { runMigrations } from './migrate.js';
 
 // One small interface over two engines:
 //   - Postgres (pg) when DATABASE_URL is set: production on Railway.
 //   - PGlite (Postgres compiled to WASM) otherwise: zero-setup local dev and tests.
 //     PGLITE_DIR keeps data on disk; without it the database lives in memory.
 // Both speak the same SQL with $1 placeholders and return { rows }.
-export async function openDb({ databaseUrl, pgliteDir } = {}) {
+// Migrations run on open unless `migrate: false` (the migrate CLI runs them itself).
+export async function openDb({ databaseUrl, pgliteDir, migrate = true, log } = {}) {
   let db;
   if (databaseUrl) {
     const { default: pg } = await import('pg');
     const pool = new pg.Pool({
       connectionString: databaseUrl,
       ssl: /sslmode=require|railway\.app|rlwy\.net/.test(databaseUrl) && !/localhost|127\.0\.0\.1|\.internal/.test(databaseUrl) ? { rejectUnauthorized: false } : undefined,
+      max: Number(process.env.DATABASE_POOL_MAX || 10),
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
     });
+    // A dropped idle connection must not crash the process.
+    pool.on('error', (err) => log?.('error', 'postgres pool error', { error: err.message }));
     db = {
       kind: 'postgres',
       query: (sql, params) => pool.query(sql, params),
@@ -55,28 +58,11 @@ export async function openDb({ databaseUrl, pgliteDir } = {}) {
       close: () => lite.close(),
     };
   }
-  await migrate(db);
+  if (migrate) await runMigrations(db, { log: (m) => log?.('info', m) });
   return db;
 }
 
-async function migrate(db) {
-  if (db.kind === 'pglite') {
-    // PGlite's query() takes one statement; exec() runs a script.
-    for (const stmt of splitStatements(SCHEMA)) await db.query(stmt);
-  } else {
-    await db.query(SCHEMA);
-  }
-}
-
-export function splitStatements(sql) {
-  return sql
-    .split('\n')
-    .filter((line) => !line.trim().startsWith('--'))
-    .join('\n')
-    .split(';')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
+export { splitStatements } from './migrate.js';
 
 // Helpers
 export const one = async (db, sql, params) => (await db.query(sql, params)).rows[0] || null;

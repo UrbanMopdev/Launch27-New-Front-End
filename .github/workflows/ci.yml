@@ -1,0 +1,88 @@
+# Runs on every pull request and on pushes to the long-lived branches.
+# Branch protection on develop, staging and main should require the "ci" job checks below,
+# and Railway's "Wait for CI" makes deploys wait for them.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [develop, staging, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  check:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  migrations:
+    name: Migrations on Postgres 16
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Throwaway CI database. Not a secret.
+      DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply all migrations to an empty database
+        run: npm run migrate
+      - name: Re-apply (must be a no-op)
+        run: npm run migrate
+      - name: Verify nothing is pending or edited
+        run: npm run migrate:verify -w server
+
+  promotion:
+    # Enforces the branch flow: feature/* -> develop -> staging -> main.
+    name: Branch promotion rules
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check source branch
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          echo "PR: $HEAD -> $BASE"
+          if [ "$BASE" = "main" ] && [ "$HEAD" != "staging" ] && [[ "$HEAD" != hotfix/* ]]; then
+            echo "::error::Only staging (or hotfix/*) may be merged into main."; exit 1
+          fi
+          if [ "$BASE" = "staging" ] && [ "$HEAD" != "develop" ] && [[ "$HEAD" != hotfix/* ]]; then
+            echo "::error::Only develop (or hotfix/*) may be merged into staging."; exit 1
+          fi
+          echo "OK"

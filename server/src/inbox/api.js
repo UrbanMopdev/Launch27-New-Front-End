@@ -12,7 +12,7 @@ import * as svc from './service.js';
 const one = async (q, sql, p) => (await q.query(sql, p)).rows[0] || null;
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {} }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f) }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -515,9 +515,9 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json({ contacts, open, l27: contacts.length ? null : await l27.identify(req.bearer, kind, value) });
   }));
 
-  r.use((err, req, res, next) => {
+  r.use((err, req, res, _next) => {
     if (err instanceof svc.InboxError) return res.status(err.status).json({ error: err.message });
-    console.error(err);
+    log('error', 'inbox request failed', { path: req.path, error: err.message, stack: err.stack });
     res.status(500).json({ error: 'Something went wrong on the server' });
   });
 

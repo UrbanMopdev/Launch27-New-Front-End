@@ -1,0 +1,30 @@
+# Post-deploy smoke test. Runs when Railway reports a successful deployment through
+# GitHub's deployment status, or by hand against any URL.
+name: Smoke test
+
+on:
+  deployment_status:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Base URL to test (e.g. https://qa.example.com)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Smoke test
+        env:
+          SMOKE_URL: ${{ github.event.inputs.url || github.event.deployment_status.environment_url || github.event.deployment_status.target_url }}
+          EXPECT_ENV: ${{ github.event.deployment.environment }}
+        run: node scripts/smoke.mjs "$SMOKE_URL"

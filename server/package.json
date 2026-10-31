@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "node --watch --env-file-if-exists=../.env src/index.js",
     "start": "node --env-file-if-exists=../.env src/index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "migrate": "node --env-file-if-exists=../.env src/db/migrate-cli.js",
+    "migrate:status": "node --env-file-if-exists=../.env src/db/migrate-cli.js status",
+    "migrate:verify": "node --env-file-if-exists=../.env src/db/migrate-cli.js verify"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.14",

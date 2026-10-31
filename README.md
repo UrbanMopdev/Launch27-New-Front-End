@@ -20,13 +20,30 @@ The server reuses the auth flow from
 Launch27 still enforces their permissions, and the token stays on the server (the
 browser gets an httpOnly session cookie).
 
+## Environments and docs
+
+The app runs in three isolated environments (development, staging/QA, production), each
+with its own database. Dev and QA use built-in **synthetic** Launch27 data and can't send
+real messages; only production touches the real Launch27.
+
+| Doc | What's in it |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | What runs where, and which services we chose not to add |
+| [docs/environments.md](docs/environments.md) | Dev / QA / production differences, variables, data rules |
+| [docs/deployment.md](docs/deployment.md) | Branch flow, CI/CD, QA approval, GitHub + Railway settings, rollback, domains |
+| [docs/database.md](docs/database.md) | Migrations, failed-migration plan, indexing, backups, restore |
+| [docs/security.md](docs/security.md) | Secrets, sessions, least privilege, log redaction |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Failed deploys, health checks, sign-in problems |
+
 ## Setup
 
-Requires Node 20+.
+Requires Node 22+.
 
 ```bash
 npm install
-cp .env.example .env        # fill in values; .env is gitignored
+cp .env.example .env        # defaults to synthetic data, password "demo"; .env is gitignored
+npm run dev                 # http://localhost:5173
+npm run check               # lint, typecheck, tests, build (same as CI)
 ```
 
 Wrap values containing `#` in single quotes (`L27_PASSWORD='abc#123'`); otherwise
@@ -73,10 +90,12 @@ Output:
 npm run dev      # server on :8787, web on :5173 (proxied)
 ```
 
-Production: `npm run build && NODE_ENV=production npm start`. The server then also serves
-`web/dist`.
+Production: `npm run build && npm start` with `APP_ENV=production`. The server then also
+serves `web/dist`. See docs/deployment.md for how hosted environments are deployed.
 
-The proxy only forwards **GET** requests until `L27_ALLOW_WRITES=true` is set.
+Against the real Launch27, the proxy only forwards **GET** requests unless
+`L27_ALLOW_WRITES=true` is set, and only in production. With `L27_MODE=mock`, edits go to
+the synthetic data.
 
 ## Support workspace (phase 1)
 
@@ -107,7 +126,7 @@ email, Twilio for SMS) and webhook routes that call `ingestInbound()`.
 
 Data: Launch27 stays the record for bookings, customers, cleaners and money. The workspace
 stores only people's channel identities, conversations, notes, routing, SLAs and an audit
-log (`server/src/db/schema.sql`). Each agent's own Launch27 login is used for lookups, so
+log (migrations in `server/migrations/`). Each agent's own Launch27 login is used for lookups, so
 Launch27 permissions still apply.
 
 Setup: set `DATABASE_URL` (Railway Postgres) and `ADMIN_EMAILS`; see `.env.example`.
@@ -155,5 +174,7 @@ endpoints).
 ## Tests
 
 ```bash
-npm test
+npm test             # server (node:test), capture, web (vitest)
+npm run lint
+npm run typecheck
 ```
