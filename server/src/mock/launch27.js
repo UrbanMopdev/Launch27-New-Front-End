@@ -48,7 +48,7 @@ function rng(seed) {
 }
 const hash = (str) => [...str].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const iso = (d) => d.toISOString().replace('.000Z', 'Z');
-const DAY0 = Date.UTC(2026, 0, 1);
+const DAY0 = Date.UTC(2020, 0, 1);
 const dayIndex = (date) => Math.round((Date.parse(`${date}T00:00:00Z`) - DAY0) / 86_400_000);
 const dateOf = (index) => new Date(DAY0 + index * 86_400_000).toISOString().slice(0, 10);
 
@@ -209,9 +209,16 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
     const date = dateOf(Math.floor(id / 100));
     return bookingsForDay(date).find((b) => b.id === id) || null;
   }
-  function bookingsInRange(from, to) {
+  // Without dates Launch27 returns a customer's whole history; here that means the last
+  // year plus the next two months (wholeHistory). Otherwise just the given day(s).
+  function bookingsInRange(from, to, wholeHistory = false) {
     const out = [];
-    const start = dayIndex(from || dateOf(dayIndex(new Date(now()).toISOString().slice(0, 10))));
+    const today = dayIndex(new Date(now()).toISOString().slice(0, 10));
+    if (wholeHistory && !from && !to) {
+      for (let d = today - 365; d <= today + 60; d++) out.push(...bookingsForDay(dateOf(d)));
+      return out;
+    }
+    const start = dayIndex(from || dateOf(today));
     const end = Math.min(dayIndex(to || from || dateOf(start)), start + 120);
     for (let d = start; d <= end; d++) out.push(...bookingsForDay(dateOf(d)));
     return out;
@@ -295,8 +302,8 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
     }
 
     // Bookings
-    if (path === '/v1/staff/bookings' && method === 'GET') return [200, page(filterBookings(bookingsInRange(q.get('from'), q.get('to')), q), q)];
-    if (path === '/v1/staff/bookings/count') return [200, { count: filterBookings(bookingsInRange(q.get('from'), q.get('to')), q).length }];
+    if (path === '/v1/staff/bookings' && method === 'GET') return [200, page(filterBookings(bookingsInRange(q.get('from'), q.get('to'), q.has('customers')), q), q)];
+    if (path === '/v1/staff/bookings/count') return [200, { count: filterBookings(bookingsInRange(q.get('from'), q.get('to'), q.has('customers')), q).length }];
     if (path === '/v1/staff/bookings/time_tracking') return [200, page(bookingsInRange(q.get('from'), q.get('to')).filter((b) => b.active).map(toTimeTracking), q)];
     if (path === '/v1/staff/bookings/time_tracking/count') return [200, { count: bookingsInRange(q.get('from'), q.get('to')).filter((b) => b.active).length }];
     if (path === '/v1/staff/charges') return [200, page(bookingsInRange(q.get('from'), q.get('to')), q)];
