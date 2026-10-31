@@ -112,7 +112,7 @@ export function ResourceList<T extends { id?: number | string }>({
 
       {rows.error && <div className="error">{(rows.error as Error).message}</div>}
 
-      <div className="table-wrap">
+      <div className="table-wrap cards-on-mobile">
         <table>
           <thead>
             <tr>
@@ -141,7 +141,7 @@ export function ResourceList<T extends { id?: number | string }>({
             {rows.data?.map((row) => (
               <tr key={rowKey(row)} onClick={onRowClick ? () => onRowClick(row) : undefined} className={onRowClick ? '' : 'static'}>
                 {columns.map((c) => (
-                  <td key={c.header} className={c.className}>
+                  <td key={c.header} className={c.className} data-label={c.header}>
                     {c.render(row)}
                   </td>
                 ))}

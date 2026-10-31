@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { auth } from '../api';
 import { useCanWrite } from '../hooks';
@@ -52,6 +53,12 @@ const NAV: { section: string; items: { to: string; label: string }[] }[] = [
 export function Layout({ email }: { email: string }) {
   const queryClient = useQueryClient();
   const canWrite = useCanWrite();
+  // Phones: the sidebar becomes a slide-out drawer behind a top bar.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
+  useEffect(() => setMenuOpen(false), [location.pathname]);
+  const current = NAV.flatMap((g) => g.items).find((i) => location.pathname.startsWith(i.to));
+
   const logout = async () => {
     await auth.logout();
     queryClient.clear();
@@ -60,8 +67,22 @@ export function Layout({ email }: { email: string }) {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">UrbanMop Ops</div>
+      <header className="topbar">
+        <button className="menu-button" aria-label="Open menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}>
+          <span />
+          <span />
+          <span />
+        </button>
+        <div className="topbar-title">{current?.label || 'UrbanMop Ops'}</div>
+      </header>
+      {menuOpen && <div className="drawer-backdrop" onClick={() => setMenuOpen(false)} />}
+      <aside className={menuOpen ? 'sidebar open' : 'sidebar'}>
+        <div className="brand">
+          UrbanMop Ops
+          <button className="drawer-close" aria-label="Close menu" onClick={() => setMenuOpen(false)}>
+            ×
+          </button>
+        </div>
         <nav>
           {NAV.map((group) => (
             <div key={group.section} className="nav-group">

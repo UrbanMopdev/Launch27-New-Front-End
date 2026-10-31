@@ -79,7 +79,7 @@ export function BookingsPage() {
           <div className="muted small summary">
             {rows.length} bookings · {fmtMoney(total)} total
           </div>
-          <div className="table-wrap">
+          <div className="table-wrap cards-on-mobile">
             <table>
               <thead>
                 <tr>
@@ -97,18 +97,18 @@ export function BookingsPage() {
                   const tt = b.time_tracking?.[0];
                   return (
                     <tr key={b.id} onClick={() => navigate(`/bookings/${b.id}`)}>
-                      <td>{fmtDateTime(b.service_date)}</td>
-                      <td>
+                      <td data-label="When">{fmtDateTime(b.service_date)}</td>
+                      <td data-label="Customer">
                         {b.user?.name || '—'}
                         {b.user?.is_new_customer && <span className="badge">new</span>}
                       </td>
-                      <td>{b.address?.full_address || '—'}</td>
-                      <td>{b.services?.[0]?.name || '—'}</td>
-                      <td>{b.teams?.map((t) => t.title).join(', ') || <span className="warn">Unassigned</span>}</td>
-                      <td>
+                      <td data-label="Address">{b.address?.full_address || '—'}</td>
+                      <td data-label="Service">{b.services?.[0]?.name || '—'}</td>
+                      <td data-label="Team">{b.teams?.map((t) => t.title).join(', ') || <span className="warn">Unassigned</span>}</td>
+                      <td data-label="Status">
                         <TrackingStatus tt={tt} />
                       </td>
-                      <td className="num">{fmtMoney(b.summary?.total)}</td>
+                      <td data-label="Total" className="num">{fmtMoney(b.summary?.total)}</td>
                     </tr>
                   );
                 })}

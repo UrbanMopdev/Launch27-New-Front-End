@@ -119,7 +119,7 @@ export function CustomerDetailPage() {
           </button>
         ))}
       </div>
-      <div className="table-wrap">
+      <div className="table-wrap cards-on-mobile">
         <table>
           <thead>
             <tr>
@@ -143,11 +143,11 @@ export function CustomerDetailPage() {
             )}
             {bookings.data?.map((b) => (
               <tr key={b.id} onClick={() => navigate(`/bookings/${b.id}`)}>
-                <td>{fmtDateTime(b.service_date)}</td>
-                <td>{b.services?.map((s) => s.name).join(', ') || '—'}</td>
-                <td>{b.frequency?.name || '—'}</td>
-                <td>{b.teams?.map((t) => t.title).join(', ') || <span className="warn">Unassigned</span>}</td>
-                <td className="num">{fmtMoney(b.summary?.total)}</td>
+                <td data-label="Date">{fmtDateTime(b.service_date)}</td>
+                <td data-label="Service">{b.services?.map((s) => s.name).join(', ') || '—'}</td>
+                <td data-label="Frequency">{b.frequency?.name || '—'}</td>
+                <td data-label="Team">{b.teams?.map((t) => t.title).join(', ') || <span className="warn">Unassigned</span>}</td>
+                <td data-label="Total" className="num">{fmtMoney(b.summary?.total)}</td>
               </tr>
             ))}
           </tbody>

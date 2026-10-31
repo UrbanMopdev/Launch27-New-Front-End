@@ -320,7 +320,7 @@ export function BookingFormPage() {
           </div>
           <h1>{editing ? `Edit booking #${id}` : 'New booking'}</h1>
         </div>
-        <div className="filters">
+        <div className="filters form-actions">
           <button type="button" className="secondary" onClick={() => navigate(-1)}>
             Cancel
           </button>
