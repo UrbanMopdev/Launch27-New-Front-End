@@ -13,12 +13,12 @@ import { CustomerDetailPage } from './pages/CustomerDetail';
 import { TeamsPage } from './pages/Teams';
 import { ChargesPage } from './pages/Charges';
 import { TimeTrackingPage } from './pages/TimeTracking';
+import { FeedbackPage } from './pages/Feedback';
 import {
   QuotesPage,
   DeclinedChargesPage,
   TeamPaymentsPage,
   HourlyWagesPage,
-  FeedbackPage,
   StaffPage,
   ServicesPage,
   ExtrasPage,

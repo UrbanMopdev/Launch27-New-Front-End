@@ -81,25 +81,6 @@ export function TeamPaymentsPage() {
   );
 }
 
-// /admin/reports/ratings: GET /v1/staff/reports/customer_feedbacks?group=team (+ /count)
-export function FeedbackPage() {
-  return (
-    <ResourceList<Row>
-      title="Customer feedback"
-      path="/v1/staff/reports/customer_feedbacks"
-      params={{ group: 'team' }}
-      columns={[
-        { header: 'Team', render: (r) => r.title },
-        { header: 'Ratings', render: (r) => r.rating_count, className: 'num' },
-        { header: 'Average', render: (r) => (r.average_stars != null ? `${Number(r.average_stars).toFixed(1)}★` : '—'), className: 'num' },
-        { header: 'Good / OK / Bad', render: (r) => `${r.good_count} / ${r.ok_count} / ${r.bad_count}` },
-        { header: 'Last rating', render: (r) => (r.last_rating ? `${r.last_rating.stars}★ from ${r.last_rating.user_name}, ${fmtDateTime(r.last_rating.service_date)}` : '—') },
-        { header: 'Comment', render: (r) => <span className="clip">{r.last_rating?.rating_comment || '—'}</span> },
-      ]}
-    />
-  );
-}
-
 // /admin/reports/hourly_wages: GET /v1/staff/reports/hourly_wages?date
 export function HourlyWagesPage() {
   return (
