@@ -1,0 +1,796 @@
+{
+ "_note": "UrbanMop service catalog (services, extras, prices, frequencies, booking questions) copied from Launch27 for the synthetic dev/QA data. Business configuration only: no customer data.",
+ "services": [
+  {
+   "id": 1180,
+   "name": "One Bedroom Home",
+   "price": 137.5,
+   "duration": 150,
+   "commercial": false,
+   "extras": [
+    {
+     "id": 225,
+     "name": "Spot Clean Walls",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 226,
+     "name": "Deep Cleaning",
+     "price": 82.5,
+     "quantity_based": false,
+     "duration": 90
+    },
+    {
+     "id": 227,
+     "name": "Move In Move Out",
+     "price": 210.83,
+     "quantity_based": false,
+     "duration": 230
+    },
+    {
+     "id": 228,
+     "name": "Inside Fridge",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 229,
+     "name": "Inside Windows",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 230,
+     "name": "Inside Cabinets",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 231,
+     "name": "Inside Oven",
+     "price": 73.33,
+     "quantity_based": true,
+     "duration": 80
+    },
+    {
+     "id": 232,
+     "name": "Basement",
+     "price": 68.75,
+     "quantity_based": false,
+     "duration": 75
+    }
+   ],
+   "pricing_parameters": [
+    {
+     "id": 137,
+     "name": "Full Bathrooms",
+     "price": 27.5,
+     "quantity_minimum": 1,
+     "quantity_maximum": 7
+    },
+    {
+     "id": 138,
+     "name": "Half Bathrooms",
+     "price": 18.33,
+     "quantity_minimum": 0,
+     "quantity_maximum": 7
+    }
+   ]
+  },
+  {
+   "id": 1181,
+   "name": "Two Bedroom Home",
+   "price": 137.5,
+   "duration": 150,
+   "commercial": false,
+   "extras": [
+    {
+     "id": 225,
+     "name": "Spot Clean Walls",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 226,
+     "name": "Deep Cleaning",
+     "price": 82.5,
+     "quantity_based": false,
+     "duration": 90
+    },
+    {
+     "id": 227,
+     "name": "Move In Move Out",
+     "price": 210.83,
+     "quantity_based": false,
+     "duration": 230
+    },
+    {
+     "id": 228,
+     "name": "Inside Fridge",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 229,
+     "name": "Inside Windows",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 230,
+     "name": "Inside Cabinets",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 231,
+     "name": "Inside Oven",
+     "price": 73.33,
+     "quantity_based": true,
+     "duration": 80
+    },
+    {
+     "id": 232,
+     "name": "Basement",
+     "price": 68.75,
+     "quantity_based": false,
+     "duration": 75
+    }
+   ],
+   "pricing_parameters": [
+    {
+     "id": 137,
+     "name": "Full Bathrooms",
+     "price": 27.5,
+     "quantity_minimum": 1,
+     "quantity_maximum": 7
+    },
+    {
+     "id": 138,
+     "name": "Half Bathrooms",
+     "price": 18.33,
+     "quantity_minimum": 0,
+     "quantity_maximum": 7
+    }
+   ]
+  },
+  {
+   "id": 1182,
+   "name": "Three Bedroom Home",
+   "price": 151.25,
+   "duration": 165,
+   "commercial": false,
+   "extras": [
+    {
+     "id": 225,
+     "name": "Spot Clean Walls",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 226,
+     "name": "Deep Cleaning",
+     "price": 82.5,
+     "quantity_based": false,
+     "duration": 90
+    },
+    {
+     "id": 227,
+     "name": "Move In Move Out",
+     "price": 210.83,
+     "quantity_based": false,
+     "duration": 230
+    },
+    {
+     "id": 228,
+     "name": "Inside Fridge",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 229,
+     "name": "Inside Windows",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 230,
+     "name": "Inside Cabinets",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 231,
+     "name": "Inside Oven",
+     "price": 73.33,
+     "quantity_based": true,
+     "duration": 80
+    },
+    {
+     "id": 232,
+     "name": "Basement",
+     "price": 68.75,
+     "quantity_based": false,
+     "duration": 75
+    }
+   ],
+   "pricing_parameters": [
+    {
+     "id": 137,
+     "name": "Full Bathrooms",
+     "price": 27.5,
+     "quantity_minimum": 1,
+     "quantity_maximum": 7
+    },
+    {
+     "id": 138,
+     "name": "Half Bathrooms",
+     "price": 18.33,
+     "quantity_minimum": 0,
+     "quantity_maximum": 7
+    }
+   ]
+  },
+  {
+   "id": 1183,
+   "name": "Four Bedroom Home",
+   "price": 178.75,
+   "duration": 195,
+   "commercial": false,
+   "extras": [
+    {
+     "id": 225,
+     "name": "Spot Clean Walls",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 226,
+     "name": "Deep Cleaning",
+     "price": 82.5,
+     "quantity_based": false,
+     "duration": 90
+    },
+    {
+     "id": 227,
+     "name": "Move In Move Out",
+     "price": 210.83,
+     "quantity_based": false,
+     "duration": 230
+    },
+    {
+     "id": 228,
+     "name": "Inside Fridge",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 229,
+     "name": "Inside Windows",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 230,
+     "name": "Inside Cabinets",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 231,
+     "name": "Inside Oven",
+     "price": 73.33,
+     "quantity_based": true,
+     "duration": 80
+    },
+    {
+     "id": 232,
+     "name": "Basement",
+     "price": 68.75,
+     "quantity_based": false,
+     "duration": 75
+    }
+   ],
+   "pricing_parameters": [
+    {
+     "id": 137,
+     "name": "Full Bathrooms",
+     "price": 27.5,
+     "quantity_minimum": 1,
+     "quantity_maximum": 7
+    },
+    {
+     "id": 138,
+     "name": "Half Bathrooms",
+     "price": 18.33,
+     "quantity_minimum": 0,
+     "quantity_maximum": 7
+    }
+   ]
+  },
+  {
+   "id": 1184,
+   "name": "Five Bedroom Home",
+   "price": 206.25,
+   "duration": 225,
+   "commercial": false,
+   "extras": [
+    {
+     "id": 225,
+     "name": "Spot Clean Walls",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 226,
+     "name": "Deep Cleaning",
+     "price": 82.5,
+     "quantity_based": false,
+     "duration": 90
+    },
+    {
+     "id": 227,
+     "name": "Move In Move Out",
+     "price": 210.83,
+     "quantity_based": false,
+     "duration": 230
+    },
+    {
+     "id": 228,
+     "name": "Inside Fridge",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 229,
+     "name": "Inside Windows",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 230,
+     "name": "Inside Cabinets",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 231,
+     "name": "Inside Oven",
+     "price": 73.33,
+     "quantity_based": true,
+     "duration": 80
+    },
+    {
+     "id": 232,
+     "name": "Basement",
+     "price": 68.75,
+     "quantity_based": false,
+     "duration": 75
+    }
+   ],
+   "pricing_parameters": [
+    {
+     "id": 137,
+     "name": "Full Bathrooms",
+     "price": 27.5,
+     "quantity_minimum": 1,
+     "quantity_maximum": 7
+    },
+    {
+     "id": 138,
+     "name": "Half Bathrooms",
+     "price": 18.33,
+     "quantity_minimum": 0,
+     "quantity_maximum": 7
+    }
+   ]
+  },
+  {
+   "id": 1185,
+   "name": "Six Bedroom Home",
+   "price": 261.25,
+   "duration": 285,
+   "commercial": false,
+   "extras": [
+    {
+     "id": 225,
+     "name": "Spot Clean Walls",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 226,
+     "name": "Deep Cleaning",
+     "price": 82.5,
+     "quantity_based": false,
+     "duration": 90
+    },
+    {
+     "id": 227,
+     "name": "Move In Move Out",
+     "price": 210.83,
+     "quantity_based": false,
+     "duration": 230
+    },
+    {
+     "id": 228,
+     "name": "Inside Fridge",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 229,
+     "name": "Inside Windows",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 230,
+     "name": "Inside Cabinets",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 231,
+     "name": "Inside Oven",
+     "price": 73.33,
+     "quantity_based": true,
+     "duration": 80
+    },
+    {
+     "id": 232,
+     "name": "Basement",
+     "price": 68.75,
+     "quantity_based": false,
+     "duration": 75
+    }
+   ],
+   "pricing_parameters": [
+    {
+     "id": 137,
+     "name": "Full Bathrooms",
+     "price": 27.5,
+     "quantity_minimum": 1,
+     "quantity_maximum": 7
+    },
+    {
+     "id": 138,
+     "name": "Half Bathrooms",
+     "price": 18.33,
+     "quantity_minimum": 0,
+     "quantity_maximum": 7
+    }
+   ]
+  },
+  {
+   "id": 1186,
+   "name": "Hourly Cleaning",
+   "price": 55,
+   "duration": null,
+   "commercial": false,
+   "hourly": {
+    "quantity_minimum": 1,
+    "quantity_maximum": 1,
+    "minutes_minimum": 180,
+    "minutes_maximum": 720,
+    "half_hour_increments": true
+   },
+   "extras": [
+    {
+     "id": 225,
+     "name": "Spot Clean Walls",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 226,
+     "name": "Deep Cleaning",
+     "price": 82.5,
+     "quantity_based": false,
+     "duration": 90
+    },
+    {
+     "id": 228,
+     "name": "Inside Fridge",
+     "price": 55,
+     "quantity_based": false,
+     "duration": 60
+    },
+    {
+     "id": 229,
+     "name": "Inside Windows",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 230,
+     "name": "Inside Cabinets",
+     "price": 41.25,
+     "quantity_based": false,
+     "duration": 45
+    },
+    {
+     "id": 231,
+     "name": "Inside Oven",
+     "price": 73.33,
+     "quantity_based": true,
+     "duration": 80
+    },
+    {
+     "id": 232,
+     "name": "Basement",
+     "price": 68.75,
+     "quantity_based": false,
+     "duration": 75
+    }
+   ],
+   "pricing_parameters": []
+  },
+  {
+   "id": 21,
+   "name": "Commercial",
+   "price": 0,
+   "duration": null,
+   "commercial": true,
+   "extras": [],
+   "pricing_parameters": []
+  },
+  {
+   "id": 22,
+   "name": "Reclean",
+   "price": 0,
+   "duration": null,
+   "commercial": true,
+   "hourly": {
+    "quantity_minimum": 1,
+    "quantity_maximum": 1,
+    "minutes_minimum": 30,
+    "minutes_maximum": 240,
+    "half_hour_increments": true
+   },
+   "extras": [],
+   "pricing_parameters": []
+  },
+  {
+   "id": 1213,
+   "name": "Airbnb Cleaning",
+   "price": 55,
+   "duration": null,
+   "commercial": true,
+   "hourly": {
+    "quantity_minimum": 1,
+    "quantity_maximum": 1,
+    "minutes_minimum": 180,
+    "minutes_maximum": 480,
+    "half_hour_increments": true
+   },
+   "extras": [],
+   "pricing_parameters": []
+  }
+ ],
+ "frequencies": [
+  {
+   "id": 171,
+   "name": "One time",
+   "interval": "o",
+   "percent": 0
+  },
+  {
+   "id": 74,
+   "name": "Weekly - 15% off",
+   "interval": "1w",
+   "percent": 15
+  },
+  {
+   "id": 73,
+   "name": "Monthly - 5% off",
+   "interval": "4w",
+   "percent": 5
+  },
+  {
+   "id": 12,
+   "name": "Biweekly - 10% off",
+   "interval": "2w",
+   "percent": 10
+  }
+ ],
+ "custom_fields": [
+  {
+   "id": 267,
+   "control_type": "drop_down",
+   "label": "Parking on Premise?",
+   "value_required": true,
+   "active": true,
+   "options": [
+    {
+     "id": 16,
+     "label": "Yes",
+     "active": true
+    },
+    {
+     "id": 17,
+     "label": "No (If not, could you please elaborate where to park in the Special Instructions. Please note that parking fees will be added to the cleaning invoice.)",
+     "active": true
+    }
+   ]
+  },
+  {
+   "id": 270,
+   "control_type": "drop_down",
+   "label": "Any Pets?",
+   "value_required": true,
+   "active": true,
+   "options": [
+    {
+     "id": 32,
+     "label": "Yes - Cat",
+     "active": true
+    },
+    {
+     "id": 33,
+     "label": "Yes - Dog",
+     "active": true
+    },
+    {
+     "id": 34,
+     "label": "Yes - Cat and Dog",
+     "active": true
+    },
+    {
+     "id": 35,
+     "label": "Yes - Other",
+     "active": true
+    },
+    {
+     "id": 36,
+     "label": "No Pets",
+     "active": true
+    }
+   ]
+  },
+  {
+   "id": 262,
+   "control_type": "plain_text",
+   "label": "Additional Notes",
+   "value_required": false,
+   "active": true,
+   "options": []
+  },
+  {
+   "id": 261,
+   "control_type": "multi_line",
+   "label": "",
+   "value_required": false,
+   "active": true,
+   "options": []
+  },
+  {
+   "id": 264,
+   "control_type": "checkbox",
+   "label": "Yes, I approve extra time as needed up to:",
+   "value_required": false,
+   "active": true,
+   "options": []
+  },
+  {
+   "id": 266,
+   "control_type": "plain_text",
+   "label": "Plain Text",
+   "value_required": false,
+   "active": true,
+   "options": []
+  },
+  {
+   "id": 269,
+   "control_type": "drop_down",
+   "label": "How Did You Hear About us?",
+   "value_required": true,
+   "active": true,
+   "options": [
+    {
+     "id": 24,
+     "label": "Google",
+     "active": true
+    },
+    {
+     "id": 29,
+     "label": "Referred by Someone",
+     "active": true
+    },
+    {
+     "id": 30,
+     "label": "Facebook/Instagram",
+     "active": true
+    },
+    {
+     "id": 84,
+     "label": "Branded Car",
+     "active": true
+    },
+    {
+     "id": 85,
+     "label": "Lawn Sign",
+     "active": true
+    },
+    {
+     "id": 25,
+     "label": "Referred by Someone",
+     "active": false
+    },
+    {
+     "id": 51,
+     "label": "Other",
+     "active": true
+    },
+    {
+     "id": 37,
+     "label": "Yelp",
+     "active": false
+    },
+    {
+     "id": 26,
+     "label": "Facebook",
+     "active": false
+    },
+    {
+     "id": 31,
+     "label": "Kijiji",
+     "active": false
+    },
+    {
+     "id": 28,
+     "label": "Other",
+     "active": false
+    },
+    {
+     "id": 27,
+     "label": "Kijiji",
+     "active": false
+    }
+   ]
+  },
+  {
+   "id": 256,
+   "control_type": "checkbox",
+   "label": "By clicking the Book Now button you are agreeing to <a href=\"https://urbanmop.ca/terms-conditions/\" rel=\"noopener noreferrer\" target=\"_blank\"><u>our Terms of Service and Privacy Policy</u></a>.",
+   "value_required": true,
+   "active": true,
+   "options": []
+  },
+  {
+   "id": 271,
+   "control_type": "checkbox",
+   "label": "Disclaimer: We do not perform bug infestation cleaning, move heavy furniture, or provide junk removal services.",
+   "value_required": true,
+   "active": true,
+   "options": []
+  }
+ ]
+}

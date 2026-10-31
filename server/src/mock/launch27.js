@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 // Synthetic, in-process stand-in for the Launch27 API (L27_MODE=mock).
 //
 // Development and QA run against this instead of the real tenant: Launch27 holds real
@@ -26,12 +27,10 @@ const SERVICES = [
   { id: 1186, name: 'Hourly Cleaning', price: 55, duration: 180 },
   { id: 21, name: 'Commercial', price: 120, duration: 120 },
 ];
-const EXTRAS = [
-  { id: 225, name: 'Spot Clean Walls', price: 55, quantity_based: false },
-  { id: 226, name: 'Inside Oven', price: 35, quantity_based: false },
-  { id: 227, name: 'Deep Cleaning', price: 60, quantity_based: false },
-  { id: 228, name: 'Inside Fridge', price: 35, quantity_based: false },
-];
+// Real service catalog (services, extras, prices, booking questions) so dev/QA forms match
+// production. Business configuration only; see catalog.json.
+const CATALOG = JSON.parse(readFileSync(new URL('./catalog.json', import.meta.url), 'utf8'));
+const EXTRAS = CATALOG.services.find((x) => x.id === 1180).extras;
 const FREQUENCIES = [
   { id: 171, name: 'One time', interval: 'o', percent: 0 },
   { id: 12, name: 'Biweekly - 10% off', interval: 'b', percent: 10 },
@@ -208,6 +207,42 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
     };
   }
 
+  // Price a booking the office built in the form, roughly as Launch27 does: list prices,
+  // frequency discount, 13% HST.
+  function pricedFromBody(body, fallback) {
+    if (!Array.isArray(body?.services) || !body.services.length) return {};
+    const services = body.services.map((line) => {
+      const svc = CATALOG.services.find((x) => x.id === Number(line.id)) || { id: line.id, name: `Service ${line.id}`, price: 0, extras: [], pricing_parameters: [] };
+      const hours = line.hourly ? (line.hourly.minutes / 60) * (line.hourly.quantity || 1) : null;
+      const pricing_parameters = (line.pricing_parameters || []).map((pp) => {
+        const def = svc.pricing_parameters.find((x) => x.id === pp.id) || { name: `Item ${pp.id}`, price: 0 };
+        return { id: pp.id, name: def.name, price: def.price, quantity: pp.quantity, total: Math.round(def.price * pp.quantity * 100) / 100 };
+      });
+      const extras = (line.extras || []).map((x) => {
+        const def = svc.extras.find((e) => e.id === x.id) || { name: `Extra ${x.id}`, price: 0 };
+        return { id: x.id, name: def.name, price: def.price, quantity: x.quantity, total: Math.round(def.price * x.quantity * 100) / 100 };
+      });
+      return { id: svc.id, name: svc.name, price: hours ? Math.round(svc.price * hours * 100) / 100 : svc.price, hourly: line.hourly || undefined, pricing_parameters, extras };
+    });
+    const subtotal = services.reduce((t, x) => t + x.price + x.pricing_parameters.reduce((a, p) => a + p.total, 0) + x.extras.reduce((a, e) => a + e.total, 0), 0);
+    const freq = FREQUENCIES.find((f) => f.id === Number(body.frequency_id)) || fallback?.frequency || FREQUENCIES[0];
+    const discount = Math.round(subtotal * ((freq.percent || 0) / 100) * 100) / 100;
+    const adjustment = Number(body.price_adjustment) || 0;
+    const revenue = Math.round((subtotal - discount + adjustment) * 100) / 100;
+    const tax = Math.round(revenue * 0.13 * 100) / 100;
+    const tip = Number(body.tip) || 0;
+    const extraMinutes = services.reduce((t, x) => t + x.extras.length * 60 + Math.max(0, (x.pricing_parameters[0]?.quantity || 1) - 1) * 30, 0);
+    const baseMinutes = services.reduce((t, x) => t + (x.hourly ? x.hourly.minutes : CATALOG.services.find((c) => c.id === x.id)?.duration || 150), 0);
+    return {
+      services,
+      frequency: { id: freq.id, name: freq.name },
+      arrival_window: Number(body.arrival_window) || 60,
+      duration: baseMinutes + extraMinutes,
+      price_adjustment_comment: body.price_adjustment_comment || null,
+      summary: { services: subtotal, discount, adjustment, revenue, tax: { before_tax: revenue, tax_percent: 13, tax_amount: tax, after_tax: revenue + tax }, tip, total: Math.round((revenue + tax + tip) * 100) / 100 },
+    };
+  }
+
   function applyOverlay(b) {
     const o = overlay.get(b.id);
     return o ? { ...b, ...o } : b;
@@ -282,10 +317,10 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
     // Reference data
     if (path === '/v1/staff/locations') return [200, LOCATIONS];
     if (path === '/v1/staff/locations/count') return [200, { count: LOCATIONS.length }];
-    if (path === '/v1/booking/services' || path === '/v1/staff/services') return [200, SERVICES.map((s) => ({ ...s, extras: EXTRAS, pricing_parameters: [{ id: 137, type: 'flat', name: 'Full Bathrooms', price: 27.5, quantity_minimum: 1, quantity_maximum: 7 }, { id: 138, type: 'flat', name: 'Half Bathrooms', price: 18.33, quantity_minimum: 0, quantity_maximum: 5 }] }))];
+    if (path === '/v1/booking/services' || path === '/v1/staff/services') return [200, CATALOG.services];
     if (path === '/v1/booking/frequencies' || path === '/v1/staff/frequencies') return [200, FREQUENCIES];
     if (path === '/v1/staff/booking_form/custom_fields' || path === '/v1/booking/custom_fields')
-      return [200, [{ id: 267, control_type: 'drop_down', label: 'Parking on Premise?', value_required: true, active: true, options: [{ id: 16, label: 'Yes', active: true }, { id: 17, label: 'No', active: true }] }, { id: 270, control_type: 'drop_down', label: 'Any Pets?', value_required: true, active: true, options: [{ id: 36, label: 'No Pets', active: true }, { id: 33, label: 'Yes - Dog', active: true }] }]];
+      return [200, CATALOG.custom_fields];
 
     // Teams
     if (path === '/v1/staff/teams') return [200, page(teams, q)];
@@ -324,7 +359,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
       const id = nextId++;
       const c = customers.find((x) => x.id === body?.user?.id) || customers[0];
       const base = makeBooking(dayIndex(String(body?.service_date || '').slice(0, 10)) * 100, String(body?.service_date || dateOf(0)).slice(0, 10), rng(id));
-      created.set(id, { ...base, id, user: { id: c.id, name: `${c.first_name} ${c.last_name}`, email: c.email }, service_date: torontoToUtc(body?.service_date), staff_notes: body?.staff_notes || null, customer_notes: body?.customer_notes || null, teams: (body?.teams || []).map((tid) => teamPayload({ id: Number(tid), hours: 3, share: 22 })), time_tracking: [], feedback: null, completed: false });
+      created.set(id, { ...base, id, user: { id: c.id, name: `${c.first_name} ${c.last_name}`, email: c.email }, service_date: torontoToUtc(body?.service_date), staff_notes: body?.staff_notes || null, customer_notes: body?.customer_notes || null, teams: (body?.teams || []).map((tid) => teamPayload({ id: Number(tid), hours: 3, share: 22 })), time_tracking: [], feedback: null, completed: false, charges: { charged: [], onhold: [], refunded: [], marked_paid: [], outstanding: 0 }, ...pricedFromBody(body, base) });
       return [200, { id }];
     }
     if ((m = path.match(/^\/v1\/staff\/bookings\/(\d+)(\/[a-z_]+)?$/))) {
@@ -335,6 +370,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
       if (method === 'PUT' && !sub) {
         const patch = { staff_notes: body?.staff_notes ?? b.staff_notes, customer_notes: body?.customer_notes ?? b.customer_notes };
         if (body?.service_date) patch.service_date = torontoToUtc(body.service_date);
+        Object.assign(patch, pricedFromBody(body, b));
         if (Array.isArray(body?.teams)) patch.teams = body.teams.map((t) => teamPayload(typeof t === 'object' ? t : { id: t, hours: b.duration / 60, share: 22 }));
         overlay.set(id, { ...overlay.get(id), ...patch });
         return [200, findBooking(id)];

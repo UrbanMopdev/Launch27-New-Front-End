@@ -71,6 +71,9 @@ interface FormState {
   is_mass_update: boolean;
 }
 
+// UrbanMop always books a 60-minute arrival window.
+const ARRIVAL_WINDOW = 60;
+
 const EMPTY: FormState = {
   customerId: null,
   first_name: '',
@@ -85,7 +88,7 @@ const EMPTY: FormState = {
   frequency_id: null,
   date: '',
   time: '08:00',
-  arrival_window: 60,
+  arrival_window: ARRIVAL_WINDOW,
   services: [],
   teams: [],
   payment: 'check',
@@ -131,7 +134,7 @@ function fromBooking(b: Booking): FormState {
     frequency_id: b.frequency?.id ?? null,
     date,
     time,
-    arrival_window: Number(b.arrival_window) || 0,
+    arrival_window: Number(b.arrival_window) || ARRIVAL_WINDOW,
     services: (b.services || []).map((s) => {
       const svc = s as typeof s & { hourly?: { quantity: number; minutes: number } };
       return {
@@ -499,7 +502,9 @@ export function BookingFormPage() {
                 ))}
               </div>
             </div>
-            <Segmented label="Arrival window" value={form.arrival_window} options={[0, 30, 60, 90, 120].map((m) => ({ value: m, label: m ? `${m} min` : 'Exact' }))} onChange={(v) => set({ arrival_window: v })} />
+            <p className="muted small">
+              {form.arrival_window && form.arrival_window !== ARRIVAL_WINDOW ? `${form.arrival_window}-minute arrival window (set in Launch27). Saving keeps it.` : `Cleaners arrive within ${ARRIVAL_WINDOW} minutes of the arrival time.`}
+            </p>
             {recurring && (
               <label className="check bf-check">
                 <input type="checkbox" checked={form.is_mass_update} onChange={(e) => set({ is_mass_update: e.target.checked })} /> Also apply these changes to future visits in this series
@@ -568,7 +573,7 @@ export function BookingFormPage() {
           <section className="card bf-summary">
             <div className="eyebrow">Summary</div>
             <SummaryRow icon="user" label={form.customerId ? (customer.data ? customerName(customer.data) : '…') : form.first_name ? `${form.first_name} ${form.last_name} (new)` : null} empty="No customer yet" />
-            <SummaryRow icon="calendar" label={form.date ? `${new Date(`${form.date}T12:00:00`).toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} · ${clock(form.time)}${form.arrival_window ? ` +${form.arrival_window} min` : ''}` : null} empty="No date yet" sub={freqName} />
+            <SummaryRow icon="calendar" label={form.date ? `${new Date(`${form.date}T12:00:00`).toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} · ${clock(form.time)}–${clock(addMinutes(form.time, form.arrival_window || ARRIVAL_WINDOW))}` : null} empty="No date yet" sub={freqName} />
             <SummaryRow icon="home" label={form.address ? [form.address, form.city].filter(Boolean).join(', ') : null} empty="No address" />
             <SummaryRow icon="user" label={chosenTeams.length ? chosenTeams.map((x) => x.title).join(', ') : null} empty="No cleaner (assign later)" />
             <div className="bf-sum-lines">
@@ -665,6 +670,12 @@ function SummaryRow({ icon, label, empty, sub }: { icon: string; label: string |
     </div>
   );
 }
+
+const addMinutes = (hhmm: string, m: number) => {
+  const [h, mm] = hhmm.split(':').map(Number);
+  const t = (h * 60 + mm + m) % (24 * 60);
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+};
 
 const clock = (hhmm: string) => {
   const [h, m] = hhmm.split(':').map(Number);
