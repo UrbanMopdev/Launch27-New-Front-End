@@ -1,3 +1,4 @@
+import { seedWorkforce } from './workforce.js';
 // Starting configuration for UrbanMop, rebuilt from the Kustomer audit (Oct 31, 2026):
 // 14 queues and 72 rules there become 9 queues and 15 ordered rules here.
 import { json } from '../db/index.js';
@@ -175,4 +176,5 @@ export async function seed(db) {
   if (!(await count('holidays'))) {
     for (const [day, name] of HOLIDAYS) await db.query('INSERT INTO holidays (day, name) VALUES ($1,$2)', [day, name]);
   }
+  await seedWorkforce(db);
 }

@@ -115,6 +115,7 @@ inside a conversation.
 | Routing | 15 ordered rules rebuilt from the Kustomer audit (Kustomer had 14 queues and 72 rules), editable in Support settings with warnings for rules that can never match and a live preview |
 | Reply targets | Business-hours SLAs (Toronto hours, Ontario holidays, DST-safe), warnings and breach alerts, paused while snoozed, stopped only by human replies |
 | Supervisor (`/supervisor`) | Live queue depth, unassigned, late, oldest waiting, per-agent load, median first reply |
+| Workforce (Support settings) | Kustomer-style agent statuses (Available, Busy, Break, Lunch, Meeting, Training, Wrap-up, Offline: add your own, with time limits and keep-or-return-work), teams that work queues, per-agent and default capacity per channel, per-queue routing mode (least busy / round robin / manual), default reply target, business hours, overflow and priority, plus workspace routing policies (offline returns work, idle auto-offline, assign on reply, reopen to previous owner, required disposition, long-break alerts) |
 | Phone | RingCentral Embeddable widget (loads when `RINGCENTRAL_CLIENT_ID` is set): calls ring in the browser, the caller's profile pops, finished calls are logged; click-to-call from a profile |
 | Search | Ctrl+K: people by name, phone or email; message text; jump to a booking number |
 

@@ -5,7 +5,7 @@ import { inbox, type Channel, type Contact, type Role, type Rule } from '../inbo
 import { Customer360 } from '../inbox/Customer360';
 import { Cleaner360 } from '../inbox/Cleaner360';
 import { CHANNEL_ICON, ROLE_LABEL, ago, displayIdentity, useInboxMe, useMeta } from '../inbox/util';
-import { fmtDateTime } from '../format';
+import { AgentsSettings, HoursSettings, PoliciesSettings, QueuesSettings, StatusesSettings, TeamsSettings } from './WorkforceSettings';
 
 // ---------- Contact profile (full-page 360) ----------
 
@@ -173,6 +173,13 @@ export function OpenL27Contact({ customerId, teamId, label = 'Support profile' }
 
 export function SupervisorPage() {
   const data = useQuery({ queryKey: ['inbox', 'supervisor'], queryFn: inbox.supervisor, refetchInterval: 10_000 });
+  const me = useInboxMe();
+  const queryClient = useQueryClient();
+  const setAgentStatus = async (userId: number, statusId: number) => {
+    const r = await inbox.setUserStatus(userId, statusId);
+    queryClient.invalidateQueries({ queryKey: ['inbox'] });
+    if (r.requeued) alert(`${r.requeued} conversation(s) went back to their queues.`);
+  };
   if (data.isLoading) return <div className="muted">Loading…</div>;
   if (data.error) return <div className="error">{(data.error as Error).message}</div>;
   const d = data.data!;
@@ -203,15 +210,29 @@ export function SupervisorPage() {
         <section className="card no-pad">
           <div className="table-wrap flat">
             <table>
-              <thead><tr><th>Agent</th><th>Status</th><th className="num">Open</th><th className="num">Late</th><th className="num">Done today</th></tr></thead>
+              <thead><tr><th>Agent</th><th>Status</th><th className="num">Away today</th><th className="num">Open</th><th className="num">Late</th><th className="num">Done today</th></tr></thead>
               <tbody>
-                {d.agents.map((a) => (
+                {d.agents.map((a) => {
+                  const mins = a.status_since ? Math.floor((Date.now() - new Date(a.status_since).getTime()) / 60_000) : null;
+                  const over = !!a.status_max && mins !== null && mins > a.status_max;
+                  return (
                   <tr key={a.id} className="static">
                     <td>{a.name || a.email} <span className="muted small">{a.role !== 'agent' ? a.role : ''}</span></td>
-                    <td><span className={`presence-dot ${a.presence}`} /> {a.presence}</td>
+                    <td>
+                      <span className="status-cell">
+                        <span className="status-dot" style={{ background: a.status_color || '#9aa3ad' }} />
+                        <select aria-label={`Status for ${a.name || a.email}`} value={a.status_id ?? ''} onChange={(e) => setAgentStatus(a.id, Number(e.target.value))}>
+                          {!a.status_id && <option value="">—</option>}
+                          {me.data?.statuses?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                        </select>
+                        {mins !== null && <span className={over ? 'chip neg' : 'muted small'}>{mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`}{over ? ` (limit ${a.status_max}m)` : ''}</span>}
+                      </span>
+                    </td>
+                    <td className="num">{a.away_minutes_today ? `${a.away_minutes_today}m` : ''}</td>
                     <td className="num">{a.open}</td><td className={a.breached ? 'num neg' : 'num'}>{a.breached || ''}</td><td className="num">{a.done_today}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -312,22 +333,30 @@ export function SimulatorPage() {
 
 // ---------- Settings: routing, SLAs, saved replies, team ----------
 
+type SettingsTab = 'rules' | 'sla' | 'canned' | 'agents' | 'teams' | 'statuses' | 'queues' | 'hours' | 'policies';
+const SETTINGS_TABS: Record<SettingsTab, string> = { rules: 'Routing rules', sla: 'Reply targets', canned: 'Saved replies', agents: 'Agents', teams: 'Teams', statuses: 'Agent statuses', queues: 'Queues', hours: 'Business hours', policies: 'Routing policies' };
+
 export function InboxSettingsPage() {
   const me = useInboxMe();
-  const [tab, setTab] = useState<'rules' | 'sla' | 'canned' | 'team'>('rules');
+  const [tab, setTab] = useState<SettingsTab>('rules');
   const isAdmin = me.data?.role === 'admin';
   return (
     <>
       <header className="page-header"><h1>Support settings</h1>{!isAdmin && <span className="muted small">Read-only: admins can change these.</span>}</header>
       <div className="tabs">
-        {(['rules', 'sla', 'canned', 'team'] as const).map((t) => (
-          <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => setTab(t)}>{{ rules: 'Routing rules', sla: 'Reply targets', canned: 'Saved replies', team: 'Team & queues' }[t]}</button>
+        {(Object.keys(SETTINGS_TABS) as SettingsTab[]).map((t) => (
+          <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => setTab(t)}>{SETTINGS_TABS[t]}</button>
         ))}
       </div>
       {tab === 'rules' && <RulesEditor canEdit={isAdmin} />}
       {tab === 'sla' && <SlaEditor canEdit={isAdmin} />}
       {tab === 'canned' && <CannedEditor canEdit={isAdmin || me.data?.role === 'supervisor'} />}
-      {tab === 'team' && <TeamEditor canEdit={isAdmin} />}
+      {tab === 'agents' && <AgentsSettings canEdit={isAdmin} />}
+      {tab === 'teams' && <TeamsSettings canEdit={isAdmin} />}
+      {tab === 'statuses' && <StatusesSettings canEdit={isAdmin} />}
+      {tab === 'queues' && <QueuesSettings canEdit={isAdmin} />}
+      {tab === 'hours' && <HoursSettings canEdit={isAdmin} />}
+      {tab === 'policies' && <PoliciesSettings canEdit={isAdmin} />}
     </>
   );
 }
@@ -479,36 +508,3 @@ function CannedEditor({ canEdit }: { canEdit: boolean }) {
   );
 }
 
-function TeamEditor({ canEdit }: { canEdit: boolean }) {
-  const users = useQuery({ queryKey: ['inbox', 'users'], queryFn: inbox.users });
-  const meta = useMeta();
-  const queryClient = useQueryClient();
-  const save = (id: number, patch: { role?: string; queue_ids?: number[] }) => inbox.updateUser(id, patch).then(() => queryClient.invalidateQueries({ queryKey: ['inbox'] }));
-  return (
-    <section className="card no-pad">
-      <div className="table-wrap flat">
-        <table>
-          <thead><tr><th>Person</th><th>Role</th>{meta.data?.queues.map((q) => <th key={q.id} className="small">{q.name}</th>)}</tr></thead>
-          <tbody>
-            {users.data?.map((u) => (
-              <tr key={u.id} className="static">
-                <td>{u.name || u.email}<div className="muted small">{u.email} · last seen {fmtDateTime((u as { last_seen_at?: string }).last_seen_at)}</div></td>
-                <td>{canEdit ? <select value={u.role} onChange={(e) => save(u.id, { role: e.target.value })}><option value="agent">agent</option><option value="supervisor">supervisor</option><option value="admin">admin</option></select> : u.role}</td>
-                {meta.data?.queues.map((q) => {
-                  const ids = (u.queue_ids || []).map(Number);
-                  const on = ids.includes(q.id);
-                  return (
-                    <td key={q.id}>
-                      <input type="checkbox" disabled={!canEdit} checked={on} onChange={() => save(u.id, { queue_ids: on ? ids.filter((x) => x !== q.id) : [...ids, q.id] })} />
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="small muted pad">People appear here after they first sign in. Queue membership decides who receives routed work.</p>
-    </section>
-  );
-}
