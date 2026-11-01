@@ -56,6 +56,26 @@ Dev and QA never contain real customer data:
   15 sample support conversations from synthetic customers and cleaners into an empty
   inbox at startup, once per database (`server/src/sample/inbox.js`); more can be sent from the Channel
   simulator. `SAMPLE_DATA` is ignored in production.
+- **QA can show an anonymized copy of real data** (approved Nov 1, 2026). Production
+  builds it (Support settings → QA data → "Send a fresh copy to QA"), using the admin's
+  own Launch27 login: the last 60 and next 60 days of bookings with all customers and
+  cleaners. Before anything leaves production, `server/src/qa/anonymize.js` rebuilds
+  every record from an allow-list, so unknown fields are dropped:
+  - replaced: customer and cleaner names, emails, phones, street addresses; coordinates
+    shifted a few hundred metres; postal code cut to its first 3 characters; every
+    free-text field (notes, comments, booking-question "Other" text, adjustment and
+    cancellation reasons, rating comments) → "Note removed for QA"; card last 4 → 0000;
+    payment processor ids and discount code names removed; staff names → "Office staff"
+  - kept: dates and times, services, rooms, extras, frequencies, prices, discounts,
+    adjustments, tips, totals, ratings, cleaner assignments, check-in/out times, ids,
+    locations, city
+  - checked twice: production refuses to send, and QA refuses to store, a copy with any
+    non-example.com email, non-555 phone, payment id, or any real name, email, phone,
+    street or note from the source (the error names the field, never the value)
+  - QA never holds Launch27 credentials; edits in QA stay in QA. QA keeps the last two
+    copies; "Go back to sample data" deletes them.
+  - Setup: the same random `QA_SNAPSHOT_TOKEN` (32+ chars) in production and staging,
+    and `QA_SNAPSHOT_URL` (the QA site's address) in production only.
 - **Never** restore a production backup into dev or staging. There is no approved
   anonymization process; if one is needed later, it must be designed, reviewed and
   documented here first.

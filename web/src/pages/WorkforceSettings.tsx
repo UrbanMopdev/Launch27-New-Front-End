@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { inbox, type AgentStatus, type Capacity, type QueueSettings, type Schedule, type StatusKind, type Team, type Workforce, type WorkspaceSettings } from '../inbox/api';
+import { inbox, type AgentStatus, type Capacity, type QueueSettings, type Schedule, type SettingsEditors, type StatusKind, type Team, type Workforce, type WorkspaceSettings } from '../inbox/api';
 import { useMeta } from '../inbox/util';
 
 // Support settings for the workforce, modelled on Kustomer: agents (role, teams,
@@ -50,7 +50,7 @@ function Loading({ q }: { q: ReturnType<typeof useWorkforce> }) {
 
 // ---------- Agents ----------
 
-export function AgentsSettings({ canEdit }: { canEdit: boolean }) {
+export function AgentsSettings({ canEdit, isAdmin }: { canEdit: boolean; isAdmin: boolean }) {
   const wf = useWorkforce();
   const { run, error, saved } = useSave();
   if (!wf.data) return <Loading q={wf} />;
@@ -90,7 +90,7 @@ export function AgentsSettings({ canEdit }: { canEdit: boolean }) {
                     </div>
                   </td>
                   <td>
-                    <select disabled={!canEdit} aria-label="Role" value={a.role} onChange={(e) => run(() => inbox.updateUser(a.id, { role: e.target.value }))}>
+                    <select disabled={!isAdmin} aria-label="Role" value={a.role} onChange={(e) => run(() => inbox.updateUser(a.id, { role: e.target.value }))}>
                       <option value="agent">Agent</option>
                       <option value="supervisor">Supervisor</option>
                       <option value="admin">Admin</option>
@@ -101,7 +101,7 @@ export function AgentsSettings({ canEdit }: { canEdit: boolean }) {
                       {d.teams.map((t) => {
                         const on = a.team_ids.map(Number).includes(Number(t.id));
                         return (
-                          <button key={t.id} type="button" disabled={!canEdit} aria-pressed={on} className={on ? 'pillbtn on' : 'pillbtn'} onClick={() => run(() => inbox.updateUser(a.id, { team_ids: on ? a.team_ids.filter((x) => Number(x) !== Number(t.id)) : [...a.team_ids, t.id!] }))}>
+                          <button key={t.id} type="button" disabled={!isAdmin} aria-pressed={on} className={on ? 'pillbtn on' : 'pillbtn'} onClick={() => run(() => inbox.updateUser(a.id, { team_ids: on ? a.team_ids.filter((x) => Number(x) !== Number(t.id)) : [...a.team_ids, t.id!] }))}>
                             {t.name}
                           </button>
                         );
@@ -131,7 +131,7 @@ export function AgentsSettings({ canEdit }: { canEdit: boolean }) {
                     </td>
                   ))}
                   <td>
-                    <input type="checkbox" aria-label="Active" disabled={!canEdit} checked={a.active} onChange={(e) => run(() => inbox.updateUser(a.id, { active: e.target.checked }))} />
+                    <input type="checkbox" aria-label="Active" disabled={!isAdmin} checked={a.active} onChange={(e) => run(() => inbox.updateUser(a.id, { active: e.target.checked }))} />
                   </td>
                 </tr>
               );
@@ -139,7 +139,7 @@ export function AgentsSettings({ canEdit }: { canEdit: boolean }) {
           </tbody>
         </table>
       </div>
-      <p className="muted small pad">Inactive people keep their history but never receive routed work. Queue access comes from teams (Teams tab).</p>
+      <p className="muted small pad">Inactive people keep their history but never receive routed work. Queue access comes from teams (Teams tab).{!isAdmin && ' Only admins change roles, teams and who is active, because those decide who can see private queues.'}</p>
     </section>
   );
 }
@@ -158,7 +158,7 @@ export function TeamsSettings({ canEdit }: { canEdit: boolean }) {
   return (
     <>
       <div className="ws-intro">
-        <p className="muted small">Teams group agents and say which queues they work. Everyone on a team can receive that team's queues' conversations (when Available and under capacity).</p>
+        <p className="muted small">Teams group agents and say which queues they work. Everyone on a team can receive that team's queues' conversations (when Available and under capacity).{!canEdit && ' Only admins change teams, because they decide who can see private queues (HR, Hiring, Payroll).'}</p>
         <div className="actions">
           {canEdit && (
             <button type="button" className="secondary" onClick={() => setTeams([...list, { name: 'New team', description: '', lead_user_id: null, member_ids: [], queue_ids: [] }])}>
@@ -329,7 +329,7 @@ export function StatusesSettings({ canEdit }: { canEdit: boolean }) {
 
 // ---------- Queues ----------
 
-export function QueuesSettings({ canEdit }: { canEdit: boolean }) {
+export function QueuesSettings({ canEdit, isAdmin }: { canEdit: boolean; isAdmin: boolean }) {
   const wf = useWorkforce();
   const [newName, setNewName] = useState('');
   const { run, error, saved } = useSave();
@@ -420,14 +420,14 @@ export function QueuesSettings({ canEdit }: { canEdit: boolean }) {
                     </select>
                   </td>
                   <td>
-                    <input type="checkbox" aria-label="Private queue" disabled={!canEdit} checked={q.restricted} onChange={(e) => save(q, { restricted: e.target.checked })} />
+                    <input type="checkbox" aria-label="Private queue" disabled={!isAdmin} title={isAdmin ? undefined : 'Only admins change this'} checked={q.restricted} onChange={(e) => save(q, { restricted: e.target.checked })} />
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="muted small pad">Private queues are only visible to the people who work them (and admins). Routing rules decide which queue a conversation lands in (Routing rules tab).</p>
+        <p className="muted small pad">Private queues are only visible to the people who work them (and admins); only admins can make a queue private or public. Routing rules decide which queue a conversation lands in (Routing rules tab).</p>
       </section>
     </>
   );
@@ -537,7 +537,7 @@ const POLICIES: { key: keyof WorkspaceSettings; label: string; help: string; kin
   { key: 'alert_on_long_away', label: 'Tell supervisors when a status runs long', help: "Supervisors are notified once when someone passes a status's time limit (e.g. a 15-minute break).", kind: 'bool' },
 ];
 
-export function PoliciesSettings({ canEdit }: { canEdit: boolean }) {
+export function PoliciesSettings({ canEdit, isAdmin }: { canEdit: boolean; isAdmin: boolean }) {
   const wf = useWorkforce();
   const [draft, setDraft] = useState<Partial<WorkspaceSettings>>({});
   const queryClient = useQueryClient();
@@ -587,6 +587,17 @@ export function PoliciesSettings({ canEdit }: { canEdit: boolean }) {
           ))}
         </span>
       </div>
+      <div className="policy-row">
+        <div className="grow">
+          <div className="strong">Who can change support settings</div>
+          <div className="muted small">Routing rules, queues, reply targets, hours, these policies, statuses and saved replies. Roles, teams and private queues are always admins only. Only admins change this.</div>
+        </div>
+        <select aria-label="Who can change support settings" disabled={!isAdmin} value={v.settings_editors} onChange={(e) => set({ settings_editors: e.target.value as SettingsEditors })}>
+          <option value="everyone">Everyone on the team</option>
+          <option value="supervisors">Supervisors and admins</option>
+          <option value="admins">Admins only</option>
+        </select>
+      </div>
       {canEdit && (
         <div className="actions">
           <button type="button" disabled={!Object.keys(draft).length || save.isPending} onClick={() => save.mutate()}>
@@ -596,6 +607,59 @@ export function PoliciesSettings({ canEdit }: { canEdit: boolean }) {
           {save.isSuccess && !Object.keys(draft).length && <span className="ok small">Saved</span>}
         </div>
       )}
+    </section>
+  );
+}
+
+// ---------- QA copy of real data ----------
+
+export function QaCopySettings({ canEdit }: { canEdit: boolean }) {
+  const queryClient = useQueryClient();
+  const status = useQuery({ queryKey: ['inbox', 'qa-copy'], queryFn: inbox.qaCopy, refetchInterval: (q) => (q.state.data?.job?.state === 'running' ? 3000 : false) });
+  const { run, error } = useSave();
+  if (status.isLoading) return <div className="muted">Loading…</div>;
+  if (status.error) return <div className="error">{(status.error as Error).message}</div>;
+  const d = status.data!;
+  const describe = (s: NonNullable<typeof d.current>) => `${s.bookings.toLocaleString()} bookings (${s.window.from} to ${s.window.to}), ${s.customers.toLocaleString()} customers, ${s.cleaners.toLocaleString()} cleaners, made ${new Date(s.created_at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })}`;
+  return (
+    <section className="card wf-policies">
+      <div className="policy-row">
+        <div className="grow">
+          <div className="strong">Anonymized copy of real data for QA</div>
+          <div className="muted small">
+            Production copies the last 60 and next 60 days of bookings with customers and cleaners, replaces every name, email, phone, street address, note and card number, checks that nothing personal is left, and sends only that copy to QA. Prices, services, extras, times and assignments stay real. QA checks it again before using it, and changes made in QA never reach Launch27.
+          </div>
+        </div>
+      </div>
+      {d.can_send && (
+        <div className="policy-row">
+          <div className="grow">
+            {d.job?.state === 'running' && <div className="strong">Working: {d.job.step}…</div>}
+            {d.job?.state === 'done' && d.job.summary && <div className="ok">Sent to QA: {describe(d.job.summary)}</div>}
+            {d.job?.state === 'failed' && <div className="error small">Not sent: {d.job.error}</div>}
+            {(!d.job || d.job.state === 'idle') && <div className="muted small">Takes a few minutes. Uses your Launch27 login to read the data.</div>}
+          </div>
+          {canEdit && (
+            <button type="button" disabled={d.job?.state === 'running'} onClick={() => run(() => inbox.sendQaCopy())}>
+              {d.job?.state === 'running' ? 'Copying…' : 'Send a fresh copy to QA'}
+            </button>
+          )}
+        </div>
+      )}
+      {d.receiving && (
+        <div className="policy-row">
+          <div className="grow">
+            {d.current ? <div><span className="strong">This QA site is showing the anonymized copy:</span> {describe(d.current)}</div> : <div className="muted">No copy yet: this site shows generated sample data. Send one from production (Support settings → QA data).</div>}
+          </div>
+          {canEdit && d.current && (
+            <button type="button" className="secondary" onClick={() => run(async () => { await inbox.clearQaCopy(); queryClient.invalidateQueries(); })}>
+              Go back to sample data
+            </button>
+          )}
+        </div>
+      )}
+      {!d.can_send && !d.receiving && <p className="muted small">Not set up here. Production sends the copy and QA receives it; both need the same QA_SNAPSHOT_TOKEN (see docs/environments.md).</p>}
+      {error && <div className="error small">{error}</div>}
     </section>
   );
 }

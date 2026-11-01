@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { inbox } from './api';
 import { ago, useInboxMe } from './util';
+import { Icon } from '../components/Icon';
 
 // Sidebar footer: my availability for routed work, and my notifications.
 export function SupportStatus() {
@@ -38,8 +39,9 @@ export function SupportStatus() {
         </select>
         {mins !== null && current?.kind !== 'available' && <span className={over ? 'status-time over' : 'status-time'}>{mins}m</span>}
       </label>
-      <button className="link bell" onClick={() => setOpen(!open)} aria-label="Notifications">
-        🔔{unread > 0 && <span className="count late">{unread}</span>}
+      <button className="icon-button bell" onClick={() => setOpen(!open)} aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'} title="Notifications">
+        <Icon name="bell" size={18} />
+        {unread > 0 && <span className="bell-badge">{unread}</span>}
       </button>
       {open && (
         <div className="notif-pop">

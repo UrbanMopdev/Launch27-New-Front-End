@@ -130,14 +130,124 @@ function buildCustomers() {
   });
 }
 
-export function createMockLaunch27({ password = 'demo', now = () => Date.now() } = {}) {
-  const teams = buildTeams();
-  const customers = buildCustomers();
+// Synthetic quote inquiries for the /admin/quotes page. booking_draft mirrors a
+// POST /v1/staff/bookings body (see BookingForm.tsx's fromQuoteDraft), so "Create
+// booking from this quote" has something real to prefill from in dev/QA.
+function buildQuotes(nowMs) {
+  const r = rng(99);
+  return Array.from({ length: 16 }, (_, i) => {
+    const first = FIRST[(i * 5 + 2) % FIRST.length];
+    const last = LAST[(i * 11 + 4) % LAST.length];
+    const svc = CATALOG.services[r.int(7)];
+    const freq = FREQUENCIES[r.int(FREQUENCIES.length)];
+    const hourly = svc.hourly ? { quantity: 1, minutes: 180 } : null;
+    const pricing_parameters = (svc.pricing_parameters || []).map((p, pi) => ({ id: p.id, quantity: pi === 0 ? 1 + r.int(2) : 0 }));
+    const extra = svc.extras?.length && r.next() < 0.3 ? svc.extras[r.int(svc.extras.length)] : null;
+    const extras = extra ? [{ id: extra.id, quantity: 1, recurring: null }] : [];
+    const basePrice = hourly ? svc.price * (hourly.minutes / 60) * hourly.quantity : svc.price;
+    const ppTotal = pricing_parameters.reduce((s, p) => s + (svc.pricing_parameters.find((x) => x.id === p.id)?.price || 0) * p.quantity, 0);
+    const extrasTotal = extras.reduce((s, x) => s + (extra?.price || 0) * x.quantity, 0);
+    const subtotal = basePrice + ppTotal + extrasTotal;
+    const discount = r2(subtotal * (freq.percent / 100));
+    const createdDaysAgo = 2 + r.int(45);
+    const createdAt = new Date(nowMs - createdDaysAgo * 86_400_000);
+    const expiresAt = new Date(createdAt.getTime() + 7 * 86_400_000);
+    const phone = `(613) 555-030${i % 10}`;
+    // A quote "becomes" a booking two days after it was created, on a day that genuinely
+    // has a booking (not a Sunday, when the mock schedules none), so the link resolves.
+    const bookedDayIdx = dayIndex(iso(createdAt).slice(0, 10)) + 2;
+    const bookedWeekday = new Date(`${dateOf(bookedDayIdx)}T12:00:00Z`).getUTCDay();
+    const booked = i % 7 === 3 && createdDaysAgo > 3 && bookedWeekday !== 0;
+    return {
+      id: 70000 + i,
+      digest: `mockquote${i}`,
+      name: `${first} ${last}`,
+      first_name: first,
+      last_name: last,
+      email: `lead${i + 1}@example.com`,
+      phone,
+      created_at: iso(createdAt),
+      expires_at: iso(expiresAt),
+      created_by: i % 3 === 0 ? { id: 1, first_name: 'Demo', last_name: 'User', name: 'Demo User', role: 'admin' } : null,
+      booking_draft: {
+        email: `lead${i + 1}@example.com`,
+        first_name: first,
+        last_name: last,
+        location_id: LOCATIONS[0].id,
+        address: `${200 + i * 5} ${r.pick(STREETS)}`,
+        city: 'Ottawa',
+        state: 'ON',
+        zip: 'K1A 0A1',
+        phone,
+        sms_notifications: true,
+        frequency_id: freq.id,
+        services: [{ id: svc.id, hourly, extras, pricing_parameters }],
+        discount_code: null,
+        price_adjustment_recurring: false,
+        tip_recurring: false,
+        final_price: r2(subtotal - discount),
+        payment_method: 'check',
+        arrival_window: 60,
+        custom_fields: CATALOG.custom_fields.slice(0, 2).map((f) => ({ id: f.id, values: f.options?.length ? [{ id: f.options[r.int(f.options.length)].id, other: null }] : [] })),
+      },
+      booking_ids: booked ? [bookedDayIdx * 100] : null,
+    };
+  });
+}
+
+function filterQuotes(list, q) {
+  const from = q.get('from');
+  const to = q.get('to');
+  return list.filter((quote) => {
+    const d = quote.created_at.slice(0, 10);
+    return (!from || d >= from) && (!to || d <= to);
+  });
+}
+
+// snapshot: optional () => anonymized copy of real data (QA). When it returns a copy,
+// that data is served instead of the generated synthetic data.
+export function createMockLaunch27({ password = 'demo', now = () => Date.now(), snapshot = () => null } = {}) {
+  const genTeams = buildTeams();
+  const genCustomers = buildCustomers();
+  let teams = genTeams;
+  let customers = genCustomers;
+  let snap = null;
+  let snapByDay = new Map();
+  let snapById = new Map();
+  function syncSnapshot() {
+    const s = snapshot();
+    if (s === snap) return;
+    snap = s;
+    if (s) {
+      teams = s.teams;
+      customers = s.customers.map((c) => ({ ...c }));
+      snapByDay = new Map();
+      snapById = new Map();
+      for (const b of s.bookings) {
+        const d = String(b.service_date || '').slice(0, 10);
+        if (!snapByDay.has(d)) snapByDay.set(d, []);
+        snapByDay.get(d).push(b);
+        snapById.set(b.id, b);
+      }
+    } else {
+      teams = genTeams;
+      customers = genCustomers;
+    }
+  }
+  const catalogServices = (loc) => (snap ? snap.services[loc] || Object.values(snap.services)[0] || [] : CATALOG.services);
+  const allServices = () => (snap ? Object.values(snap.services).flat() : CATALOG.services);
+  const frequencyList = () => (snap ? snap.staff_frequencies : FREQUENCIES);
+  const quotes = buildQuotes(now());
   const overlay = new Map(); // booking id -> partial changes
   const created = new Map(); // booking id -> booking created through the API
   let nextId = 900_000;
 
   function bookingsForDay(date) {
+    if (snap) {
+      const list = [...(snapByDay.get(date) || [])];
+      for (const b of created.values()) if (b.service_date.slice(0, 10) === date) list.push(b);
+      return list.map(applyOverlay);
+    }
     const idx = dayIndex(date);
     const r = rng(hash(date));
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
@@ -218,7 +328,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
   function pricedFromBody(body, fallback) {
     if (!Array.isArray(body?.services) || !body.services.length) return {};
     const services = body.services.slice(0, 1).map((line) => {
-      const svc = CATALOG.services.find((x) => x.id === Number(line.id)) || { id: line.id, name: `Service ${line.id}`, price: 0, extras: [], pricing_parameters: [] };
+      const svc = allServices().find((x) => x.id === Number(line.id)) || { id: line.id, name: `Service ${line.id}`, price: 0, extras: [], pricing_parameters: [] };
       const pricing_parameters = (line.pricing_parameters || []).map((pp) => {
         const def = svc.pricing_parameters.find((x) => x.id === pp.id) || { name: `Item ${pp.id}`, price: 0 };
         return { id: pp.id, type: 'flat', name: def.name, price: def.price, quantity: pp.quantity, total: r2(def.price * pp.quantity) };
@@ -231,12 +341,13 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
       const price = hourly ? r2(svc.price * (hourly.minutes / 60) * hourly.quantity) : svc.price;
       return { id: svc.id, name: svc.name, price, hourly, pricing_parameters, extras, commercial: !!svc.commercial, discount_by_frequency: svc.discount_by_frequency !== false, discount_by_code: svc.discount_by_code !== false };
     });
-    const freq = FREQUENCIES.find((f) => f.id === Number(body.frequency_id)) || fallback?.frequency || FREQUENCIES[0];
-    const freqPct = FREQUENCIES.find((f) => f.id === freq.id)?.percent || 0;
+    const freqs = frequencyList();
+    const freq = freqs.find((f) => f.id === Number(body.frequency_id)) || fallback?.frequency || freqs[0];
+    const freqPct = freqs.find((f) => f.id === freq.id)?.percent || 0;
     const code = body.discount_code ? DISCOUNTS.find((d) => d.code.toLowerCase() === String(body.discount_code).toLowerCase()) : null;
     const p = priceBooking({ services, frequency_percent: freqPct, code, adjustment: Number(body.price_adjustment) || 0, tip: Number(body.tip) || 0, tax_percent: 13 });
     const extraMinutes = services.reduce((t, x) => t + x.extras.length * 60 + Math.max(0, (x.pricing_parameters[0]?.quantity || 1) - 1) * 30, 0);
-    const baseMinutes = services.reduce((t, x) => t + (x.hourly ? x.hourly.minutes : CATALOG.services.find((c) => c.id === x.id)?.duration || 150), 0);
+    const baseMinutes = services.reduce((t, x) => t + (x.hourly ? x.hourly.minutes : allServices().find((c) => c.id === x.id)?.duration || 150), 0);
     const discount_info = {};
     if (p.frequency_discount) discount_info.frequency_amount = p.frequency_discount;
     if (code) Object.assign(discount_info, { discount_code: code.code, discount_amount: p.code_discount });
@@ -268,6 +379,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
   }
   function findBooking(id) {
     if (created.has(id)) return applyOverlay(created.get(id));
+    if (snap) return snapById.has(id) ? applyOverlay(snapById.get(id)) : null;
     const date = dateOf(Math.floor(id / 100));
     return bookingsForDay(date).find((b) => b.id === id) || null;
   }
@@ -325,6 +437,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
   }
 
   function route(method, path, q, body) {
+    syncSnapshot();
     let m;
     // Auth
     if (method === 'POST' && /^\/(latest|v1)\/login$/.test(path)) {
@@ -334,17 +447,20 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
     if (path.startsWith('/v1/settings')) return [200, { logo: null, timezone: 'America/Toronto', currency: 'CAD' }];
 
     // Reference data
-    if (path === '/v1/staff/locations') return [200, LOCATIONS];
-    if (path === '/v1/staff/locations/count') return [200, { count: LOCATIONS.length }];
-    if (path === '/v1/booking/services' || path === '/v1/staff/services') return [200, CATALOG.services];
-    if (path === '/v1/booking/frequencies' || path === '/v1/staff/frequencies') return [200, FREQUENCIES];
+    const locations = snap ? snap.locations : LOCATIONS;
+    if (path === '/v1/staff/locations') return [200, locations];
+    if (path === '/v1/staff/locations/count') return [200, { count: locations.length }];
+    if (path === '/v1/booking/services' || path === '/v1/staff/services') return [200, catalogServices(q.get('location_id'))];
+    if (path === '/v1/booking/frequencies') return [200, snap ? snap.frequencies[q.get('location_id')] || Object.values(snap.frequencies)[0] || [] : FREQUENCIES];
+    if (path === '/v1/staff/frequencies') return [200, frequencyList()];
     if (path === '/v1/staff/discounts') {
       const text = (q.get('query') || '').toLowerCase();
       return [200, DISCOUNTS.filter((d) => !text || d.code.toLowerCase().includes(text))];
     }
+    if (path === '/v1/staff/sales_taxes' && snap) return [200, snap.sales_taxes];
     if (path === '/v1/staff/sales_taxes') return [200, [{ id: 1, effective_date: '2020-06-15', percent: 13, locations: LOCATIONS.map((l) => ({ id: l.id, name: l.name })) }]];
     if (path === '/v1/staff/booking_form/custom_fields' || path === '/v1/booking/custom_fields')
-      return [200, CATALOG.custom_fields];
+      return [200, snap ? snap.custom_fields : CATALOG.custom_fields];
 
     // Teams
     if (path === '/v1/staff/teams') return [200, page(teams, q)];
@@ -355,6 +471,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
     // Customers
     if (path === '/v1/staff/customers') return [200, page(customersFor(q), q)];
     if (path === '/v1/staff/customers/count') return [200, { count: customersFor(q).length }];
+    if ((m = path.match(/^\/v1\/staff\/customers\/(\d+)\/setup\/billing$/))) return [200, (snap && snap.cards[m[1]]) || { cards: [] }];
     if ((m = path.match(/^\/v1\/staff\/customers\/(\d+)(\/(phones|addresses|tags))?$/))) {
       const c = customers.find((x) => x.id === Number(m[1]));
       if (!c) return [404, { error: 'Not found' }];
@@ -408,9 +525,17 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
         return [200, {}];
       }
       if (sub === '/comments') return [200, []];
-      if (sub === '/recurring') return [200, []];
+      if (sub === '/recurring') {
+        // The next visits for the same customer after this one.
+        const next = snap ? [...snapById.values(), ...created.values()].filter((x) => x.user?.id === b.user?.id && x.active && x.service_date > b.service_date).sort((x, y) => x.service_date.localeCompare(y.service_date)).slice(0, 5).map(applyOverlay) : [];
+        return [200, next];
+      }
       if (!sub) return [200, b];
     }
+
+    // Quotes
+    if (path === '/v1/staff/quotes') return [200, page(filterQuotes(quotes, q), q)];
+    if (path === '/v1/staff/quotes/count') return [200, { count: filterQuotes(quotes, q).length }];
 
     // Reports
     if (path === '/v1/staff/reports/customer_feedbacks') return [200, []];
