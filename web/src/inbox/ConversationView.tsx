@@ -2,14 +2,15 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { Link, useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inbox, type Channel, type Complaint, type ConversationDetail, type Disposition, type Message } from './api';
-import { CHANNEL_ICON, CHANNEL_LABEL, ROLE_LABEL, ago, displayIdentity, drafts, fillTemplate, firstName, slaText, useInboxMe, useMeta } from './util';
-import { fmtDateTime } from '../format';
+import { CHANNEL_LABEL, ROLE_LABEL, ago, displayIdentity, drafts, fillTemplate, firstName, slaText, useInboxMe, useMeta } from './util';
+import { fmtDateTime, fmtTime } from '../format';
+import { Icon } from '../components/Icon';
 
 export interface ComposerHandle {
   insert: (text: string) => void;
 }
 
-export function ConversationView({ id, composerRef }: { id: number; composerRef?: React.Ref<ComposerHandle> }) {
+export function ConversationView({ id, composerRef, assist }: { id: number; composerRef?: React.Ref<ComposerHandle>; assist?: React.ReactNode }) {
   const queryClient = useQueryClient();
   const detail = useQuery({ queryKey: ['inbox', 'conversation', id], queryFn: () => inbox.get(id), refetchInterval: 5_000 });
   const me = useInboxMe();
@@ -47,7 +48,7 @@ export function ConversationView({ id, composerRef }: { id: number; composerRef?
             {d.contact?.roles?.map((r) => <span key={r} className={`role-badge ${r}`}>{ROLE_LABEL[r]}</span>)}
           </h2>
           <div className="muted small">
-            {CHANNEL_ICON[c.channel]} {CHANNEL_LABEL[c.channel]} · {displayIdentity(c.their_identity)} → {displayIdentity(c.our_identity)} · #{c.id}
+            <Icon name={c.channel} size={13} /> {CHANNEL_LABEL[c.channel]} · {displayIdentity(c.their_identity)} → {displayIdentity(c.our_identity)} · #{c.id}
             {c.subject && <> · <span className="clip">{c.subject}</span></>}
           </div>
         </div>
@@ -83,6 +84,7 @@ export function ConversationView({ id, composerRef }: { id: number; composerRef?
       {c.needs_match && <MatchPanel detail={d} onMatch={(contactId) => act.mutate(() => inbox.match(id, contactId))} />}
 
       <Timeline messages={d.messages} />
+      {assist}
 
       {c.status === 'done' && c.disposition && (
         <div className="done-banner small">
@@ -101,9 +103,31 @@ function Timeline({ messages }: { messages: Message[] }) {
     // Braces matter: newer browsers return a promise from scrollIntoView, which React would treat as a cleanup.
     end.current?.scrollIntoView({ block: 'end' });
   }, [messages.length]);
+  let lastDay = '';
   return (
     <div className="timeline">
       {messages.map((m) => {
+        const day = dayHeading(m.created_at);
+        const sep = day !== lastDay ? <div key={`d-${m.id}`} className="tl-day"><span>{day}</span></div> : null;
+        lastDay = day;
+        return [sep, renderMessage(m)];
+      })}
+      <div ref={end} />
+    </div>
+  );
+}
+
+function dayHeading(iso: string) {
+  const d = new Date(iso);
+  const key = (x: Date) => x.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 86_400_000);
+  if (key(d) === key(today)) return 'Today';
+  if (key(d) === key(yesterday)) return 'Yesterday';
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function renderMessage(m: Message) {
         if (m.kind === 'event') {
           return (
             <div key={m.id} className="tl-event">
@@ -114,7 +138,7 @@ function Timeline({ messages }: { messages: Message[] }) {
         if (m.kind === 'note') {
           return (
             <div key={m.id} className="tl-msg note">
-              <div className="tl-meta">🔒 Internal note · {m.author_name} · {fmtDateTime(m.created_at)}</div>
+              <div className="tl-meta"><Icon name="note" size={13} /> Internal note · {m.author_name} · {fmtTime(m.created_at)}</div>
               <div className="pre">{m.body}</div>
             </div>
           );
@@ -122,7 +146,7 @@ function Timeline({ messages }: { messages: Message[] }) {
         if (m.kind === 'call') {
           return (
             <div key={m.id} className={`tl-msg call ${m.direction}`}>
-              <div className="tl-meta">☎ {m.body} · {fmtDateTime(m.created_at)}</div>
+              <div className="tl-meta"><Icon name="voice" size={13} /> {m.body} · {fmtTime(m.created_at)}</div>
               {m.meta?.recording_url && <a href={String(m.meta.recording_url)} target="_blank" rel="noreferrer" className="small">Recording</a>}
             </div>
           );
@@ -130,19 +154,14 @@ function Timeline({ messages }: { messages: Message[] }) {
         const notSent = m.delivery_state === 'not_connected' || m.delivery_state === 'failed';
         return (
           <div key={m.id} className={`tl-msg ${m.direction}`}>
+            {m.subject && m.channel === 'email' && <div className="tl-subject">{m.subject}</div>}
+            <div className="pre">{m.body}</div>
             <div className="tl-meta">
-              {m.channel && CHANNEL_ICON[m.channel]} {m.direction === 'out' ? m.author_name || 'Agent' : displayIdentity(m.from_addr)}
-              {m.direction === 'out' && <> → {displayIdentity(m.to_addr)}</>} · {fmtDateTime(m.created_at)}
+              {m.channel && <Icon name={m.channel} size={12} />} {m.channel ? CHANNEL_LABEL[m.channel] : ''} · {m.direction === 'out' ? m.author_name || 'Agent' : displayIdentity(m.from_addr)} · {fmtTime(m.created_at)}
               {m.direction === 'out' && <span className={notSent ? 'delivery bad' : 'delivery'}> · {m.delivery_state === 'not_connected' ? 'not sent: channel not connected' : m.delivery_state === 'sandbox' ? 'sandbox: not sent to customer' : m.delivery_state}</span>}
             </div>
-            {m.subject && m.channel === 'email' && <div className="small"><b>{m.subject}</b></div>}
-            <div className="pre">{m.body}</div>
           </div>
         );
-      })}
-      <div ref={end} />
-    </div>
-  );
 }
 
 const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: boolean; onSent: () => void }>(function Composer({ detail, onSent }, ref) {
@@ -215,14 +234,14 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
   return (
     <div className={mode === 'note' ? 'composer note-mode' : 'composer'}>
       <div className="composer-tabs">
-        <button className={mode === 'reply' ? 'tab active' : 'tab'} onClick={() => setMode('reply')}>Reply</button>
-        <button className={mode === 'note' ? 'tab active' : 'tab'} onClick={() => setMode('note')}>🔒 Internal note</button>
+        {(['sms', 'email'] as const).map((ch) => (
+          <button key={ch} type="button" role="tab" aria-selected={mode === 'reply' && channel === ch} className={mode === 'reply' && channel === ch ? 'tab active' : 'tab'} onClick={() => { setMode('reply'); if (channel !== ch) { setChannel(ch); setTo(''); setFrom(''); } }}>
+            <Icon name={ch} /> {ch === 'sms' ? 'Text' : 'Email'}
+          </button>
+        ))}
+        <button type="button" role="tab" aria-selected={mode === 'note'} className={mode === 'note' ? 'tab active note' : 'tab'} onClick={() => setMode('note')}><Icon name="note" /> Internal note</button>
         {mode === 'reply' && (
           <div className="composer-route small">
-            <select value={channel} onChange={(e) => { setChannel(e.target.value as Channel); setTo(''); setFrom(''); }}>
-              <option value="sms">Text</option>
-              <option value="email">Email</option>
-            </select>
             to
             <select value={target} onChange={(e) => setTo(e.target.value)}>
               {target && !targets.some((t) => t.value === target) && <option value={target}>{displayIdentity(target)}</option>}
@@ -242,7 +261,7 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
           ref={area}
           rows={4}
           value={text}
-          placeholder={mode === 'note' ? 'Only your team sees this. @name to notify someone.' : 'Type a reply. "/" for saved replies. Ctrl+Enter to send.'}
+          placeholder={mode === 'note' ? 'Only your team sees this. @name to notify someone.' : 'Write a reply…'}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim() && !busy && !optedOut) send();
@@ -263,9 +282,11 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
       <div className="composer-foot">
         <span className="muted small">
           {mode === 'reply' && !connected && `${CHANNEL_LABEL[channel]} isn't connected yet: replies are saved, not sent.`}
-          {mode === 'reply' && channel === 'sms' && text && ` ${text.length} chars · ${segments} SMS`}
+          {mode === 'reply' && channel === 'sms' && text && <span className="mono"> {text.length} chars · {segments} text{segments === 1 ? '' : 's'}</span>}
+          {!text && <span> Type <span className="kbd">/</span> for saved replies · <span className="kbd">Ctrl</span>+<span className="kbd">Enter</span> to send</span>}
         </span>
         <button disabled={busy || !text.trim() || !!optedOut} className={mode === 'note' ? 'note-btn' : ''} onClick={send}>
+          {mode !== 'note' && <Icon name="send" />}
           {busy ? 'Saving…' : mode === 'note' ? 'Add note' : 'Send'}
         </button>
       </div>

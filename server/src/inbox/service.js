@@ -5,6 +5,7 @@ import { route } from './routing.js';
 import { addBusinessMinutes, URBANMOP_HOURS } from './hours.js';
 import { normalizeEmail, normalizeIdentity, normalizePhone, kindForChannel, isStopWord, isStartWord } from './normalize.js';
 import { sendOutbound } from './channels.js';
+import { eligibleAgents, getSettings, setStatus as setAgentStatus, workforceTick } from './workforce.js';
 
 const DAY = 24 * 3600_000;
 export const REOPEN_WINDOW = { email: 14 * DAY, sms: 2 * DAY, voice: 2 * DAY, chat: 2 * DAY };
@@ -26,11 +27,17 @@ export async function holidaySet(q) {
   return new Set(rows.map((r) => r.day));
 }
 
-async function slaDue(q, policyId, from) {
+// Opening hours for reply targets: the queue's schedule, else the default schedule.
+async function hoursFor(q, queueId) {
+  const row = await one(q, 'SELECT s.* FROM schedules s LEFT JOIN queues qu ON qu.schedule_id = s.id AND qu.id = $1 ORDER BY (qu.id IS NOT NULL) DESC, s.is_default DESC LIMIT 1', [queueId ?? null]);
+  return row ? { timeZone: row.time_zone, week: row.week } : URBANMOP_HOURS;
+}
+
+async function slaDue(q, policyId, from, queueId = null) {
   if (!policyId) return null;
   const p = await one(q, 'SELECT * FROM sla_policies WHERE id = $1', [policyId]);
   if (!p) return null;
-  return addBusinessMinutes(from, p.first_response_minutes, { hours: URBANMOP_HOURS, holidays: await holidaySet(q), businessHours: p.business_hours });
+  return addBusinessMinutes(from, p.first_response_minutes, { hours: await hoursFor(q, queueId), holidays: await holidaySet(q), businessHours: p.business_hours });
 }
 
 export async function audit(q, actorId, action, objectType, objectId, detail = {}) {
@@ -90,18 +97,12 @@ export async function addIdentity(q, contactId, kind, value, label = null) {
 // Push routing: give the conversation to the available queue member with the least open work.
 export async function autoAssign(q, conv) {
   if (!conv.queue_id || conv.owner_id || conv.status !== 'open') return conv;
-  const pick = await one(
-    q,
-    `SELECT u.id, u.name, u.email,
-            (SELECT count(*) FROM conversations c WHERE c.owner_id = u.id AND c.status = 'open') AS load
-     FROM users u JOIN queue_members m ON m.user_id = u.id
-     WHERE m.queue_id = $1 AND u.presence = 'available'
-     ORDER BY load ASC, u.presence_at ASC NULLS FIRST, u.id ASC LIMIT 1`,
-    [conv.queue_id],
-  );
+  // Queue routing mode (least busy / round robin / manual), agent status and per-channel capacity.
+  const [pick] = await eligibleAgents(q, conv);
   if (!pick) return conv;
   const updated = await one(q, 'UPDATE conversations SET owner_id = $1, updated_at = now() WHERE id = $2 AND owner_id IS NULL RETURNING *', [pick.id, conv.id]);
   if (!updated) return conv;
+  await q.query('UPDATE users SET last_assigned_at = now() WHERE id = $1', [pick.id]);
   await event(q, conv.id, `Assigned to ${pick.name || pick.email} (routing)`, { type: 'assigned', to: pick.id, by: 'routing' });
   await notify(q, pick.id, 'assigned', conv.id, `New ${conv.channel} conversation assigned to you`);
   return updated;
@@ -169,24 +170,28 @@ export async function ingestInbound(q, input, { lookup = null, now = new Date() 
     });
     action = routed.action;
     ruleName = routed.rule?.name || 'No rule matched';
-    const queue = await one(q, 'SELECT id FROM queues WHERE slug = $1', [action.queue || 'fallback']);
-    const policy = action.sla ? await one(q, 'SELECT id FROM sla_policies WHERE slug = $1', [action.sla]) : null;
+    const queue = await one(q, 'SELECT id, default_sla_id, priority_boost FROM queues WHERE slug = $1', [action.queue || 'fallback']);
+    // Rule's reply target, else the queue's default.
+    const policy = action.sla ? await one(q, 'SELECT id FROM sla_policies WHERE slug = $1', [action.sla]) : queue?.default_sla_id ? { id: queue.default_sla_id } : null;
     conv = await one(
       q,
       `INSERT INTO conversations (contact_id, needs_match, channel, our_identity, their_identity, subject, thread_key,
                                   queue_id, priority, sla_policy_id, routed_by, last_message_at, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12) RETURNING *`,
-      [contact?.id ?? null, needsMatch, channel, to, from, input.subject || null, input.thread_key || null, queue?.id ?? null, action.priority || 3, policy?.id ?? null, ruleName, at],
+      [contact?.id ?? null, needsMatch, channel, to, from, input.subject || null, input.thread_key || null, queue?.id ?? null, Math.min(5, (action.priority || 3) + (queue?.priority_boost || 0)), policy?.id ?? null, ruleName, at],
     );
     await event(q, conv.id, `Routed to ${action.queue || 'fallback'} by "${ruleName}"`, { type: 'routed', rule: ruleName, action });
     if (needsMatch) await event(q, conv.id, `This ${kind} belongs to ${contacts.length} contacts. Pick the right one.`, { type: 'needs_match', candidates: contacts.map((c) => c.id) });
   } else if (reopened) {
+    const doneAt = conv.done_at;
     conv = await one(q, "UPDATE conversations SET status = 'open', done_at = NULL, snooze_until = NULL, reopened_count = reopened_count + 1, updated_at = now() WHERE id = $1 RETURNING *", [conv.id]);
     await event(q, conv.id, 'Reopened by a new message', { type: 'reopened' });
     // The owner keeps it if they're around; otherwise it goes back to the queue.
     if (conv.owner_id) {
+      const settings = await getSettings(q);
       const owner = await one(q, 'SELECT presence FROM users WHERE id = $1', [conv.owner_id]);
-      if (owner?.presence !== 'available') conv = await one(q, 'UPDATE conversations SET owner_id = NULL WHERE id = $1 RETURNING *', [conv.id]);
+      const withinWindow = doneAt && at - new Date(doneAt) <= settings.reopen_window_hours * 3_600_000;
+      if (!settings.reopen_to_previous_owner || !withinWindow || owner?.presence !== 'available') conv = await one(q, 'UPDATE conversations SET owner_id = NULL WHERE id = $1 RETURNING *', [conv.id]);
     }
   } else if (conv.status === 'snoozed') {
     conv = await one(q, "UPDATE conversations SET status = 'open', snooze_until = NULL, updated_at = now() WHERE id = $1 RETURNING *", [conv.id]);
@@ -209,7 +214,7 @@ export async function ingestInbound(q, input, { lookup = null, now = new Date() 
 
   // 5. Status, SLA clock and preview
   const awaiting = conv.awaiting_reply_since ? new Date(conv.awaiting_reply_since) : at;
-  const due = conv.sla_due_at ? new Date(conv.sla_due_at) : await slaDue(q, conv.sla_policy_id, awaiting);
+  const due = conv.sla_due_at ? new Date(conv.sla_due_at) : await slaDue(q, conv.sla_policy_id, awaiting, conv.queue_id);
   const markDone = isNew && (action.mark_done || optChange === 'out');
   conv = await one(
     q,
@@ -328,9 +333,9 @@ export async function reply(q, user, convId, { body, channel, to, subject, from 
   await q.query(
     `UPDATE conversations SET first_response_at = COALESCE(first_response_at, now()), awaiting_reply_since = NULL,
             sla_due_at = NULL, sla_warned_at = NULL, last_message_at = now(), last_preview = $2,
-            owner_id = COALESCE(owner_id, $3), status = CASE WHEN status = 'snoozed' THEN 'open' ELSE status END, updated_at = now()
+            owner_id = CASE WHEN $4 THEN COALESCE(owner_id, $3) ELSE owner_id END, status = CASE WHEN status = 'snoozed' THEN 'open' ELSE status END, updated_at = now()
      WHERE id = $1`,
-    [convId, body.slice(0, 160), user.id],
+    [convId, body.slice(0, 160), user.id, (await getSettings(q)).assign_on_reply],
   );
   await audit(q, user.id, 'message.sent', 'conversation', convId, { message_id: msg.id, channel: ch, to: target, state: result.state });
   return msg;
@@ -343,7 +348,7 @@ export async function addNote(q, user, convId, body) {
   const handles = [...new Set([...body.matchAll(/@([\w.-]+)/g)].map((m) => m[1].toLowerCase()))];
   for (const h of handles) {
     const users = await many(q, `SELECT id FROM users WHERE lower(split_part(email,'@',1)) = $1 OR lower(replace(coalesce(name,''),' ','')) = $1 OR lower(split_part(coalesce(name,''),' ',1)) = $1`, [h]);
-    const queueMembers = await many(q, 'SELECT m.user_id AS id FROM queue_members m JOIN queues qu ON qu.id = m.queue_id WHERE qu.slug = $1', [h]);
+    const queueMembers = await many(q, 'SELECT m.user_id AS id FROM queue_agents m JOIN queues qu ON qu.id = m.queue_id WHERE qu.slug = $1', [h]);
     for (const u of [...users, ...queueMembers]) if (u.id !== user.id) await notify(q, u.id, 'mention', convId, `${user.name || user.email} mentioned you`);
   }
   await audit(q, user.id, 'note.added', 'conversation', convId, { message_id: msg.id });
@@ -379,7 +384,7 @@ export async function updateConversation(q, user, convId, patch) {
     if (!['open', 'snoozed', 'done'].includes(patch.status)) throw new InboxError(400, 'Status must be open, snoozed or done');
     if (patch.status === 'done') {
       const d = patch.disposition ?? conv.disposition;
-      const missing = DISPOSITION_FIELDS.filter((f) => !d?.[f]);
+      const missing = (await getSettings(q)).require_disposition ? DISPOSITION_FIELDS.filter((f) => !d?.[f]) : [];
       if (missing.length) throw new InboxError(422, `Pick ${missing.join(', ')} before marking done`);
       sets.push('done_at = now()', 'sla_due_at = NULL', 'awaiting_reply_since = NULL');
     }
@@ -455,26 +460,38 @@ export async function assign(q, actor, convId, userId, reason = null) {
   return target ? updated : autoAssign(q, updated);
 }
 
+// Hand an agent's open and snoozed work back to the queues.
+async function requeueWork(q, user, why) {
+  const mine = await many(q, "UPDATE conversations SET owner_id = NULL, updated_at = now() WHERE owner_id = $1 AND status IN ('open','snoozed') RETURNING *", [user.id]);
+  for (const c of mine) {
+    await event(q, c.id, `Returned to the queue: ${why}`, { type: 'assigned', from: user.id, to: null, by: 'presence' });
+    await autoAssign(q, c);
+  }
+  return mine.length;
+}
+
+// Pick up waiting work in my queues, most urgent first.
+async function pullWaiting(q, user) {
+  const waiting = await many(q, "SELECT DISTINCT c.* FROM conversations c JOIN queue_agents m ON m.queue_id = c.queue_id WHERE m.user_id = $1 AND c.owner_id IS NULL AND c.status = 'open' ORDER BY c.priority DESC, c.sla_due_at ASC NULLS LAST, c.created_at ASC LIMIT 50", [user.id]);
+  for (const c of waiting) await autoAssign(q, c);
+}
+
+export async function setStatus(q, user, statusId, by = 'self') {
+  try {
+    const r = await setAgentStatus(q, user, statusId, { by, requeue: requeueWork, pullWaiting });
+    await audit(q, user.id, 'status.changed', 'user', user.id, { status: r.status.name, by });
+    return { status_id: Number(r.status.id), status: r.status.name, presence: r.presence, requeued: r.requeued };
+  } catch (err) {
+    throw new InboxError(err.status || 400, err.message);
+  }
+}
+
+// Older clients send available | busy | offline.
 export async function setPresence(q, user, presence) {
   if (!['available', 'busy', 'offline'].includes(presence)) throw new InboxError(400, 'Presence must be available, busy or offline');
-  await q.query('UPDATE users SET presence = $2, presence_at = now() WHERE id = $1', [user.id, presence]);
-  let requeued = 0;
-  if (presence === 'offline') {
-    // Same as Kustomer today: going offline hands open and snoozed work back to the queues.
-    const mine = await many(q, "UPDATE conversations SET owner_id = NULL, updated_at = now() WHERE owner_id = $1 AND status IN ('open','snoozed') RETURNING *", [user.id]);
-    for (const c of mine) {
-      await event(q, c.id, `Returned to the queue: ${user.name || user.email} went offline`, { type: 'assigned', from: user.id, to: null, by: 'presence' });
-      await autoAssign(q, c);
-    }
-    requeued = mine.length;
-  }
-  if (presence === 'available') {
-    // Pick up waiting work in my queues.
-    const waiting = await many(q, "SELECT c.* FROM conversations c JOIN queue_members m ON m.queue_id = c.queue_id WHERE m.user_id = $1 AND c.owner_id IS NULL AND c.status = 'open' ORDER BY c.priority DESC, c.sla_due_at ASC NULLS LAST, c.created_at ASC LIMIT 50", [user.id]);
-    for (const c of waiting) await autoAssign(q, c);
-  }
-  await audit(q, user.id, 'presence.changed', 'user', user.id, { presence });
-  return { presence, requeued };
+  const s = await one(q, 'SELECT id FROM agent_statuses WHERE slug = $1', [presence]);
+  if (!s) throw new InboxError(400, 'Unknown status');
+  return setStatus(q, user, s.id);
 }
 
 // ---------- background tick: snoozes and SLA alarms ----------
@@ -485,7 +502,7 @@ export async function tick(q, now = new Date()) {
     await event(q, c.id, 'Snooze ended', { type: 'woken' });
     // Time spent snoozed doesn't count against the reply target.
     if (c.awaiting_reply_since && c.sla_policy_id) {
-      await q.query('UPDATE conversations SET sla_due_at = $2, sla_breached_at = NULL, sla_warned_at = NULL WHERE id = $1', [c.id, await slaDue(q, c.sla_policy_id, now)]);
+      await q.query('UPDATE conversations SET sla_due_at = $2, sla_breached_at = NULL, sla_warned_at = NULL WHERE id = $1', [c.id, await slaDue(q, c.sla_policy_id, now, c.queue_id)]);
     }
     if (c.owner_id) await notify(q, c.owner_id, 'reply', c.id, 'A snoozed conversation is back');
     else await autoAssign(q, c);
@@ -500,7 +517,7 @@ export async function tick(q, now = new Date()) {
     [now],
   );
   for (const c of warn) {
-    const targets = c.owner_id ? [{ id: c.owner_id }] : await many(q, 'SELECT user_id AS id FROM queue_members WHERE queue_id = $1', [c.queue_id]);
+    const targets = c.owner_id ? [{ id: c.owner_id }] : await many(q, 'SELECT user_id AS id FROM queue_agents WHERE queue_id = $1', [c.queue_id]);
     for (const t of targets) await notify(q, t.id, 'sla_warning', c.id, `Reply due ${c.owner_id ? '' : 'in your queue '}soon`);
   }
 
@@ -510,5 +527,6 @@ export async function tick(q, now = new Date()) {
     const targets = new Set([c.owner_id, ...(await supervisors(q)).map((s) => s.id)].filter(Boolean));
     for (const id of targets) await notify(q, id, 'sla_breach', c.id, 'A reply target was missed');
   }
-  return { woke: woke.length, warned: warn.length, breached: breached.length };
+  const wf = await workforceTick(q, { now, notify, event, autoAssign, requeue: requeueWork, supervisors });
+  return { woke: woke.length, warned: warn.length, breached: breached.length, ...wf };
 }
