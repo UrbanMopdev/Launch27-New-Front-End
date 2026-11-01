@@ -15,7 +15,7 @@ const FORWARD_HEADERS = ['accept', 'content-type'];
 
 export function createApp(
   config,
-  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {} } = {},
+  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null } = {},
 ) {
   const app = express();
   // Behind Railway's (or any) HTTPS proxy: trust X-Forwarded-* so secure cookies work.
@@ -147,8 +147,29 @@ export function createApp(
     res.status(upstream.status);
     const contentType = upstream.headers.get('content-type');
     if (contentType) res.type(contentType);
-    res.send(Buffer.from(await upstream.arrayBuffer()));
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    res.send(buf);
+    // A booking made, changed or cancelled here: recalculate that customer's segment now.
+    if (segments && upstream.ok && req.method !== 'GET' && req.path.startsWith('/v1/staff/bookings')) {
+      refreshAfterWrite(session.bearer, req.path, buf).catch((err) => log.warn('segment refresh after booking change failed', { error: err.message }));
+    }
   });
+
+  async function refreshAfterWrite(bearer, pathName, buf) {
+    let body = null;
+    try {
+      body = JSON.parse(buf.toString('utf8'));
+    } catch {
+      body = null;
+    }
+    let cid = body?.user?.id ?? body?.customer_id ?? null;
+    const id = pathName.match(/^\/v1\/staff\/bookings\/(\d+)/)?.[1];
+    if (!cid && id) {
+      const res = await fetchImpl(`${config.l27BaseUrl}/v1/staff/bookings/${id}`, { headers: { authorization: `Bearer ${bearer}`, accept: 'application/json' }, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+      if (res.ok) cid = (await res.json())?.user?.id ?? null;
+    }
+    if (cid) await segments.refreshCustomer(bearer, cid);
+  }
 
   // QA only: receive an anonymized copy of production data from production.
   if (config.qaSnapshotReceive && qa.store) {
@@ -168,7 +189,7 @@ export function createApp(
   // The support workspace (conversations, contacts, routing). Needs a database.
   if (db) {
     const l27 = createL27Client({ baseUrl: config.l27BaseUrl, fetchImpl });
-    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa }));
+    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments }));
   }
 
   // Last-resort error handler: log it (without personal data), answer generically.

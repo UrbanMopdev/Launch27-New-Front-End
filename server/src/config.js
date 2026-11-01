@@ -80,6 +80,10 @@ export function loadConfig(env = process.env) {
     qaSnapshotToken: env.QA_SNAPSHOT_TOKEN || null,
     qaSnapshotUrl: isProd ? env.QA_SNAPSHOT_URL || null : null,
     qaSnapshotReceive: !isProd && !!env.QA_SNAPSHOT_TOKEN,
+    // Customer segments: the nightly update logs in as this read-only Launch27 staff user
+    // (production only; dev and QA use their synthetic Launch27).
+    l27SyncEmail: l27Mode === 'live' ? env.L27_SYNC_EMAIL || null : null,
+    l27SyncPassword: l27Mode === 'live' ? env.L27_SYNC_PASSWORD || null : null,
     warnings,
   };
 }

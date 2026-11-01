@@ -11,6 +11,8 @@ import { CallButton } from '../components/CallButton';
 import { insights, rhythmLabel, summarySentence, visitStatus, type Insights, type Stage } from '../lib/customer360';
 import { inbox, type Contact } from './api';
 import { ago, displayIdentity } from './util';
+import { segmentsApi, type CustomerSegment } from '../segments/api';
+import { SEGMENT_LABEL, SegmentPill, TraitTag, shortDate } from '../segments/ui';
 
 const STALE = 15 * 60_000;
 const TZ = 'America/New_York';
@@ -72,6 +74,7 @@ const wholeMoney = (n: number) => fmtMoney(n).replace(/\.\d\d$/, '');
 
 function CustomerView({ cid, contact, conversationId, pinnedBookingId, onInsert, full, actions }: Props & { cid: number }) {
   const data = useCustomerData(cid, contact.id);
+  const seg = useQuery({ queryKey: ['segments', 'customer', cid], queryFn: () => segmentsApi.customer(cid), retry: false, staleTime: 60_000 });
   const c = data.customer.data;
   const ins = useMemo(() => insights(data.past.data || [], data.upcoming.data || []), [data.past.data, data.upcoming.data]);
   const loading = data.past.isLoading || data.upcoming.isLoading;
@@ -142,7 +145,14 @@ function CustomerView({ cid, contact, conversationId, pinnedBookingId, onInsert,
               <h1>{name || 'Loading…'}</h1>
               {c?.company_name && <span className="chip">{c.company_name}</span>}
               {happyState && <span className={happyState.cls}>{happyState.label}</span>}
-              {(ins.overdue || ins.unhappyRecently) && <span className="chip warn">At risk</span>}
+              {seg.data ? (
+                <Link to={`/customers?segment=${seg.data.segment}`} className="seg-pill-link">
+                  <SegmentPill segment={seg.data.segment} suffix={seg.data.segment === 'risk' && seg.data.days_left !== null ? `${seg.data.days_left} days left` : undefined} />
+                </Link>
+              ) : (
+                (ins.overdue || ins.unhappyRecently) && <span className="chip warn">At risk</span>
+              )}
+              {seg.data?.traits.map((t) => <TraitTag key={t} trait={t} />)}
               {c && c.active === false && <span className="chip neg">Inactive</span>}
             </div>
             {!loading && (
@@ -215,6 +225,7 @@ function CustomerView({ cid, contact, conversationId, pinnedBookingId, onInsert,
               </section>
             )
           )}
+          {seg.data && <Journey seg={seg.data} />}
           <Story past={data.past.data || []} contact={data.contactFull.data} customer={c} loading={data.past.isLoading} currentId={conversationId} />
         </div>
 
@@ -842,5 +853,32 @@ function LinkToLaunch27({ contact }: { contact: Contact }) {
         <ConversationHistory contact={contact} />
       </section>
     </div>
+  );
+}
+
+// Segment history: how this customer moved between segments.
+function Journey({ seg }: { seg: CustomerSegment }) {
+  const steps = seg.history.filter((h) => h.to_segment);
+  const estimatedAny = steps.some((h) => h.estimated);
+  return (
+    <section className="card seg-journey">
+      <div className="seg-journey-head">
+        <h2>Journey with us</h2>
+        <span className="muted small">{SEGMENT_LABEL[seg.segment]} since {shortDate(seg.since)} · {seg.suggestion}</span>
+      </div>
+      {steps.length === 0 ? (
+        <p className="muted small">No moves between segments yet.</p>
+      ) : (
+        <ol className="seg-steps">
+          {steps.map((h, i) => (
+            <li key={`${h.changed_on}-${i}`}>
+              <SegmentPill segment={h.to_segment} />
+              <span className="muted small">{shortDate(h.changed_on)}{h.estimated ? '*' : ''}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {estimatedAny && <p className="muted small">* Rebuilt from booking history (month ends), so the date is approximate.</p>}
+    </section>
   );
 }

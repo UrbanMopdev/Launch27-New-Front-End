@@ -101,6 +101,16 @@ its own `SESSION_SECRET`; never copy one between environments.
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | `${{Postgres.DATABASE_URL}}` | `${{Postgres.DATABASE_URL}}` |
 | `L27_ALLOW_WRITES` | — | — | true when ready |
 | `LOG_LEVEL` | debug | info | info |
+| `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` | — (ignored) | — (ignored) | read-only staff login for the nightly segment update |
+
+## Customer segments: when they update
+
+- Nightly after 3 am Toronto, and once at boot if they have never run. The first run also
+  rebuilds the past 12 months (month ends) from booking history, marked as estimated.
+- Right away for one customer when a booking is made, changed or cancelled through this app.
+- On demand: admins click "Update now" on the Customers page (uses their own login).
+- Dev and QA run the same sync against their own synthetic Launch27 (QA: the anonymized
+  copy when one is loaded), so the numbers there are not real.
 
 ## Local development
 

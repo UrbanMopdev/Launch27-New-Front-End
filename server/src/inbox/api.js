@@ -25,7 +25,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {} }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -762,6 +762,50 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     log('error', 'inbox request failed', { path: req.path, error: err.message, stack: err.stack });
     res.status(500).json({ error: 'Something went wrong on the server' });
   });
+
+  // ---------- customer segments ----------
+  if (segments) {
+    const segErr = (fn) => wrap(async (req, res) => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    r.get('/segments/summary', segErr(async (req, res) => res.json(await segments.summary({ bearer: req.bearer }))));
+    r.get('/segments/customers', segErr(async (req, res) => {
+      const traits = String(req.query.traits || '').split(',').map((t) => t.trim()).filter(Boolean);
+      res.json(await segments.customers({ segment: req.query.segment || null, traits, q: req.query.q || null, limit: req.query.limit, offset: req.query.offset }));
+    }));
+    r.get('/segments/customer/:id', segErr(async (req, res) => {
+      const row = await segments.customer(Number(req.params.id));
+      if (!row) return res.status(404).json({ error: 'No segment for this customer yet' });
+      res.json(row);
+    }));
+    r.post('/segments/customer/:id/outcome', segErr(async (req, res) => {
+      await segments.logOutcome(Number(req.params.id), req.body || {}, req.user.id);
+      res.status(204).end();
+    }));
+    r.get('/segments/stats/:segment', segErr(async (req, res) => res.json(await segments.segmentStats(req.params.segment))));
+    r.get('/segments/trends', segErr(async (req, res) => res.json(await segments.trends({ period: req.query.period, from: req.query.from, to: req.query.to }))));
+    // Admins: recalculate now with their own Launch27 login (read-only calls).
+    r.post('/segments/refresh', needRole('admin'), segErr(async (req, res) => {
+      if (segments.isRunning()) return res.status(202).json({ running: true });
+      segments.start({ bearer: req.bearer, trigger: 'manual' });
+      await svc.audit(db, req.user.id, 'segments.refresh', 'workspace', 'segments', {});
+      res.status(202).json({ running: true });
+    }));
+    r.put('/segments/settings', needRole('admin'), segErr(async (req, res) => {
+      try {
+        const value = await segments.saveSettings(req.body || {});
+        await svc.audit(db, req.user.id, 'segments.settings', 'workspace', 'segments', value);
+        res.json(value);
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    }));
+  }
 
   return r;
 }

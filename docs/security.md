@@ -53,6 +53,17 @@ and QA"). Personal fields are replaced before the copy leaves production, it is 
 on both sides, and QA never receives Launch27 credentials. The shared
 `QA_SNAPSHOT_TOKEN` only lets production write a copy into QA; it reads nothing.
 
+## Customer segments
+
+The segment sync (`server/src/segments/`) stores, in each environment's own Postgres, every
+customer's id, name, email, phone, city, segment, 12-month spend and segment history, plus
+staff call outcomes. It is the first production table holding customer details beyond the
+inbox, so **database backups must be on before relying on it**. It only reads from Launch27.
+In production the nightly run logs in as `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD`: use a
+dedicated Launch27 staff user with the least access Launch27 allows (it needs to list
+bookings and count customers). Dev and QA never use these (they sync from their own
+synthetic Launch27 or the anonymized copy).
+
 ## Logging without personal data
 
 `server/src/log.js` writes JSON lines and redacts before writing:

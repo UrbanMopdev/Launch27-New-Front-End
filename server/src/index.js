@@ -11,6 +11,7 @@ import { SessionStore } from './sessions.js';
 import { seed } from './inbox/seed.js';
 import { loadSampleInbox } from './sample/inbox.js';
 import { tick } from './inbox/service.js';
+import { createSegments } from './segments/service.js';
 
 const config = loadConfig();
 const log = createLogger({ level: config.logLevel, base: { env: config.appEnv, version: config.version } });
@@ -31,8 +32,9 @@ const qaStore = config.l27Mode === 'mock' && !config.production ? createQaStore(
 if (qaStore) await qaStore.load();
 const fetchImpl = config.l27Mode === 'mock' ? createMockLaunch27({ password: config.mockPassword, snapshot: () => qaStore?.current() || null }) : fetch;
 const qaSender = createQaSender({ config, fetchImpl, log });
+const segments = createSegments({ db, config, fetchImpl, log });
 const jobs = { consecutiveFailures: 0, lastSuccessAt: null, lastError: null };
-const app = createApp(config, { db, sessions, fetchImpl, log, jobs, qa: { store: qaStore, sender: qaSender } });
+const app = createApp(config, { db, sessions, fetchImpl, log, jobs, qa: { store: qaStore, sender: qaSender }, segments });
 if (config.sampleData && config.l27Mode === 'mock') {
   await loadSampleInbox(db, { fetchImpl, baseUrl: config.l27BaseUrl, log: (level, msg, fields) => log[level](msg, fields) }).catch((err) => log.error('sample inbox failed', { error: err.message }));
 }
@@ -51,6 +53,7 @@ const worker = setInterval(async () => {
   try {
     await db.tx((q) => tick(q));
     await sessions.purgeExpired();
+    await segments.maybeRun();
     if (jobs.consecutiveFailures) log.info('worker recovered', { after: jobs.consecutiveFailures });
     jobs.consecutiveFailures = 0;
     jobs.lastSuccessAt = new Date().toISOString();
