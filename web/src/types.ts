@@ -104,6 +104,53 @@ export interface Booking {
   [key: string]: unknown;
 }
 
+export interface BookingDraftService {
+  id: number;
+  hourly?: { quantity: number; minutes: number } | null;
+  extras?: { id: number; quantity: number; recurring?: boolean | null }[];
+  pricing_parameters?: { id: number; quantity: number }[];
+}
+
+// A quote's booking_draft is a pre-filled POST /v1/staff/bookings body
+// (see BookingForm.tsx), missing only a customer id and a visit date/time.
+export interface BookingDraft {
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  location_id?: number;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  phone?: string;
+  sms_notifications?: boolean;
+  frequency_id?: number;
+  services?: BookingDraftService[];
+  discount_code?: string | null;
+  price_adjustment_recurring?: boolean;
+  tip_recurring?: boolean;
+  final_price?: number;
+  payment_method?: string;
+  arrival_window?: number;
+  custom_fields?: { id: number; values?: { id: number; other?: string | null }[] }[];
+}
+
+// GET /v1/staff/quotes — a quote request submitted on the public quote form.
+export interface Quote {
+  id: number;
+  digest?: string;
+  name?: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  expires_at?: string;
+  created_at?: string;
+  created_by?: Named;
+  booking_draft?: BookingDraft;
+  booking_ids?: number[] | null;
+}
+
 export interface Tag {
   id: number;
   name: string;
