@@ -24,6 +24,9 @@ export interface Service {
   price?: number;
   extras?: { id: number; name: string; quantity: number; price: number; total: number }[];
   pricing_parameters?: { id: number; name: string; quantity: number; price: number; total: number }[];
+  hourly?: { title?: string; quantity: number; minutes: number };
+  discount_by_frequency?: boolean;
+  discount_by_code?: boolean;
 }
 
 export interface Charge {
@@ -87,6 +90,7 @@ export interface Booking {
     tax?: { before_tax?: number; tax_percent?: number; tax_amount?: number; after_tax?: number };
   };
   payment_method_info?: { code?: string; text?: string };
+  discount_info?: { frequency_amount?: number; discount_amount?: number; discount_code?: string; giftcard_amount?: number };
   actions?: Record<string, boolean>;
   time_tracking?: TimeTracking[];
   charges?: {

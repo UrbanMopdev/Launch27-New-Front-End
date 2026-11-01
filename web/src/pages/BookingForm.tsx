@@ -7,6 +7,7 @@ import { Icon } from '../components/Icon';
 import { Avatar } from '../inbox/Customer360';
 import { cleanerAffinity } from '../lib/customer360';
 import type { RatedBooking } from '../lib/feedbackModel';
+import { priceBooking, type PriceService } from '../lib/pricing';
 import { useActiveTeams, useCanWrite, useLocations } from '../hooks';
 import type { Booking, Customer } from '../types';
 import { fmtMoney, TIMEZONE } from '../format';
@@ -22,8 +23,10 @@ interface BookableService {
   name: string;
   price: number;
   hourly?: { quantity_minimum: number; quantity_maximum: number; minutes_minimum: number; minutes_maximum: number; half_hour_increments: boolean };
-  extras: { id: number; name: string; price: number; quantity_based: boolean }[];
+  extras: { id: number; name: string; price: number; quantity_based: boolean; discount_by_frequency?: boolean; discount_by_code?: boolean }[];
   pricing_parameters: { id: number; name: string; price: number; quantity_minimum: number; quantity_maximum: number }[];
+  discount_by_frequency?: boolean;
+  discount_by_code?: boolean;
 }
 
 interface FormField {
@@ -149,6 +152,9 @@ function fromBooking(b: Booking): FormState {
     customer_notes: b.customer_notes || '',
     staff_notes: b.staff_notes || '',
     price_adjustment_comment: b.price_adjustment_comment || '',
+    // Keep what Launch27 already has, or saving the edit would drop it.
+    price_adjustment: b.summary?.adjustment ? String(b.summary.adjustment) : '',
+    discount_code: b.discount_info?.discount_code || '',
     tip: b.summary?.tip ? String(b.summary.tip) : '',
     sms_notifications: (b as { sms_notifications?: boolean }).sms_notifications ?? true,
     custom,
@@ -216,7 +222,7 @@ export function BookingFormPage() {
   });
   const frequencies = useQuery({
     queryKey: ['booking-frequencies', loc],
-    queryFn: () => l27<{ id: number; name: string }[]>('/v1/booking/frequencies', { location_id: loc! }),
+    queryFn: () => l27<{ id: number; name: string; percent?: number }[]>('/v1/booking/frequencies', { location_id: loc! }),
     enabled: !!loc,
   });
   useEffect(() => {
@@ -231,6 +237,22 @@ export function BookingFormPage() {
     select: (list) => list.filter((f) => f.active && f.control_type !== 'plain_text' && (f.value_required || stripTags(f.label || ''))),
   });
   const teams = useActiveTeams();
+  const salesTaxes = useQuery({ queryKey: ['sales-taxes'], queryFn: () => l27<SalesTax[]>('/v1/staff/sales_taxes'), staleTime: 60 * 60_000 });
+  const [codeQuery, setCodeQuery] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setCodeQuery(form.discount_code.trim()), 400);
+    return () => clearTimeout(t);
+  }, [form.discount_code]);
+  const codeLookup = useQuery({
+    queryKey: ['discount-code', codeQuery.toLowerCase()],
+    queryFn: async () => {
+      const found = await l27<{ code: string; percent: number; amount: number }[]>('/v1/staff/discounts', { query: codeQuery, limit: 10 });
+      const d = (found || []).find((x) => x.code.toLowerCase() === codeQuery.toLowerCase());
+      return d ? { percent: d.percent || 0, amount: d.amount || 0 } : null;
+    },
+    enabled: !!codeQuery,
+    staleTime: 5 * 60_000,
+  });
   const customerId = form.customerId;
   const customer = useQuery({
     queryKey: ['customer', customerId],
@@ -333,8 +355,17 @@ export function BookingFormPage() {
 
   const teamsForLocation = (teams.data || []).filter((t) => !loc || !t.locations?.length || t.locations.some((l) => l.id === loc));
   const recurring = editing && existing.data?.frequency?.name && !/one time/i.test(existing.data.frequency.name);
-  const estimate = estimateTotal(form.services, serviceById);
-  const freqName = frequencies.data?.find((f) => f.id === form.frequency_id)?.name;
+  const freq = frequencies.data?.find((f) => f.id === form.frequency_id);
+  const freqName = freq?.name;
+  const taxPercent = taxForLocation(salesTaxes.data, loc);
+  const price = priceBooking({
+    services: form.services.map((line) => toPriceService(line, serviceById.get(line.id))),
+    frequency_percent: freq?.percent || 0,
+    code: codeLookup.data || null,
+    adjustment: parseFloat(form.price_adjustment) || 0,
+    tip: parseFloat(form.tip) || 0,
+    tax_percent: taxPercent,
+  });
   const chosenTeams = (teams.data || []).filter((t) => form.teams.includes(t.id));
   const missing = [!form.customerId && !(form.first_name && form.email) && 'customer', !form.services.length && 'service', !form.date && 'date'].filter(Boolean) as string[];
 
@@ -551,6 +582,11 @@ export function BookingFormPage() {
               <label>
                 Discount code
                 <input value={form.discount_code} onChange={(e) => set({ discount_code: e.target.value })} />
+                {form.discount_code.trim() && (
+                  <span className={codeLookup.data ? 'small ok' : codeLookup.isFetching ? 'small muted' : 'small warn'}>
+                    {codeLookup.isFetching ? 'Checking…' : codeLookup.data ? (codeLookup.data.percent ? `${codeLookup.data.percent}% off, after the frequency discount` : `${fmtMoney(codeLookup.data.amount)} off`) : 'No code with that name'}
+                  </span>
+                )}
               </label>
               <label>
                 Tip
@@ -580,24 +616,27 @@ export function BookingFormPage() {
             <SummaryRow icon="home" label={form.address ? [form.address, form.city].filter(Boolean).join(', ') : null} empty="No address" />
             <SummaryRow icon="user" label={chosenTeams.length ? chosenTeams.map((x) => x.title).join(', ') : null} empty="No cleaner (assign later)" />
             <div className="bf-sum-lines">
-              {form.services.map((line, i) => {
-                const sv = serviceById.get(line.id);
-                return (
-                  <div key={i} className="rc-line">
-                    <span>{sv?.name || `Service #${line.id}`}</span>
-                    <span className="mono">{fmtMoney(lineEstimate(line, sv))}</span>
-                  </div>
-                );
-              })}
               {!form.services.length && <div className="muted small">No service yet</div>}
+              {!!form.services.length && (
+                <>
+                  <SumLine label={serviceById.get(form.services[0].id)?.name || 'Service'} value={price.services} strong />
+                  {!!price.pricing_parameters && <SumLine label="Rooms" value={price.pricing_parameters} />}
+                  {!!price.extras && <SumLine label="Extras" value={price.extras} />}
+                  <SumLine label="Subtotal" value={price.subtotal} sep />
+                  {!!price.frequency_discount && <SumLine label={`${freqName?.replace(/\s*-\s*\d+%\s*off/i, '') || 'Frequency'} discount (${freq?.percent}%)`} value={-price.frequency_discount} />}
+                  {!!price.code_discount && <SumLine label={`Code ${form.discount_code.toUpperCase()}`} value={-price.code_discount} />}
+                  {!!price.adjustment && <SumLine label="Adjustment" value={price.adjustment} />}
+                  <SumLine label="Before tax" value={price.revenue} sep />
+                  <SumLine label={`HST ${taxPercent}%`} value={price.tax} />
+                  {!!price.tip && <SumLine label="Tip" value={price.tip} />}
+                  <div className="rc-line total">
+                    <span>Total</span>
+                    <span className="mono">{fmtMoney(price.total)}</span>
+                  </div>
+                </>
+              )}
             </div>
-            {!!form.services.length && (
-              <div className="rc-line total">
-                <span>Estimate</span>
-                <span className="mono">{fmtMoney(estimate)}</span>
-              </div>
-            )}
-            <p className="muted small">Before tax and discounts. Launch27 sets the final price when you save.</p>
+            <p className="muted small">Worked out the way Launch27 prices bookings. Launch27 confirms the final price when you save.</p>
             <button type="submit" disabled={saving}>
               {saving ? 'Saving…' : editing ? 'Save changes' : 'Create booking'}
             </button>
@@ -696,18 +735,38 @@ function quickDates() {
   return out;
 }
 
-// Rough price from the service's list prices, so the office sees a number while building
-// the booking. Launch27 prices it for real on save (taxes, discounts, hourly rules).
-export function lineEstimate(line: ServiceLine, svc?: BookableService) {
-  if (!svc) return 0;
-  let total = svc.hourly && line.hourly ? svc.price * (line.hourly.minutes / 60) * line.hourly.quantity : svc.price;
-  for (const p of svc.pricing_parameters) total += (line.pricing[p.id] ?? 0) * (p.price || 0);
-  for (const x of svc.extras) total += (line.extras[x.id] || 0) * (x.price || 0);
-  return Math.round(total * 100) / 100;
+type SalesTax = { percent: number; effective_date?: string; locations?: { id: number }[] };
+
+// The sales tax in effect for a location today (13% HST in Ontario if none is set up).
+function taxForLocation(taxes: SalesTax[] | undefined, locationId: number | null) {
+  const today = new Date().toISOString().slice(0, 10);
+  const match = (taxes || [])
+    .filter((t) => (!t.effective_date || t.effective_date <= today) && (!t.locations?.length || t.locations.some((l) => l.id === locationId)))
+    .sort((a, b) => String(b.effective_date).localeCompare(String(a.effective_date)))[0];
+  return match ? match.percent : 13;
 }
 
-export function estimateTotal(lines: ServiceLine[], byId: Map<number, BookableService>) {
-  return Math.round(lines.reduce((s, l) => s + lineEstimate(l, byId.get(l.id)), 0) * 100) / 100;
+// One form service line in the shape the Launch27 price calculation takes.
+function toPriceService(line: ServiceLine, svc?: BookableService): PriceService {
+  if (!svc) return { price: 0 };
+  return {
+    price: svc.price,
+    hourlyRate: !!svc.hourly,
+    hourly: svc.hourly && line.hourly ? line.hourly : null,
+    discount_by_frequency: svc.discount_by_frequency,
+    discount_by_code: svc.discount_by_code,
+    pricing_parameters: svc.pricing_parameters.map((p) => ({ price: p.price, quantity: line.pricing[p.id] ?? 0 })),
+    extras: svc.extras.filter((x) => (line.extras[x.id] || 0) > 0).map((x) => ({ price: x.price, quantity: line.extras[x.id], discount_by_frequency: x.discount_by_frequency, discount_by_code: x.discount_by_code })),
+  };
+}
+
+function SumLine({ label, value, strong, sep }: { label: string; value: number; strong?: boolean; sep?: boolean }) {
+  return (
+    <div className={`rc-line${strong ? ' main' : ' sub'}${sep ? ' sep' : ''}`}>
+      <span>{label}</span>
+      <span className="mono">{fmtMoney(value)}</span>
+    </div>
+  );
 }
 
 function CustomerPicker({ form, set }: { form: FormState; set: (p: Partial<FormState>) => void }) {

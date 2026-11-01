@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { priceBooking, r2 } from './pricing.js';
 // Synthetic, in-process stand-in for the Launch27 API (L27_MODE=mock).
 //
 // Development and QA run against this instead of the real tenant: Launch27 holds real
@@ -29,6 +30,11 @@ const SERVICES = [
 ];
 // Real service catalog (services, extras, prices, booking questions) so dev/QA forms match
 // production. Business configuration only; see catalog.json.
+// Two sample discount codes for trying the booking form in dev/QA.
+const DISCOUNTS = [
+  { id: 1, code: 'WELCOME10', percent: 10, amount: 0, mode: 'booking' },
+  { id: 2, code: 'SAVE25', percent: 0, amount: 25, mode: 'booking' },
+];
 const CATALOG = JSON.parse(readFileSync(new URL('./catalog.json', import.meta.url), 'utf8'));
 const EXTRAS = CATALOG.services.find((x) => x.id === 1180).extras;
 const FREQUENCIES = [
@@ -211,35 +217,48 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
   // frequency discount, 13% HST.
   function pricedFromBody(body, fallback) {
     if (!Array.isArray(body?.services) || !body.services.length) return {};
-    const services = body.services.map((line) => {
+    const services = body.services.slice(0, 1).map((line) => {
       const svc = CATALOG.services.find((x) => x.id === Number(line.id)) || { id: line.id, name: `Service ${line.id}`, price: 0, extras: [], pricing_parameters: [] };
-      const hours = line.hourly ? (line.hourly.minutes / 60) * (line.hourly.quantity || 1) : null;
       const pricing_parameters = (line.pricing_parameters || []).map((pp) => {
         const def = svc.pricing_parameters.find((x) => x.id === pp.id) || { name: `Item ${pp.id}`, price: 0 };
-        return { id: pp.id, name: def.name, price: def.price, quantity: pp.quantity, total: Math.round(def.price * pp.quantity * 100) / 100 };
+        return { id: pp.id, type: 'flat', name: def.name, price: def.price, quantity: pp.quantity, total: r2(def.price * pp.quantity) };
       });
       const extras = (line.extras || []).map((x) => {
         const def = svc.extras.find((e) => e.id === x.id) || { name: `Extra ${x.id}`, price: 0 };
-        return { id: x.id, name: def.name, price: def.price, quantity: x.quantity, total: Math.round(def.price * x.quantity * 100) / 100 };
+        return { id: x.id, name: def.name, price: def.price, quantity: x.quantity, total: r2(def.price * x.quantity), quantity_based: !!def.quantity_based, recurring: !!def.recurring, discount_by_frequency: def.discount_by_frequency !== false, discount_by_code: def.discount_by_code !== false };
       });
-      return { id: svc.id, name: svc.name, price: hours ? Math.round(svc.price * hours * 100) / 100 : svc.price, hourly: line.hourly || undefined, pricing_parameters, extras };
+      const hourly = line.hourly ? { title: 'Cleaner', quantity: line.hourly.quantity || 1, minutes: line.hourly.minutes } : undefined;
+      const price = hourly ? r2(svc.price * (hourly.minutes / 60) * hourly.quantity) : svc.price;
+      return { id: svc.id, name: svc.name, price, hourly, pricing_parameters, extras, commercial: !!svc.commercial, discount_by_frequency: svc.discount_by_frequency !== false, discount_by_code: svc.discount_by_code !== false };
     });
-    const subtotal = services.reduce((t, x) => t + x.price + x.pricing_parameters.reduce((a, p) => a + p.total, 0) + x.extras.reduce((a, e) => a + e.total, 0), 0);
     const freq = FREQUENCIES.find((f) => f.id === Number(body.frequency_id)) || fallback?.frequency || FREQUENCIES[0];
-    const discount = Math.round(subtotal * ((freq.percent || 0) / 100) * 100) / 100;
-    const adjustment = Number(body.price_adjustment) || 0;
-    const revenue = Math.round((subtotal - discount + adjustment) * 100) / 100;
-    const tax = Math.round(revenue * 0.13 * 100) / 100;
-    const tip = Number(body.tip) || 0;
+    const freqPct = FREQUENCIES.find((f) => f.id === freq.id)?.percent || 0;
+    const code = body.discount_code ? DISCOUNTS.find((d) => d.code.toLowerCase() === String(body.discount_code).toLowerCase()) : null;
+    const p = priceBooking({ services, frequency_percent: freqPct, code, adjustment: Number(body.price_adjustment) || 0, tip: Number(body.tip) || 0, tax_percent: 13 });
     const extraMinutes = services.reduce((t, x) => t + x.extras.length * 60 + Math.max(0, (x.pricing_parameters[0]?.quantity || 1) - 1) * 30, 0);
     const baseMinutes = services.reduce((t, x) => t + (x.hourly ? x.hourly.minutes : CATALOG.services.find((c) => c.id === x.id)?.duration || 150), 0);
+    const discount_info = {};
+    if (p.frequency_discount) discount_info.frequency_amount = p.frequency_discount;
+    if (code) Object.assign(discount_info, { discount_code: code.code, discount_amount: p.code_discount });
     return {
       services,
       frequency: { id: freq.id, name: freq.name },
       arrival_window: Number(body.arrival_window) || 60,
       duration: baseMinutes + extraMinutes,
       price_adjustment_comment: body.price_adjustment_comment || null,
-      summary: { services: subtotal, discount, adjustment, revenue, tax: { before_tax: revenue, tax_percent: 13, tax_amount: tax, after_tax: revenue + tax }, tip, total: Math.round((revenue + tax + tip) * 100) / 100 },
+      discount_info,
+      summary: {
+        services: p.services,
+        pricing_parameters: p.pricing_parameters,
+        extras: p.extras,
+        discount: r2(p.frequency_discount + p.code_discount),
+        adjustment: p.adjustment,
+        adjustment_after_tax: false,
+        revenue: p.revenue,
+        tax: { before_tax: p.revenue, tax_percent: 13, tax_amount: p.tax, after_tax: r2(p.revenue + p.tax) },
+        tip: p.tip,
+        total: p.total,
+      },
     };
   }
 
@@ -319,6 +338,11 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now() }
     if (path === '/v1/staff/locations/count') return [200, { count: LOCATIONS.length }];
     if (path === '/v1/booking/services' || path === '/v1/staff/services') return [200, CATALOG.services];
     if (path === '/v1/booking/frequencies' || path === '/v1/staff/frequencies') return [200, FREQUENCIES];
+    if (path === '/v1/staff/discounts') {
+      const text = (q.get('query') || '').toLowerCase();
+      return [200, DISCOUNTS.filter((d) => !text || d.code.toLowerCase().includes(text))];
+    }
+    if (path === '/v1/staff/sales_taxes') return [200, [{ id: 1, effective_date: '2020-06-15', percent: 13, locations: LOCATIONS.map((l) => ({ id: l.id, name: l.name })) }]];
     if (path === '/v1/staff/booking_form/custom_fields' || path === '/v1/booking/custom_fields')
       return [200, CATALOG.custom_fields];
 

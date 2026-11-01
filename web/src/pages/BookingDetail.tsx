@@ -61,8 +61,15 @@ export function BookingDetailPage() {
     }
   };
 
+  const di: NonNullable<Booking['discount_info']> = b.discount_info || {};
+  const subtotal = r2((s.services || 0) + ((s as { pricing_parameters?: number }).pricing_parameters || 0) + (s.extras || 0));
   const items = (b.services || []).flatMap((svc) => [
-    { key: `s${svc.id}`, label: svc.name, amount: svc.price, main: true },
+    {
+      key: `s${svc.id}`,
+      label: svc.hourly ? `${svc.name} · ${hoursLabel(svc.hourly.minutes)} × ${svc.hourly.quantity} cleaner${svc.hourly.quantity === 1 ? '' : 's'}` : svc.name,
+      amount: svc.price,
+      main: true,
+    },
     ...[...(svc.pricing_parameters || []), ...(svc.extras || [])].filter((i) => i.quantity > 0).map((i) => ({ key: `i${svc.id}-${i.id}-${i.name}`, label: `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}`, amount: i.total, main: false })),
   ]);
 
@@ -151,14 +158,21 @@ export function BookingDetailPage() {
               </div>
             ))}
             <div className="rc-sep" />
-            {!!s.discount && <Line label="Discount" value={-s.discount} />}
+            <Line label="Subtotal" value={subtotal} />
+            {!!di.frequency_amount && <Line label={frequencyLabel(b.frequency?.name)} value={-di.frequency_amount} />}
+            {!!di.discount_amount && <Line label={`Code ${di.discount_code?.toUpperCase() || ''}`} value={-di.discount_amount} />}
+            {/* Older bookings may carry a discount without the breakdown. */}
+            {!di.frequency_amount && !di.discount_amount && !!s.discount && !di.giftcard_amount && <Line label="Discount" value={-s.discount} />}
             {!!s.adjustment && <Line label={`Adjustment${b.price_adjustment_comment ? ` (${b.price_adjustment_comment})` : ''}`} value={s.adjustment} />}
-            {s.tax?.tax_amount !== undefined && <Line label={`Tax ${s.tax?.tax_percent ?? ''}%`} value={s.tax.tax_amount} />}
+            <Line label="Before tax" value={s.revenue ?? 0} strong />
+            {s.tax?.tax_amount !== undefined && <Line label={`HST ${s.tax?.tax_percent ?? ''}%`} value={s.tax.tax_amount} />}
             {!!s.tip && <Line label="Tip" value={s.tip} />}
+            {!!di.giftcard_amount && <Line label="Gift card" value={-di.giftcard_amount} />}
             <div className="rc-line total">
               <span>Total</span>
               <span className="mono">{fmtMoney(s.total)}</span>
             </div>
+            {s.revenue === 0 && !!s.adjustment && s.adjustment < 0 && <div className="muted small">The adjustment covers this visit (e.g. a prepaid plan), so nothing is charged.</div>}
             <div className="muted small">Paid by {b.payment_method_info?.text || '—'}</div>
           </section>
 
@@ -301,9 +315,17 @@ export function BookingDetailPage() {
   );
 }
 
-function Line({ label, value }: { label: string; value?: number }) {
+// "Weekly - 15% off" -> "Weekly discount (15%)"
+const frequencyLabel = (name?: string) => {
+  const pct = name?.match(/(\d+)%/)?.[1];
+  return `${(name || 'Frequency').replace(/\s*-?\s*\d+%\s*off/i, '').trim()} discount${pct ? ` (${pct}%)` : ''}`;
+};
+const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const hoursLabel = (minutes: number) => `${Number.isInteger(minutes / 60) ? minutes / 60 : (minutes / 60).toFixed(1)} h`;
+
+function Line({ label, value, strong }: { label: string; value?: number; strong?: boolean }) {
   return (
-    <div className="rc-line sub">
+    <div className={strong ? 'rc-line sub strong' : 'rc-line sub'}>
       <span>{label}</span>
       <span className="mono">{fmtMoney(value)}</span>
     </div>

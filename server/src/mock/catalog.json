@@ -13,56 +13,80 @@
      "name": "Spot Clean Walls",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 226,
      "name": "Deep Cleaning",
      "price": 82.5,
      "quantity_based": false,
-     "duration": 90
+     "duration": 90,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 227,
      "name": "Move In Move Out",
      "price": 210.83,
      "quantity_based": false,
-     "duration": 230
+     "duration": 230,
+     "discount_by_frequency": false,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 228,
      "name": "Inside Fridge",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     },
     {
      "id": 229,
      "name": "Inside Windows",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 230,
      "name": "Inside Cabinets",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 231,
      "name": "Inside Oven",
      "price": 73.33,
      "quantity_based": true,
-     "duration": 80
+     "duration": 80,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 232,
      "name": "Basement",
      "price": 68.75,
      "quantity_based": false,
-     "duration": 75
+     "duration": 75,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     }
    ],
    "pricing_parameters": [
@@ -80,7 +104,9 @@
      "quantity_minimum": 0,
      "quantity_maximum": 7
     }
-   ]
+   ],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 1181,
@@ -94,56 +120,80 @@
      "name": "Spot Clean Walls",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 226,
      "name": "Deep Cleaning",
      "price": 82.5,
      "quantity_based": false,
-     "duration": 90
+     "duration": 90,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 227,
      "name": "Move In Move Out",
      "price": 210.83,
      "quantity_based": false,
-     "duration": 230
+     "duration": 230,
+     "discount_by_frequency": false,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 228,
      "name": "Inside Fridge",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     },
     {
      "id": 229,
      "name": "Inside Windows",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 230,
      "name": "Inside Cabinets",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 231,
      "name": "Inside Oven",
      "price": 73.33,
      "quantity_based": true,
-     "duration": 80
+     "duration": 80,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 232,
      "name": "Basement",
      "price": 68.75,
      "quantity_based": false,
-     "duration": 75
+     "duration": 75,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     }
    ],
    "pricing_parameters": [
@@ -161,7 +211,9 @@
      "quantity_minimum": 0,
      "quantity_maximum": 7
     }
-   ]
+   ],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 1182,
@@ -175,56 +227,80 @@
      "name": "Spot Clean Walls",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 226,
      "name": "Deep Cleaning",
      "price": 82.5,
      "quantity_based": false,
-     "duration": 90
+     "duration": 90,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 227,
      "name": "Move In Move Out",
      "price": 210.83,
      "quantity_based": false,
-     "duration": 230
+     "duration": 230,
+     "discount_by_frequency": false,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 228,
      "name": "Inside Fridge",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     },
     {
      "id": 229,
      "name": "Inside Windows",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 230,
      "name": "Inside Cabinets",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 231,
      "name": "Inside Oven",
      "price": 73.33,
      "quantity_based": true,
-     "duration": 80
+     "duration": 80,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 232,
      "name": "Basement",
      "price": 68.75,
      "quantity_based": false,
-     "duration": 75
+     "duration": 75,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     }
    ],
    "pricing_parameters": [
@@ -242,7 +318,9 @@
      "quantity_minimum": 0,
      "quantity_maximum": 7
     }
-   ]
+   ],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 1183,
@@ -256,56 +334,80 @@
      "name": "Spot Clean Walls",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 226,
      "name": "Deep Cleaning",
      "price": 82.5,
      "quantity_based": false,
-     "duration": 90
+     "duration": 90,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 227,
      "name": "Move In Move Out",
      "price": 210.83,
      "quantity_based": false,
-     "duration": 230
+     "duration": 230,
+     "discount_by_frequency": false,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 228,
      "name": "Inside Fridge",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     },
     {
      "id": 229,
      "name": "Inside Windows",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 230,
      "name": "Inside Cabinets",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 231,
      "name": "Inside Oven",
      "price": 73.33,
      "quantity_based": true,
-     "duration": 80
+     "duration": 80,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 232,
      "name": "Basement",
      "price": 68.75,
      "quantity_based": false,
-     "duration": 75
+     "duration": 75,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     }
    ],
    "pricing_parameters": [
@@ -323,7 +425,9 @@
      "quantity_minimum": 0,
      "quantity_maximum": 7
     }
-   ]
+   ],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 1184,
@@ -337,56 +441,80 @@
      "name": "Spot Clean Walls",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 226,
      "name": "Deep Cleaning",
      "price": 82.5,
      "quantity_based": false,
-     "duration": 90
+     "duration": 90,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 227,
      "name": "Move In Move Out",
      "price": 210.83,
      "quantity_based": false,
-     "duration": 230
+     "duration": 230,
+     "discount_by_frequency": false,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 228,
      "name": "Inside Fridge",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     },
     {
      "id": 229,
      "name": "Inside Windows",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 230,
      "name": "Inside Cabinets",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 231,
      "name": "Inside Oven",
      "price": 73.33,
      "quantity_based": true,
-     "duration": 80
+     "duration": 80,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 232,
      "name": "Basement",
      "price": 68.75,
      "quantity_based": false,
-     "duration": 75
+     "duration": 75,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     }
    ],
    "pricing_parameters": [
@@ -404,7 +532,9 @@
      "quantity_minimum": 0,
      "quantity_maximum": 7
     }
-   ]
+   ],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 1185,
@@ -418,56 +548,80 @@
      "name": "Spot Clean Walls",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 226,
      "name": "Deep Cleaning",
      "price": 82.5,
      "quantity_based": false,
-     "duration": 90
+     "duration": 90,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 227,
      "name": "Move In Move Out",
      "price": 210.83,
      "quantity_based": false,
-     "duration": 230
+     "duration": 230,
+     "discount_by_frequency": false,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 228,
      "name": "Inside Fridge",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     },
     {
      "id": 229,
      "name": "Inside Windows",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 230,
      "name": "Inside Cabinets",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 231,
      "name": "Inside Oven",
      "price": 73.33,
      "quantity_based": true,
-     "duration": 80
+     "duration": 80,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 232,
      "name": "Basement",
      "price": 68.75,
      "quantity_based": false,
-     "duration": 75
+     "duration": 75,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     }
    ],
    "pricing_parameters": [
@@ -485,7 +639,9 @@
      "quantity_minimum": 0,
      "quantity_maximum": 7
     }
-   ]
+   ],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 1186,
@@ -506,52 +662,75 @@
      "name": "Spot Clean Walls",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 226,
      "name": "Deep Cleaning",
      "price": 82.5,
      "quantity_based": false,
-     "duration": 90
+     "duration": 90,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 228,
      "name": "Inside Fridge",
      "price": 55,
      "quantity_based": false,
-     "duration": 60
+     "duration": 60,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     },
     {
      "id": 229,
      "name": "Inside Windows",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 230,
      "name": "Inside Cabinets",
      "price": 41.25,
      "quantity_based": false,
-     "duration": 45
+     "duration": 45,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 231,
      "name": "Inside Oven",
      "price": 73.33,
      "quantity_based": true,
-     "duration": 80
+     "duration": 80,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": false
     },
     {
      "id": 232,
      "name": "Basement",
      "price": 68.75,
      "quantity_based": false,
-     "duration": 75
+     "duration": 75,
+     "discount_by_frequency": true,
+     "discount_by_code": true,
+     "recurring": true
     }
    ],
-   "pricing_parameters": []
+   "pricing_parameters": [],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 21,
@@ -560,7 +739,9 @@
    "duration": null,
    "commercial": true,
    "extras": [],
-   "pricing_parameters": []
+   "pricing_parameters": [],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 22,
@@ -576,7 +757,9 @@
     "half_hour_increments": true
    },
    "extras": [],
-   "pricing_parameters": []
+   "pricing_parameters": [],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   },
   {
    "id": 1213,
@@ -592,7 +775,9 @@
     "half_hour_increments": true
    },
    "extras": [],
-   "pricing_parameters": []
+   "pricing_parameters": [],
+   "discount_by_frequency": true,
+   "discount_by_code": true
   }
  ],
  "frequencies": [
