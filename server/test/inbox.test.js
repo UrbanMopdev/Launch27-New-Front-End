@@ -318,4 +318,53 @@ describe('/api end to end', () => {
     assert.equal(sup.status, 200);
     assert.ok(sup.body.queues.find((q) => q.slug === 'operations').open >= 1);
   });
+
+  test('settings: every team member can change routing; access control stays with admins', async () => {
+    await api('/api/me');
+    const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'alex.agent@urbanmop.ca', password: 'x' }) });
+    const agentCookie = login.headers.get('set-cookie').split(';')[0];
+    const as = async (path, body, method = body ? 'POST' : 'GET') => {
+      const res = await fetch(`${base}${path}`, { method, headers: { cookie: agentCookie, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      return { status: res.status, body: res.status === 204 ? null : await res.json() };
+    };
+    const me = await as('/api/me');
+    assert.equal(me.body.role, 'agent');
+
+    // Routing rules, reply targets, queues, policies and saved replies: open to agents.
+    const { rules } = (await as('/api/admin/rules')).body;
+    const edited = rules.map((r, i) => (i === 0 ? { ...r, enabled: false } : r));
+    const saved = await as('/api/admin/rules', { rules: [...edited, { name: 'Agent rule', enabled: true, conditions: { subject_contains: ['gift card'] }, action: { queue: 'sales' } }] }, 'PUT');
+    assert.equal(saved.status, 200);
+    assert.equal(saved.body.rules.at(-1).name, 'Agent rule');
+    const sla = (await as('/api/meta')).body.sla_policies[0];
+    assert.equal((await as(`/api/admin/sla/${sla.id}`, { first_response_minutes: 20, warn_minutes: 5 }, 'PUT')).status, 200);
+    assert.equal((await as(`/api/admin/sla/${sla.id}`, { first_response_minutes: 20, warn_minutes: 30 }, 'PUT')).status, 400);
+    const ops = (await as('/api/admin/workforce')).body.queues.find((q) => q.slug === 'operations');
+    assert.equal((await as(`/api/admin/queues/${ops.id}`, { routing_mode: 'round_robin' }, 'PATCH')).status, 200);
+    assert.equal((await as('/api/admin/settings', { assign_on_reply: false }, 'PUT')).status, 200);
+    assert.equal((await as('/api/admin/canned', { shortcut: 'hi', title: 'Hello', body: 'Hi {{first_name}}' }, 'PUT')).status, 200);
+    assert.equal((await as(`/api/users/${me.body.id}`, { capacity: { sms: 4 } }, 'PATCH')).status, 200);
+
+    // Who can see private queues stays with admins.
+    assert.equal((await as(`/api/users/${me.body.id}`, { role: 'admin' }, 'PATCH')).status, 403);
+    assert.equal((await as(`/api/users/${me.body.id}`, { team_ids: [1] }, 'PATCH')).status, 403);
+    assert.equal((await as(`/api/admin/queues/${ops.id}`, { restricted: true }, 'PATCH')).status, 403);
+    assert.equal((await as('/api/admin/teams', { teams: [] }, 'PUT')).status, 403);
+    assert.equal((await as('/api/admin/settings', { settings_editors: 'everyone' }, 'PUT')).status, 403);
+
+    // Everyone sees who changed what.
+    const history = await as('/api/admin/history');
+    const ruleChange = history.body.find((h) => h.action === 'rules.replaced');
+    assert.deepEqual(ruleChange.detail.added, ['Agent rule']);
+    assert.deepEqual(ruleChange.detail.changed, [rules[0].name]);
+    assert.deepEqual(ruleChange.detail.removed, []);
+    assert.equal(ruleChange.detail.reordered, false);
+    assert.equal(ruleChange.actor_email, 'alex.agent@urbanmop.ca');
+
+    // An admin can narrow it down to admins only.
+    assert.equal((await api('/api/admin/settings', { settings_editors: 'admins' }, 'PUT')).status, 200);
+    assert.equal((await as('/api/admin/rules', { rules }, 'PUT')).status, 403);
+    assert.equal((await api('/api/admin/rules', { rules }, 'PUT')).status, 200);
+    await api('/api/admin/settings', { settings_editors: 'everyone' }, 'PUT');
+  });
 });

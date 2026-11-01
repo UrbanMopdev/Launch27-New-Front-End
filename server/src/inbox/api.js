@@ -8,9 +8,21 @@ import { DISPOSITIONS, OUR_IDENTITIES, UM } from './seed.js';
 import { connectedChannels } from './channels.js';
 import { normalizeEmail, normalizeIdentity, normalizePhone, kindForChannel } from './normalize.js';
 import * as svc from './service.js';
-import { CHANNELS, getSettings, normalizeCapacity, validateSettings } from './workforce.js';
+import { CHANNELS, canEditSettings, getSettings, normalizeCapacity, validateSettings } from './workforce.js';
 
 const one = async (q, sql, p) => (await q.query(sql, p)).rows[0] || null;
+
+// What changed between two ordered rule lists, by rule name (for the change history).
+export function diffRules(before, after) {
+  const key = (r) => JSON.stringify([r.enabled !== false, r.conditions || {}, r.action || {}]);
+  const old = new Map(before.map((r) => [r.name, r]));
+  const now = new Map(after.map((r) => [r.name, r]));
+  const added = after.filter((r) => !old.has(r.name)).map((r) => r.name);
+  const removed = before.filter((r) => !now.has(r.name)).map((r) => r.name);
+  const changed = after.filter((r) => old.has(r.name) && key(old.get(r.name)) !== key(r)).map((r) => r.name);
+  const kept = (list, other) => list.filter((r) => other.has(r.name)).map((r) => r.name).join('\n');
+  return { added, removed, changed, reordered: kept(before, now) !== kept(after, old) };
+}
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
 export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f) }) {
@@ -48,6 +60,14 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
   const needRole = (...roles) => (req, res, next) => (roles.includes(req.user.role) ? next() : res.status(403).json({ error: 'Your role cannot do this' }));
   const isLead = (u) => u.role === 'admin' || u.role === 'supervisor';
+  // Support settings: everyone by default; an admin can narrow it (settings_editors).
+  const needEditor = (req, res, next) =>
+    getSettings(db)
+      .then((s) => (canEditSettings(req.user, s) ? next() : res.status(403).json({ error: 'An admin has limited who can change support settings' })))
+      .catch(next);
+  const adminOnly = (req, what) => {
+    if (req.user.role !== 'admin') throw new svc.InboxError(403, `Only admins can change ${what}`);
+  };
 
   // Queues the user may see: open queues, plus restricted ones they belong to (admins see all).
   const visibleQueueIds = async (user) =>
@@ -99,8 +119,12 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       FROM users u ORDER BY u.name`));
   }));
 
-  r.patch('/users/:id', needRole('admin'), wrap(async (req, res) => {
+  // Anyone who can edit settings can set capacity and names. Role, active, teams and
+  // queue membership decide who sees private queues, so those stay with admins.
+  r.patch('/users/:id', needEditor, wrap(async (req, res) => {
     const { role, queue_ids, name, team_ids, capacity, active } = req.body || {};
+    if (role !== undefined || active !== undefined) adminOnly(req, 'roles or who is active');
+    if (team_ids !== undefined || queue_ids !== undefined) adminOnly(req, 'team or queue membership');
     await db.tx(async (q) => {
       if (role) {
         if (!['agent', 'supervisor', 'admin'].includes(role)) throw new svc.InboxError(400, 'Unknown role');
@@ -454,16 +478,17 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json({ rules, warnings: lintRules(rules) });
   }));
 
-  r.put('/admin/rules', needRole('admin'), wrap(async (req, res) => {
+  r.put('/admin/rules', needEditor, wrap(async (req, res) => {
     const rules = req.body?.rules;
     if (!Array.isArray(rules)) throw new svc.InboxError(400, 'Send the full ordered list of rules');
     await db.tx(async (q) => {
+      const before = await many(q, 'SELECT name, enabled, conditions, action FROM routing_rules ORDER BY position');
       await q.query('DELETE FROM routing_rules');
       for (const [i, rule] of rules.entries()) {
         if (!rule.name) throw new svc.InboxError(400, `Rule ${i + 1} needs a name`);
         await q.query('INSERT INTO routing_rules (position, name, enabled, conditions, action, replaces) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)', [(i + 1) * 10, rule.name, rule.enabled !== false, toJson(rule.conditions || {}), toJson(rule.action || {}), rule.replaces || null]);
       }
-      await svc.audit(q, req.user.id, 'rules.replaced', 'routing_rules', 'all', { count: rules.length });
+      await svc.audit(q, req.user.id, 'rules.replaced', 'routing_rules', 'all', { count: rules.length, ...diffRules(before, rules) });
     });
     const saved = await many(db, 'SELECT * FROM routing_rules ORDER BY position');
     res.json({ rules: saved, warnings: lintRules(saved) });
@@ -508,13 +533,14 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     });
   }));
 
-  r.put('/admin/settings', needRole('admin'), wrap(async (req, res) => {
+  r.put('/admin/settings', needEditor, wrap(async (req, res) => {
     let patch;
     try {
       patch = validateSettings(req.body || {});
     } catch (e) {
       throw new svc.InboxError(400, e.message);
     }
+    if ('settings_editors' in patch) adminOnly(req, 'who can edit settings');
     await db.tx(async (q) => {
       for (const [k, v] of Object.entries(patch)) await q.query('INSERT INTO workspace_settings (key, value, updated_at) VALUES ($1,$2::jsonb, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()', [k, toJson(v)]);
       await svc.audit(q, req.user.id, 'settings.updated', 'workspace', 'settings', patch);
@@ -523,7 +549,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   }));
 
   // Full ordered list of statuses. Needs at least one Available and one Offline status.
-  r.put('/admin/statuses', needRole('admin'), wrap(async (req, res) => {
+  r.put('/admin/statuses', needEditor, wrap(async (req, res) => {
     const list = req.body?.statuses;
     if (!Array.isArray(list) || !list.length) throw new svc.InboxError(400, 'Send the full list of statuses');
     for (const s of list) {
@@ -576,15 +602,20 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.status(204).end();
   }));
 
-  r.post('/admin/queues', needRole('admin'), wrap(async (req, res) => {
+  r.post('/admin/queues', needEditor, wrap(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) throw new svc.InboxError(400, 'Name the queue');
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    res.json(await one(db, 'INSERT INTO queues (slug, name, description, position) VALUES ($1,$2,$3,(SELECT COALESCE(max(position),0)+1 FROM queues)) RETURNING *', [slug, name, req.body?.description || null]));
+    if (!slug) throw new svc.InboxError(400, 'Use letters or numbers in the queue name');
+    if (await one(db, 'SELECT 1 FROM queues WHERE slug = $1', [slug])) throw new svc.InboxError(400, `There is already a queue called ${name}`);
+    const row = await one(db, 'INSERT INTO queues (slug, name, description, position) VALUES ($1,$2,$3,(SELECT COALESCE(max(position),0)+1 FROM queues)) RETURNING *', [slug, name, req.body?.description || null]);
+    await svc.audit(db, req.user.id, 'queue.created', 'queue', row.id, { name });
+    res.json(row);
   }));
 
-  r.patch('/admin/queues/:id', needRole('admin'), wrap(async (req, res) => {
+  r.patch('/admin/queues/:id', needEditor, wrap(async (req, res) => {
     const b = req.body || {};
+    if ('restricted' in b) adminOnly(req, 'whether a queue is private');
     const fields = { name: 'text', description: 'text', restricted: 'bool', routing_mode: 'mode', schedule_id: 'id', default_sla_id: 'id', overflow_minutes: 'int', overflow_queue_id: 'id', priority_boost: 'int' };
     const sets = [];
     const vals = [req.params.id];
@@ -605,7 +636,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json(row);
   }));
 
-  r.put('/admin/schedules/:id?', needRole('admin'), wrap(async (req, res) => {
+  r.put('/admin/schedules/:id?', needEditor, wrap(async (req, res) => {
     const { name, time_zone = 'America/Toronto', week, is_default } = req.body || {};
     if (!name?.trim()) throw new svc.InboxError(400, 'Name the schedule');
     for (let d = 0; d < 7; d++) {
@@ -624,24 +655,39 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json(row);
   }));
 
-  r.put('/admin/canned/:id?', needRole('admin', 'supervisor'), wrap(async (req, res) => {
+  r.put('/admin/canned/:id?', needEditor, wrap(async (req, res) => {
     const { shortcut, title, body, channels = [] } = req.body || {};
     if (!shortcut || !title || !body) throw new svc.InboxError(400, 'Shortcut, title and text are required');
     const row = req.params.id
       ? await one(db, 'UPDATE canned_responses SET shortcut = $2, title = $3, body = $4, channels = $5::jsonb WHERE id = $1 RETURNING *', [req.params.id, shortcut, title, body, toJson(channels)])
       : await one(db, 'INSERT INTO canned_responses (shortcut, title, body, channels) VALUES ($1,$2,$3,$4::jsonb) RETURNING *', [shortcut, title, body, toJson(channels)]);
+    await svc.audit(db, req.user.id, 'canned.saved', 'canned_response', row.id, { shortcut, title });
     res.json(row);
   }));
 
-  r.delete('/admin/canned/:id', needRole('admin', 'supervisor'), wrap(async (req, res) => {
-    await db.query('DELETE FROM canned_responses WHERE id = $1', [req.params.id]);
+  r.delete('/admin/canned/:id', needEditor, wrap(async (req, res) => {
+    const row = await one(db, 'DELETE FROM canned_responses WHERE id = $1 RETURNING shortcut, title', [req.params.id]);
+    if (row) await svc.audit(db, req.user.id, 'canned.deleted', 'canned_response', req.params.id, row);
     res.status(204).end();
   }));
 
-  r.put('/admin/sla/:id', needRole('admin'), wrap(async (req, res) => {
+  r.put('/admin/sla/:id', needEditor, wrap(async (req, res) => {
     const minutes = Number(req.body?.first_response_minutes);
-    if (!(minutes > 0)) throw new svc.InboxError(400, 'Minutes must be a positive number');
-    res.json(await one(db, 'UPDATE sla_policies SET first_response_minutes = $2, warn_minutes = COALESCE($3, warn_minutes), business_hours = COALESCE($4, business_hours) WHERE id = $1 RETURNING *', [req.params.id, minutes, req.body?.warn_minutes ?? null, req.body?.business_hours ?? null]));
+    if (!(minutes > 0)) throw new svc.InboxError(400, 'The reply target must be at least 1 minute');
+    const warn = req.body?.warn_minutes;
+    if (warn !== undefined && warn !== null && !(Number(warn) >= 0 && Number(warn) < minutes)) throw new svc.InboxError(400, 'The warning must come before the reply target');
+    const row = await one(db, 'UPDATE sla_policies SET first_response_minutes = $2, warn_minutes = COALESCE($3, warn_minutes), business_hours = COALESCE($4, business_hours) WHERE id = $1 RETURNING *', [req.params.id, minutes, warn ?? null, req.body?.business_hours ?? null]);
+    if (!row) throw new svc.InboxError(404, 'No such reply target');
+    await svc.audit(db, req.user.id, 'sla.updated', 'sla_policy', req.params.id, { name: row.name, first_response_minutes: minutes, warn_minutes: row.warn_minutes, business_hours: row.business_hours });
+    res.json(row);
+  }));
+
+  // Recent changes to support settings, so everyone can see who changed what.
+  const SETTINGS_OBJECTS = ['routing_rules', 'workspace', 'agent_statuses', 'teams', 'queue', 'schedule', 'canned_response', 'sla_policy', 'user'];
+  r.get('/admin/history', wrap(async (req, res) => {
+    res.json(await many(db, `SELECT a.id, a.action, a.object_type, a.object_id, a.detail, a.created_at, u.name AS actor_name, u.email AS actor_email
+      FROM audit_log a LEFT JOIN users u ON u.id = a.actor_id
+      WHERE a.object_type = ANY($1::text[]) AND a.action <> 'status.changed' ORDER BY a.created_at DESC, a.id DESC LIMIT 100`, [SETTINGS_OBJECTS]));
   }));
 
   r.get('/audit', needRole('supervisor', 'admin'), wrap(async (req, res) => {
