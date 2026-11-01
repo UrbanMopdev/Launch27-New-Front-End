@@ -8,7 +8,6 @@ import { LoginPage } from './pages/Login';
 import { BookingsPage } from './pages/Bookings';
 import { BookingDetailPage } from './pages/BookingDetail';
 import { BookingFormPage } from './pages/BookingForm';
-import { DashboardPage } from './pages/Dashboard';
 import { CustomersPage } from './pages/Customers';
 import { CustomerProfilePage } from './pages/CustomerProfile';
 import { TeamsPage } from './pages/Teams';
@@ -18,24 +17,7 @@ import { FeedbackPage } from './pages/Feedback';
 import { DispatchPage } from './pages/Dispatch';
 import { MarginsPage } from './pages/Margins';
 
-import {
-  QuotesPage,
-  DeclinedChargesPage,
-  TeamPaymentsPage,
-  HourlyWagesPage,
-  StaffPage,
-  ServicesPage,
-  ExtrasPage,
-  FrequenciesPage,
-  PricingParametersPage,
-  DiscountsPage,
-  GiftCardsPage,
-  TagsPage,
-  TasksPage,
-  SalesTaxesPage,
-  ClosedDatesPage,
-  BouncesPage,
-} from './pages/Lists';
+import { QuotesPage, TeamPaymentsPage } from './pages/Lists';
 import { QuoteDetailPage } from './pages/QuoteDetail';
 import { ApiCatalogPage } from './pages/ApiCatalog';
 import { InboxPage } from './pages/Inbox';
@@ -61,14 +43,13 @@ export function App() {
   return (
     <Routes>
       <Route element={<Layout email={me.data.email} />}>
-        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route index element={<Navigate to="/inbox" replace />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="inbox/:id" element={<InboxPage />} />
         <Route path="contacts/:id" element={<ContactPage />} />
         <Route path="supervisor" element={<SupervisorPage />} />
         <Route path="inbox-simulator" element={<SimulatorPage />} />
         <Route path="inbox-settings" element={<InboxSettingsPage />} />
-        <Route path="dashboard" element={<DashboardPage />} />
         <Route path="dispatch" element={<DispatchPage />} />
         <Route
           path="routes"
@@ -90,22 +71,8 @@ export function App() {
         <Route path="quotes/:id" element={<QuoteDetailPage />} />
         <Route path="charges" element={<ChargesPage />} />
         <Route path="profitability" element={<MarginsPage />} />
-        <Route path="declined-charges" element={<DeclinedChargesPage />} />
         <Route path="team-payments" element={<TeamPaymentsPage />} />
-        <Route path="hourly-wages" element={<HourlyWagesPage />} />
         <Route path="feedback" element={<FeedbackPage />} />
-        <Route path="staff" element={<StaffPage />} />
-        <Route path="services" element={<ServicesPage />} />
-        <Route path="extras" element={<ExtrasPage />} />
-        <Route path="frequencies" element={<FrequenciesPage />} />
-        <Route path="pricing-parameters" element={<PricingParametersPage />} />
-        <Route path="discounts" element={<DiscountsPage />} />
-        <Route path="gift-cards" element={<GiftCardsPage />} />
-        <Route path="tags" element={<TagsPage />} />
-        <Route path="tasks" element={<TasksPage />} />
-        <Route path="sales-taxes" element={<SalesTaxesPage />} />
-        <Route path="closed-dates" element={<ClosedDatesPage />} />
-        <Route path="bounces" element={<BouncesPage />} />
         <Route path="api" element={<ApiCatalogPage />} />
         <Route path="*" element={<div className="muted">Page not found.</div>} />
       </Route>
