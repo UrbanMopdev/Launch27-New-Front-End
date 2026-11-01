@@ -23,7 +23,6 @@ const NAV: { section: string; items: { to: string; label: string }[] }[] = [
   {
     section: 'Operations',
     items: [
-      { to: '/dashboard', label: 'Dashboard' },
       { to: '/dispatch', label: 'Dispatch board' },
       { to: '/routes', label: 'Routes & travel' },
       { to: '/bookings', label: 'Bookings' },
@@ -38,31 +37,12 @@ const NAV: { section: string; items: { to: string; label: string }[] }[] = [
     items: [
       { to: '/profitability', label: 'Job profitability' },
       { to: '/charges', label: 'Charge customers' },
-      { to: '/declined-charges', label: 'Declined charges' },
       { to: '/team-payments', label: 'Team payments' },
-      { to: '/hourly-wages', label: 'Hourly wages' },
-      { to: '/discounts', label: 'Discount codes' },
-      { to: '/gift-cards', label: 'Gift cards' },
     ],
   },
   {
     section: 'Reports',
     items: [{ to: '/feedback', label: 'Customer feedback' }],
-  },
-  {
-    section: 'Settings',
-    items: [
-      { to: '/services', label: 'Services' },
-      { to: '/extras', label: 'Extras' },
-      { to: '/pricing-parameters', label: 'Pricing parameters' },
-      { to: '/frequencies', label: 'Frequencies' },
-      { to: '/sales-taxes', label: 'Sales taxes' },
-      { to: '/closed-dates', label: 'Closed dates' },
-      { to: '/tags', label: 'Tags' },
-      { to: '/staff', label: 'Office staff' },
-      { to: '/tasks', label: 'Automated tasks' },
-      { to: '/bounces', label: 'Undeliverable emails' },
-    ],
   },
   { section: 'Developer', items: [{ to: '/api', label: 'API catalog' }] },
 ];

@@ -141,10 +141,9 @@ Every page makes the same Launch27 calls as the admin page it replaces (see
 | Section | Pages |
 | --- | --- |
 | Support | Inbox, Contact profile (360), Supervisor, Channel simulator, Support settings (routing rules, reply targets, saved replies, team and queues) |
-| Operations | Dashboard, Dispatch board (drag-and-drop cleaner assignment, travel per cleaner), Routes & travel (map, legs, tight connections, closer cleaners), Bookings (filters: all / unassigned / recurring / new customer / cancelled), Booking detail, Time tracking, Quotes, Customers, Customer detail (upcoming / past / cancelled / feedback), Teams |
-| Money | Job profitability (gross margin per job, flags, cost assumptions), Charge customers, Declined charges, Team payments, Hourly wages, Discount codes, Gift cards |
+| Operations | Dispatch board (drag-and-drop cleaner assignment, travel per cleaner), Routes & travel (map, legs, tight connections, closer cleaners), Bookings (filters: all / unassigned / recurring / new customer / cancelled), Booking detail, Time tracking, Quotes, Customers, Customer detail (upcoming / past / cancelled / feedback), Teams |
+| Money | Job profitability (gross margin per job, flags, cost assumptions), Charge customers, Team payments |
 | Reports | Customer feedback |
-| Settings | Services, Extras, Pricing parameters, Frequencies, Sales taxes, Closed dates, Tags & service categories, Office staff, Automated tasks, Undeliverable emails |
 | Developer | API catalog (browse `docs/api-catalog.json`) |
 
 Simple list pages live in `web/src/pages/Lists.tsx` and use the shared
