@@ -28,7 +28,35 @@ export function isGeneratedValue(s) {
   return FAKE_NAMES.has(v) || FAKE_STREET.test(v) || v === NOTE.toLowerCase();
 }
 
-export function createAnonymizer(salt = randomBytes(16).toString('hex')) {
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+const PHONE_RE = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
+
+// First and last names of everyone in the data (lower case, 3+ letters), used to spot
+// tags that name a person ("Prefers Marc", "Do not assign …").
+export function personTokens({ customers = [], teams = [] }) {
+  const out = new Set();
+  for (const p of [...customers, ...teams]) {
+    for (const part of [p.first_name, p.last_name, ...(String(p.title || '').split(/\s+/))]) {
+      for (const w of String(part || '').toLowerCase().split(/[^a-zà-ÿ'-]+/)) if (w.length >= 3) out.add(w);
+    }
+  }
+  return out;
+}
+
+// Tags are typed by staff, so treat them like notes: keep a tag only when it holds no
+// name, email or phone; otherwise replace it with a neutral label of the same kind.
+export function cleanTag(name, people = new Set()) {
+  const text = String(name || '');
+  const words = text.toLowerCase().split(/[^a-zà-ÿ'-]+/).filter(Boolean);
+  const personal = EMAIL_RE.test(text) || PHONE_RE.test(text) || words.some((w) => people.has(w));
+  if (!personal) return text;
+  if (/(not|never|don'?t|avoid).{0,20}(assign|send|book)|do not/i.test(text)) return 'Do not assign a specific cleaner';
+  if (/prefer|request|favou?rite|only/i.test(text)) return 'Prefers a specific cleaner';
+  return 'Tag removed for QA';
+}
+
+export function createAnonymizer(salt = randomBytes(16).toString('hex'), people = new Set()) {
+  const tags = (list) => (list || []).map((t) => ({ id: t.id, name: cleanTag(t.name, people), color: t.color, type: t.type }));
   const h = (kind, id) => createHmac('sha256', salt).update(`${kind}:${id}`).digest();
   const pick = (arr, buf, i) => arr[buf[i] % arr.length];
   const person = (kind, id) => {
@@ -75,7 +103,7 @@ export function createAnonymizer(salt = randomBytes(16).toString('hex')) {
       confirmed: c.confirmed,
       is_new_customer: c.is_new_customer,
       created_at: c.created_at,
-      tags_info: (c.tags_info || []).map((t) => ({ id: t.id, name: t.name, color: t.color, type: t.type })),
+      tags_info: tags(c.tags_info),
       sales_tax: c.sales_tax ?? null,
     };
   }
@@ -107,7 +135,7 @@ export function createAnonymizer(salt = randomBytes(16).toString('hex')) {
       ratings_count: t.ratings_count,
       stars: t.stars,
       locations: (t.locations || []).map((l) => ({ id: l.id, name: l.name, active: l.active, default: l.default })),
-      tags_info: (t.tags_info || []).map((x) => ({ id: x.id, name: x.name, color: x.color, type: x.type })),
+      tags_info: tags(t.tags_info),
     };
   }
 
@@ -196,7 +224,8 @@ export function sensitiveStrings({ customers = [], teams = [], bookings = [] }) 
   };
   const addPhone = (v) => {
     const d = String(v ?? '').replace(/\D/g, '');
-    if (d.length >= 7) out.add(d.slice(-7));
+    // The fake numbers use the 555 exchange, so a real 555 number would match by chance.
+    if (d.length >= 7 && !d.slice(-7).startsWith('555')) out.add(d.slice(-7));
   };
   for (const c of customers) {
     add(c.email, 6);

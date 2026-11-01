@@ -1,6 +1,6 @@
 // Builds the anonymized QA copy from live Launch27 (run in production only).
 // get(path, query) fetches from Launch27 with the signed-in admin's token.
-import { assertAnonymous, createAnonymizer, sensitiveStrings } from './anonymize.js';
+import { assertAnonymous, createAnonymizer, personTokens, sensitiveStrings } from './anonymize.js';
 
 const DAY = 86_400_000;
 const iso = (t) => new Date(t).toISOString().slice(0, 10);
@@ -16,7 +16,7 @@ async function all(get, path, query = {}, max = 200) {
   return out;
 }
 
-export async function buildSnapshot(get, { now = Date.now(), daysBack = 60, daysAhead = 60, log = () => {} } = {}) {
+export async function buildSnapshot(get, { now = Date.now(), daysBack = 60, daysAhead = 60, log = () => {}, check = true } = {}) {
   const from = iso(now - daysBack * DAY);
   const to = iso(now + daysAhead * DAY);
   log('pulling bookings', { from, to });
@@ -56,7 +56,7 @@ export async function buildSnapshot(get, { now = Date.now(), daysBack = 60, days
   }
 
   log('anonymizing', { bookings: bookings.length, customers: customers.length, teams: teams.length });
-  const a = createAnonymizer();
+  const a = createAnonymizer(undefined, personTokens({ customers, teams }));
   const copy = {
     version: 1,
     created_at: new Date(now).toISOString(),
@@ -74,7 +74,13 @@ export async function buildSnapshot(get, { now = Date.now(), daysBack = 60, days
   };
   // Configuration can also hold text typed by staff; scrub any help text.
   for (const f of copy.custom_fields) delete f.help_text;
-  assertAnonymous(copy, sensitiveStrings({ customers, teams, bookings }));
+  const originals = sensitiveStrings({ customers, teams, bookings });
+  // Cities and location names are kept on purpose; some records hold a city in the street
+  // field, which would otherwise look like a leak.
+  const places = [...copy.customers, ...copy.teams].map((x) => x.city).concat(copy.bookings.map((b) => b.address?.city), copy.locations.map((l) => l.name));
+  for (const p of places) if (p) originals.delete(String(p).trim().toLowerCase());
+  if (!check) return { copy, originals }; // tests and diagnostics only
+  assertAnonymous(copy, originals);
   return copy;
 }
 

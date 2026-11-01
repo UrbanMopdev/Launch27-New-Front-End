@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAnonymizer, assertAnonymous, sensitiveStrings, NOTE } from '../src/qa/anonymize.js';
+import { createAnonymizer, assertAnonymous, sensitiveStrings, NOTE, cleanTag, personTokens } from '../src/qa/anonymize.js';
 import { buildSnapshot } from '../src/qa/snapshot.js';
 import { createQaStore } from '../src/qa/service.js';
 import { createMockLaunch27 } from '../src/mock/launch27.js';
@@ -78,6 +78,21 @@ describe('QA copy: anonymizer', () => {
     assert.throws(() => assertAnonymous(leaky), (e) => /email/.test(e.message) && /bookings\[\]\.staff_notes/.test(e.message) && !e.message.includes('gmail'));
     const real = sensitiveStrings({ customers: [realCustomer] });
     assert.throws(() => assertAnonymous({ customers: [{ ...c, address: '4417 Riverside Drive' }] }, real), /real value/);
+  });
+});
+
+describe('QA copy: tags are staff-typed text', () => {
+  test('tags naming a person, or holding an email or phone, are replaced; generic tags stay', () => {
+    const people = personTokens({ customers: [realCustomer], teams: [realTeam] });
+    assert.equal(cleanTag('Prefers Esperanza', people), 'Prefers a specific cleaner');
+    assert.equal(cleanTag('Do not assign Villanueva', people), 'Do not assign a specific cleaner');
+    assert.equal(cleanTag('Esperanza Villanueva', people), 'Tag removed for QA');
+    assert.equal(cleanTag('Billing contact: someone@gmail.com', people), 'Tag removed for QA');
+    assert.equal(cleanTag('Call 613-724-8891 first', people), 'Tag removed for QA');
+    assert.equal(cleanTag('Assign two cleaners', people), 'Assign two cleaners');
+    assert.equal(cleanTag('VIP', people), 'VIP');
+    const a = createAnonymizer('s', people);
+    assert.equal(a.customer({ ...realCustomer, tags_info: [{ id: 1, name: 'Prefers Esperanza' }, { id: 2, name: 'VIP' }] }).tags_info.map((t) => t.name).join('|'), 'Prefers a specific cleaner|VIP');
   });
 });
 
