@@ -13,7 +13,7 @@ import { CHANNELS, getSettings, normalizeCapacity, validateSettings } from './wo
 const one = async (q, sql, p) => (await q.query(sql, p)).rows[0] || null;
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f) }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {} }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -622,6 +622,32 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       return r2;
     });
     res.json(row);
+  }));
+
+  // ---------- admin: anonymized QA copy of real data ----------
+
+  r.get('/admin/qa-copy', needRole('admin'), wrap(async (req, res) => {
+    res.json({
+      env: config.appEnv,
+      can_send: !!qa.sender?.enabled,
+      job: qa.sender?.status() || null,
+      receiving: !!config.qaSnapshotReceive,
+      current: qa.store?.summary() || null,
+    });
+  }));
+
+  r.post('/admin/qa-copy', needRole('admin'), wrap(async (req, res) => {
+    if (!qa.sender?.enabled) throw new svc.InboxError(400, 'Only production can send a QA copy (QA_SNAPSHOT_URL and QA_SNAPSHOT_TOKEN must be set)');
+    const job = qa.sender.start(req.bearer, req.user.email);
+    await svc.audit(db, req.user.id, 'qa_copy.started', 'workspace', 'qa', {});
+    res.status(202).json({ job });
+  }));
+
+  // QA: go back to generated synthetic data.
+  r.delete('/admin/qa-copy', needRole('admin'), wrap(async (req, res) => {
+    if (config.production || !qa.store) throw new svc.InboxError(400, 'Only QA holds a copy');
+    await qa.store.clear();
+    res.status(204).end();
   }));
 
   r.put('/admin/canned/:id?', needRole('admin', 'supervisor'), wrap(async (req, res) => {

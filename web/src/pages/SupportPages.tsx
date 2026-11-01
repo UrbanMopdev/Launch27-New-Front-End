@@ -5,7 +5,7 @@ import { inbox, type Channel, type Contact, type Role, type Rule } from '../inbo
 import { Customer360 } from '../inbox/Customer360';
 import { Cleaner360 } from '../inbox/Cleaner360';
 import { CHANNEL_ICON, ROLE_LABEL, ago, displayIdentity, useInboxMe, useMeta } from '../inbox/util';
-import { AgentsSettings, HoursSettings, PoliciesSettings, QueuesSettings, StatusesSettings, TeamsSettings } from './WorkforceSettings';
+import { AgentsSettings, HoursSettings, PoliciesSettings, QaCopySettings, QueuesSettings, StatusesSettings, TeamsSettings } from './WorkforceSettings';
 
 // ---------- Contact profile (full-page 360) ----------
 
@@ -333,8 +333,8 @@ export function SimulatorPage() {
 
 // ---------- Settings: routing, SLAs, saved replies, team ----------
 
-type SettingsTab = 'rules' | 'sla' | 'canned' | 'agents' | 'teams' | 'statuses' | 'queues' | 'hours' | 'policies';
-const SETTINGS_TABS: Record<SettingsTab, string> = { rules: 'Routing rules', sla: 'Reply targets', canned: 'Saved replies', agents: 'Agents', teams: 'Teams', statuses: 'Agent statuses', queues: 'Queues', hours: 'Business hours', policies: 'Routing policies' };
+type SettingsTab = 'rules' | 'sla' | 'canned' | 'agents' | 'teams' | 'statuses' | 'queues' | 'hours' | 'policies' | 'qa';
+const SETTINGS_TABS: Record<SettingsTab, string> = { rules: 'Routing rules', sla: 'Reply targets', canned: 'Saved replies', agents: 'Agents', teams: 'Teams', statuses: 'Agent statuses', queues: 'Queues', hours: 'Business hours', policies: 'Routing policies', qa: 'QA data' };
 
 export function InboxSettingsPage() {
   const me = useInboxMe();
@@ -357,6 +357,7 @@ export function InboxSettingsPage() {
       {tab === 'queues' && <QueuesSettings canEdit={isAdmin} />}
       {tab === 'hours' && <HoursSettings canEdit={isAdmin} />}
       {tab === 'policies' && <PoliciesSettings canEdit={isAdmin} />}
+      {tab === 'qa' && <QaCopySettings canEdit={isAdmin} />}
     </>
   );
 }

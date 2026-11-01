@@ -80,6 +80,21 @@ export interface WorkforceAgent {
   queue_ids: number[];
   team_ids: number[];
 }
+export interface QaCopySummary {
+  created_at: string;
+  window: { from: string; to: string };
+  bookings: number;
+  customers: number;
+  cleaners: number;
+}
+export interface QaCopyStatus {
+  env: string;
+  can_send: boolean;
+  receiving: boolean;
+  current: QaCopySummary | null;
+  job: { state: 'idle' | 'running' | 'done' | 'failed'; started_at?: string; finished_at?: string; by?: string; step?: string; summary?: QaCopySummary; error?: string } | null;
+}
+
 export interface Workforce {
   statuses: AgentStatus[];
   teams: Team[];
@@ -294,6 +309,9 @@ export const inbox = {
   saveTeams: (teams: Team[]) => call<void>('PUT', '/admin/teams', { teams }),
   createQueue: (name: string, description?: string) => call<QueueSettings>('POST', '/admin/queues', { name, description }),
   updateQueue: (id: number, patch: Partial<QueueSettings>) => call<QueueSettings>('PATCH', `/admin/queues/${id}`, patch),
+  qaCopy: () => call<QaCopyStatus>('GET', '/admin/qa-copy'),
+  sendQaCopy: () => call<{ job: QaCopyStatus['job'] }>('POST', '/admin/qa-copy'),
+  clearQaCopy: () => call<void>('DELETE', '/admin/qa-copy'),
   saveSchedule: (s: Schedule) => call<Schedule>('PUT', s.id ? `/admin/schedules/${s.id}` : '/admin/schedules', s),
   meta: () => call<Meta>('GET', '/meta'),
   counts: () => call<Counts>('GET', '/counts'),

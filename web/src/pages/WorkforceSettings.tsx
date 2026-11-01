@@ -599,3 +599,56 @@ export function PoliciesSettings({ canEdit }: { canEdit: boolean }) {
     </section>
   );
 }
+
+// ---------- QA copy of real data ----------
+
+export function QaCopySettings({ canEdit }: { canEdit: boolean }) {
+  const queryClient = useQueryClient();
+  const status = useQuery({ queryKey: ['inbox', 'qa-copy'], queryFn: inbox.qaCopy, refetchInterval: (q) => (q.state.data?.job?.state === 'running' ? 3000 : false) });
+  const { run, error } = useSave();
+  if (status.isLoading) return <div className="muted">Loading…</div>;
+  if (status.error) return <div className="error">{(status.error as Error).message}</div>;
+  const d = status.data!;
+  const describe = (s: NonNullable<typeof d.current>) => `${s.bookings.toLocaleString()} bookings (${s.window.from} to ${s.window.to}), ${s.customers.toLocaleString()} customers, ${s.cleaners.toLocaleString()} cleaners, made ${new Date(s.created_at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })}`;
+  return (
+    <section className="card wf-policies">
+      <div className="policy-row">
+        <div className="grow">
+          <div className="strong">Anonymized copy of real data for QA</div>
+          <div className="muted small">
+            Production copies the last 60 and next 60 days of bookings with customers and cleaners, replaces every name, email, phone, street address, note and card number, checks that nothing personal is left, and sends only that copy to QA. Prices, services, extras, times and assignments stay real. QA checks it again before using it, and changes made in QA never reach Launch27.
+          </div>
+        </div>
+      </div>
+      {d.can_send && (
+        <div className="policy-row">
+          <div className="grow">
+            {d.job?.state === 'running' && <div className="strong">Working: {d.job.step}…</div>}
+            {d.job?.state === 'done' && d.job.summary && <div className="ok">Sent to QA: {describe(d.job.summary)}</div>}
+            {d.job?.state === 'failed' && <div className="error small">Not sent: {d.job.error}</div>}
+            {(!d.job || d.job.state === 'idle') && <div className="muted small">Takes a few minutes. Uses your Launch27 login to read the data.</div>}
+          </div>
+          {canEdit && (
+            <button type="button" disabled={d.job?.state === 'running'} onClick={() => run(() => inbox.sendQaCopy())}>
+              {d.job?.state === 'running' ? 'Copying…' : 'Send a fresh copy to QA'}
+            </button>
+          )}
+        </div>
+      )}
+      {d.receiving && (
+        <div className="policy-row">
+          <div className="grow">
+            {d.current ? <div><span className="strong">This QA site is showing the anonymized copy:</span> {describe(d.current)}</div> : <div className="muted">No copy yet: this site shows generated sample data. Send one from production (Support settings → QA data).</div>}
+          </div>
+          {canEdit && d.current && (
+            <button type="button" className="secondary" onClick={() => run(async () => { await inbox.clearQaCopy(); queryClient.invalidateQueries(); })}>
+              Go back to sample data
+            </button>
+          )}
+        </div>
+      )}
+      {!d.can_send && !d.receiving && <p className="muted small">Not set up here. Production sends the copy and QA receives it; both need the same QA_SNAPSHOT_TOKEN (see docs/environments.md).</p>}
+      {error && <div className="error small">{error}</div>}
+    </section>
+  );
+}

@@ -2,6 +2,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import { SessionStore, COOKIE_MAX_AGE_MS } from './sessions.js';
 import { createInboxRouter } from './inbox/api.js';
+import { tokenMatches } from './qa/service.js';
 import { guardConnectors } from './inbox/channels.js';
 import { createL27Client } from './inbox/lookup.js';
 import { createLogger, requestLogger } from './log.js';
@@ -14,7 +15,7 @@ const FORWARD_HEADERS = ['accept', 'content-type'];
 
 export function createApp(
   config,
-  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null } = {},
+  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {} } = {},
 ) {
   const app = express();
   // Behind Railway's (or any) HTTPS proxy: trust X-Forwarded-* so secure cookies work.
@@ -149,10 +150,25 @@ export function createApp(
     res.send(Buffer.from(await upstream.arrayBuffer()));
   });
 
+  // QA only: receive an anonymized copy of production data from production.
+  if (config.qaSnapshotReceive && qa.store) {
+    app.put('/qa/snapshot', express.json({ limit: '300mb' }), async (req, res) => {
+      const auth = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!tokenMatches(auth, config.qaSnapshotToken)) return res.status(401).json({ error: 'Not allowed' });
+      try {
+        const summary = await qa.store.save(req.body);
+        res.json({ summary });
+      } catch (err) {
+        log.warn('QA copy refused', { error: err.message });
+        res.status(422).json({ error: err.message });
+      }
+    });
+  }
+
   // The support workspace (conversations, contacts, routing). Needs a database.
   if (db) {
     const l27 = createL27Client({ baseUrl: config.l27BaseUrl, fetchImpl });
-    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log }));
+    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa }));
   }
 
   // Last-resort error handler: log it (without personal data), answer generically.

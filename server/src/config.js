@@ -75,6 +75,11 @@ export function loadConfig(env = process.env) {
     ringcentralClientId,
     ringcentralServer,
     workerIntervalMs: Number(env.INBOX_WORKER_INTERVAL_MS || 30_000),
+    // Anonymized QA copy of real data. Production sends (needs the QA URL and the shared
+    // token); QA receives (needs the token). Never both: production can't receive one.
+    qaSnapshotToken: env.QA_SNAPSHOT_TOKEN || null,
+    qaSnapshotUrl: isProd ? env.QA_SNAPSHOT_URL || null : null,
+    qaSnapshotReceive: !isProd && !!env.QA_SNAPSHOT_TOKEN,
     warnings,
   };
 }
@@ -90,5 +95,6 @@ export function configErrors(config) {
   }
   if (config.onRailway && !config.production && !config.databaseUrl) errors.push(`DATABASE_URL must be set in the hosted ${config.appEnv} environment.`);
   if (config.l27Mode === 'mock' && !config.mockPassword) errors.push('MOCK_PASSWORD must be set when L27_MODE=mock.');
+  if (config.qaSnapshotToken && config.qaSnapshotToken.length < 32) errors.push('QA_SNAPSHOT_TOKEN must be at least 32 characters.');
   return errors;
 }
