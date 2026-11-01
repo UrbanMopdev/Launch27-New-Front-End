@@ -6,11 +6,17 @@ import type { Customer } from '../types';
 import { fmtDateTime } from '../format';
 import { useInboxMe } from '../inbox/util';
 import { segmentsApi, type SegmentId, type SegmentSummary, type TraitId } from '../segments/api';
-import { SEGMENT_HELP, SegmentPill, TraitTag, UpdatedLine, money, pct, shortDate } from '../segments/ui';
+import { SEGMENT_HELP, SegmentPill, TraitTag, UpdatedLine, money, shortDate } from '../segments/ui';
 
 export const customerName = (c: Customer) => [c.first_name, c.last_name].filter(Boolean).join(' ') || c.company_name || c.email || `#${c.id}`;
 
 const PAGE = 50;
+// Ops to-do lists: the segments where a call or offer makes a difference.
+const TODO: { id: SegmentId; text: string }[] = [
+  { id: 'risk', text: 'Plan customers with nothing booked: call before they lapse' },
+  { id: 'repeat', text: 'Keep booking one-time cleans: offer a plan' },
+  { id: 'first', text: 'New customers: ask for a rating, offer a second clean' },
+];
 
 export function CustomersPage() {
   const [params, setParams] = useSearchParams();
@@ -26,7 +32,6 @@ export function CustomersPage() {
       <div className="tabs seg-view-tabs">
         <button className={view === 'segments' ? 'tab active' : 'tab'} onClick={() => setView('segments')}>Segments</button>
         <button className={view === 'directory' ? 'tab active' : 'tab'} onClick={() => setView('directory')}>Directory</button>
-        <Link to="/customers/trends" className="tab seg-tab-link">Trends</Link>
       </div>
       {view === 'segments' ? <SegmentsView /> : <Directory />}
     </>
@@ -62,7 +67,6 @@ function SegmentsView() {
   };
   const s = summary.data;
   const current = s?.segments.find((x) => x.id === segment);
-  const activeTotal = s?.segments.filter((x) => x.group === 'active').reduce((n, x) => n + x.count, 0) ?? 0;
   const isAdmin = me.data?.role === 'admin';
 
   return (
@@ -70,7 +74,7 @@ function SegmentsView() {
       <header className="page-header">
         <div className="seg-head">
           <h1>Customers</h1>
-          <p className="muted">Segments update on their own from booking history. Each customer is in exactly one.</p>
+          <p className="muted">Find a customer or work a list. Segments update on their own from booking history.</p>
           <UpdatedLine summary={s} />
         </div>
         <div className="seg-head-actions">
@@ -103,49 +107,37 @@ function SegmentsView() {
 
       {s && s.total > 0 && (
         <>
-          <section aria-label="Segments" className="seg-section">
-            <div className="seg-section-head">
-              <h2 className="eyebrow">Active · {activeTotal.toLocaleString('en-CA')} customers</h2>
-              <span className="muted small">Bar = share of the last 12 months' revenue</span>
-            </div>
-            <div className="seg-cards">
-              {s.segments.filter((x) => x.group === 'active').map((x) => (
-                <button key={x.id} className={segment === x.id ? 'seg-card active' : 'seg-card'} aria-pressed={segment === x.id} onClick={() => update(segment === x.id ? null : x.id, traits)}>
-                  <span className="seg-card-top">
-                    <SegmentPill segment={x.id} />
-                    <span className="muted small">{pct(x.revenue_share)} of revenue</span>
-                  </span>
-                  <span className="seg-card-count">{x.count.toLocaleString('en-CA')}</span>
-                  <span className="seg-bar"><span className={`seg-bar-fill seg-fill-${x.id}`} style={{ width: `${Math.max(x.revenue_share * 100, 1)}%` }} /></span>
-                  <span className="muted small">{SEGMENT_HELP[x.id](s.settings)}</span>
-                </button>
-              ))}
-            </div>
-            <h2 className="eyebrow seg-past-title">Past · win-back pool</h2>
-            <div className="seg-cards">
-              {s.segments.filter((x) => x.group === 'past').map((x) => (
-                <button key={x.id} className={segment === x.id ? 'seg-card small active' : 'seg-card small'} aria-pressed={segment === x.id} onClick={() => update(segment === x.id ? null : x.id, traits)}>
-                  <span className="seg-card-stack">
-                    <SegmentPill segment={x.id} />
-                    <span className="muted small">{SEGMENT_HELP[x.id](s.settings)}</span>
-                  </span>
-                  <span className="seg-card-count small">{x.count.toLocaleString('en-CA')}</span>
-                </button>
-              ))}
-              {s.no_recent !== null && (
-                <div className="seg-card small static">
-                  <span className="seg-card-stack">
-                    <span className="seg-pill seg-none">No recent bookings</span>
-                    <span className="muted small">Has an account, no cleans in our booking history window</span>
-                  </span>
-                  <span className="seg-card-count small">{s.no_recent.toLocaleString('en-CA')}</span>
-                </div>
-              )}
+          <section aria-label="Needs attention" className="seg-section">
+            <h2 className="eyebrow">Needs attention</h2>
+            <div className="seg-todo">
+              {TODO.map((t) => {
+                const n = s.segments.find((x) => x.id === t.id)?.count ?? 0;
+                return (
+                  <Link key={t.id} to={`/customers/segments/${t.id}`} className="seg-todo-card">
+                    <SegmentPill segment={t.id} />
+                    <span className="seg-todo-count">{n.toLocaleString('en-CA')}</span>
+                    <span className="seg-todo-text">{t.text}</span>
+                    <span className="seg-todo-go">Open list →</span>
+                  </Link>
+                );
+              })}
             </div>
           </section>
 
+          <section aria-label="Segment" className="seg-filter">
+            <span className="small seg-traits-label">Segment</span>
+            <button className={!segment ? 'chip-btn active' : 'chip-btn'} aria-pressed={!segment} onClick={() => update(null, traits)}>
+              All <span className="seg-chip-count">{s.total.toLocaleString('en-CA')}</span>
+            </button>
+            {s.segments.map((x) => (
+              <button key={x.id} className={segment === x.id ? 'chip-btn active' : 'chip-btn'} aria-pressed={segment === x.id} onClick={() => update(segment === x.id ? null : x.id, traits)}>
+                {x.label} <span className="seg-chip-count">{x.count.toLocaleString('en-CA')}</span>
+              </button>
+            ))}
+          </section>
+
           <section aria-label="Traits" className="seg-traits">
-            <span className="small seg-traits-label">Narrow by trait</span>
+            <span className="small seg-traits-label">Trait</span>
             {s.traits.map((t) => {
               const on = traits.includes(t.id);
               return (

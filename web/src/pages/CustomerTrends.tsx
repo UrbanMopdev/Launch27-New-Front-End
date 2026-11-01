@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { segmentsApi, type Period, type SegmentId, type Trends } from '../segments/api';
-import { SegmentPill, UpdatedLine, pct, shortDate } from '../segments/ui';
+import { SEGMENT_HELP, SegmentPill, UpdatedLine, money, pct, shortDate } from '../segments/ui';
+import type { SegmentSummary } from '../segments/api';
 
 const PERIODS: [Period, string][] = [['30d', 'Last 30 days'], ['90d', '90 days'], ['12m', '12 months'], ['custom', 'Custom']];
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
-export function CustomerTrendsPage() {
+export function CustomerInsightsPage() {
   const [period, setPeriod] = useState<Period>('12m');
   const [from, setFrom] = useState(iso(new Date(Date.now() - 90 * 86_400_000)));
   const [to, setTo] = useState(iso(new Date()));
@@ -17,10 +18,11 @@ export function CustomerTrendsPage() {
 
   return (
     <div className="seg-page">
-      <nav className="small muted"><Link to="/customers">Customers</Link> / Trends</nav>
+      <nav className="small muted">Reports / Customer insights</nav>
       <header className="page-header">
         <div className="seg-head">
-          <h1>How segments are changing</h1>
+          <h1>Customer insights</h1>
+          <p className="muted">Who our customers are, what they are worth, and how that is changing.</p>
           <UpdatedLine summary={summary.data} />
         </div>
         <div className="seg-period-wrap">
@@ -38,6 +40,8 @@ export function CustomerTrendsPage() {
           )}
         </div>
       </header>
+
+      {summary.data && summary.data.total > 0 && <SegmentOverview s={summary.data} />}
 
       {trends.isError && <div className="error">{(trends.error as Error).message}</div>}
       {t && t.series.length === 0 && <div className="card muted">Trends appear after the first update.</div>}
@@ -213,5 +217,54 @@ function FirstTimers({ t }: { t: Trends }) {
       </ul>
       {f.total > 0 && <p className="small seg-insight">First-timers who never book a second clean are the biggest opening. A second-clean offer after a good rating is the first thing to try.</p>}
     </>
+  );
+}
+
+// Today's mix: size and revenue share per segment (cards open that segment's customer list).
+function SegmentOverview({ s }: { s: SegmentSummary }) {
+  const active = s.segments.filter((x) => x.group === 'active');
+  const past = s.segments.filter((x) => x.group === 'past');
+  const activeTotal = active.reduce((n, x) => n + x.count, 0);
+  return (
+    <section aria-label="Segments today" className="seg-section">
+      <div className="seg-section-head">
+        <h2 className="eyebrow">Today · {activeTotal.toLocaleString('en-CA')} active customers</h2>
+        <span className="muted small">Bar = share of the last 12 months' revenue</span>
+      </div>
+      <div className="seg-cards">
+        {active.map((x) => (
+          <Link key={x.id} to={`/customers?segment=${x.id}`} className="seg-card">
+            <span className="seg-card-top">
+              <SegmentPill segment={x.id} />
+              <span className="muted small">{pct(x.revenue_share)} of revenue</span>
+            </span>
+            <span className="seg-card-count">{x.count.toLocaleString('en-CA')}</span>
+            <span className="seg-bar"><span className={`seg-bar-fill seg-fill-${x.id}`} style={{ width: `${Math.max(x.revenue_share * 100, 1)}%` }} /></span>
+            <span className="muted small">{money(x.revenue_12m)} in 12 months · {SEGMENT_HELP[x.id](s.settings)}</span>
+          </Link>
+        ))}
+      </div>
+      <h2 className="eyebrow seg-past-title">Past · win-back pool</h2>
+      <div className="seg-cards">
+        {past.map((x) => (
+          <Link key={x.id} to={`/customers?segment=${x.id}`} className="seg-card small">
+            <span className="seg-card-stack">
+              <SegmentPill segment={x.id} />
+              <span className="muted small">{SEGMENT_HELP[x.id](s.settings)}</span>
+            </span>
+            <span className="seg-card-count small">{x.count.toLocaleString('en-CA')}</span>
+          </Link>
+        ))}
+        {s.no_recent !== null && (
+          <div className="seg-card small static">
+            <span className="seg-card-stack">
+              <span className="seg-pill seg-none">No recent bookings</span>
+              <span className="muted small">Has an account, no cleans in our booking history window</span>
+            </span>
+            <span className="seg-card-count small">{s.no_recent.toLocaleString('en-CA')}</span>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

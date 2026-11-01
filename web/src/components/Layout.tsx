@@ -44,7 +44,10 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
   },
   {
     section: 'Reports',
-    items: [{ to: '/feedback', label: 'Customer feedback', icon: 'star' }],
+    items: [
+      { to: '/reports/customers', label: 'Customer insights', icon: 'grid' },
+      { to: '/feedback', label: 'Customer feedback', icon: 'star' },
+    ],
   },
   { section: 'Developer', items: [{ to: '/api', label: 'API catalog', icon: 'code' }] },
 ];

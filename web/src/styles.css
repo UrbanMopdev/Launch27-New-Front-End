@@ -1244,7 +1244,16 @@ textarea { font: inherit; padding: 7px 9px; border: 1px solid var(--border); bor
   text-align: left; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-lg);
   padding: 16px; display: flex; flex-direction: column; gap: 10px; min-height: 160px; cursor: pointer;
 }
-.seg-card:hover { border-color: var(--border-strong); }
+.seg-card:hover { border-color: var(--border-strong); text-decoration: none; }
+a.seg-card { text-decoration: none; }
+.seg-todo { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.seg-todo-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; display: grid; grid-template-columns: auto 1fr; grid-template-areas: 'pill count' 'text text' 'go go'; gap: 8px 12px; align-items: center; color: var(--text); text-decoration: none; }
+.seg-todo-card:hover { border-color: var(--accent); text-decoration: none; }
+.seg-todo-card .seg-pill { grid-area: pill; justify-self: start; }
+.seg-todo-count { grid-area: count; justify-self: end; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+.seg-todo-text { grid-area: text; font-size: 13px; color: var(--text-2); }
+.seg-todo-go { grid-area: go; font-size: 13px; font-weight: 600; color: var(--accent); }
+.seg-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .seg-card.active { border: 2px solid var(--accent); padding: 15px; box-shadow: 0 0 0 4px #cffafe; }
 .seg-card.small { min-height: 72px; flex-direction: row; align-items: center; justify-content: space-between; }
 .seg-card.static { cursor: default; }
