@@ -79,7 +79,10 @@ export async function buildSnapshot(get, { now = Date.now(), daysBack = 60, days
   // field, which would otherwise look like a leak.
   const places = [...copy.customers, ...copy.teams].map((x) => x.city).concat(copy.bookings.map((b) => b.address?.city), copy.locations.map((l) => l.name));
   for (const p of places) if (p) originals.delete(String(p).trim().toLowerCase());
-  if (!check) return { copy, originals }; // tests and diagnostics only
+  // Kept tags already passed the no-names / no-contact-details rule (cleanTag), so a note
+  // typed with exactly the same words ("Prefers female cleaner") is generic, not a leak.
+  for (const x of [...copy.customers, ...copy.teams]) for (const t of x.tags_info || []) originals.delete(String(t.name).trim().toLowerCase());
+  if (!check) return { copy, originals, raw: { customers, teams, bookings } }; // tests and diagnostics only
   assertAnonymous(copy, originals);
   return copy;
 }

@@ -79,6 +79,13 @@ describe('QA copy: anonymizer', () => {
     const real = sensitiveStrings({ customers: [realCustomer] });
     assert.throws(() => assertAnonymous({ customers: [{ ...c, address: '4417 Riverside Drive' }] }, real), /real value/);
   });
+
+  test('short real values must match a whole field; long ones are caught anywhere', () => {
+    const real = new Set(['oak', '4417 riverside drive']);
+    assert.ok(assertAnonymous({ notes: 'Oakwood Avenue' }, real));
+    assert.throws(() => assertAnonymous({ city: 'Toronto, Oak' }, real), /1 real value.*Fields: city \(1\)/);
+    assert.throws(() => assertAnonymous({ notes: 'key under mat at 4417 Riverside Drive' }, real), /Fields: notes \(1\)/);
+  });
 });
 
 describe('QA copy: tags are staff-typed text', () => {

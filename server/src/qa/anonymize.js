@@ -254,55 +254,74 @@ export function sensitiveStrings({ customers = [], teams = [], bookings = [] }) 
   return out;
 }
 
+// A real value counts as leaked when a copied string equals it (or one of its
+// comma-separated parts does), or, for long values, contains it. Short values are only
+// matched exactly: a 4-letter street name will otherwise turn up inside random text.
+const LONG = 12;
+
+function stringValues(v, path, out) {
+  if (v === null || v === undefined) return out;
+  if (Array.isArray(v)) v.forEach((x) => stringValues(x, `${path}[]`, out));
+  else if (typeof v === 'object') Object.entries(v).forEach(([k, x]) => stringValues(x, path ? `${path}.${/^\d+$/.test(k) ? '*' : k}` : k, out));
+  else out.push([path, String(v)]);
+  return out;
+}
+
+const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const PHONE = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}\b/g;
+
+function findLeaks(copy, originals) {
+  const values = stringValues(copy, '', []);
+  const long = originals ? [...originals].filter((s) => s.length >= LONG && !/^\d{7}$/.test(s)) : [];
+  const counts = { emails: 0, phones: 0, processor: 0 };
+  const hits = new Set();
+  const paths = new Map();
+  for (const [path, str] of values) {
+    let leak = false;
+    const emails = (str.match(EMAIL) || []).filter((e) => !/@example\.com$/i.test(e));
+    const phones = str.match(PHONE) || [];
+    const realPhones = phones.filter((ph) => !/\b555[\s.-]?\d{4}\b/.test(ph));
+    counts.emails += emails.length;
+    counts.phones += realPhones.length;
+    if (emails.length || realPhones.length) leak = true;
+    if (/pm_[A-Za-z0-9]{10,}|cus_[A-Za-z0-9]{10,}/.test(str)) { counts.processor++; leak = true; }
+    if (originals) {
+      const t = str.trim().toLowerCase();
+      const parts = t.includes(',') ? [t, ...t.split(',').map((x) => x.trim())] : [t];
+      for (const part of parts) if (originals.has(part)) { hits.add(part); leak = true; }
+      for (const ph of phones) {
+        const tail = ph.replace(/\D/g, '').slice(-7);
+        if (originals.has(tail)) { hits.add(tail); leak = true; }
+      }
+      if (t.length >= LONG) for (const s of long) if (t.includes(s)) { hits.add(s); leak = true; }
+    }
+    if (leak) paths.set(path, (paths.get(path) || 0) + 1);
+  }
+  return { counts, hits: hits.size, paths };
+}
+
 // Throws if the copy still contains anything personal. `originals` (optional) adds the
 // strongest check: none of the real values may appear anywhere.
 export function assertAnonymous(copy, originals = null) {
-  const json = JSON.stringify(copy);
+  const { counts, hits, paths } = findLeaks(copy, originals);
   const problems = [];
-  const emails = json.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [];
-  const realEmails = emails.filter((e) => !/@example\.com$/i.test(e));
-  if (realEmails.length) problems.push(`${realEmails.length} email address(es) not on example.com`);
-  const phones = json.match(/\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}\b/g) || [];
-  const realPhones = phones.filter((p) => !/\b555[\s.-]?\d{4}\b/.test(p));
-  if (realPhones.length) problems.push(`${realPhones.length} phone number(s) not in the 555 range`);
-  if (/pm_[A-Za-z0-9]{10,}|cus_[A-Za-z0-9]{10,}/.test(json)) problems.push('payment processor ids present');
-  if (originals) {
-    const lower = json.toLowerCase();
-    const phoneTails = new Set(phones.map((p) => p.replace(/\D/g, '').slice(-7)));
-    let hits = 0;
-    for (const s of originals) {
-      if (/^\d{7}$/.test(s) ? phoneTails.has(s) : lower.includes(s)) hits++;
-    }
-    if (hits) problems.push(`${hits} real value(s) from Launch27 still present`);
-  }
+  if (counts.emails) problems.push(`${counts.emails} email address(es) not on example.com`);
+  if (counts.phones) problems.push(`${counts.phones} phone number(s) not in the 555 range`);
+  if (counts.processor) problems.push('payment processor ids present');
+  if (hits) problems.push(`${hits} real value(s) from Launch27 still present`);
   if (problems.length) {
-    const where = leakPaths(copy, originals);
+    const where = fieldList(paths);
     throw new Error(`QA copy is not anonymous: ${problems.join('; ')}${where.length ? `. Fields: ${where.join(', ')}` : ''}`);
   }
   return true;
 }
 
+function fieldList(paths, limit = 20) {
+  return [...paths.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([p, n]) => `${p} (${n})`);
+}
+
 // Where personal data was found, as field paths with array indexes collapsed
 // (e.g. "bookings[].services[].extras[].name"). Never includes the values themselves.
 export function leakPaths(copy, originals = null, limit = 20) {
-  const found = new Map();
-  const isLeak = (v) => {
-    const str = String(v);
-    if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(str) && !/@example\.com/i.test(str)) return true;
-    const ph = str.match(/\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}\b/g) || [];
-    if (ph.some((p) => !/\b555[\s.-]?\d{4}\b/.test(p))) return true;
-    if (originals) {
-      if (originals.has(str.trim().toLowerCase())) return true;
-      if (ph.some((p) => originals.has(p.replace(/\D/g, '').slice(-7)))) return true;
-    }
-    return false;
-  };
-  const walk = (v, path) => {
-    if (v === null || v === undefined) return;
-    if (Array.isArray(v)) return v.forEach((x) => walk(x, `${path}[]`));
-    if (typeof v === 'object') return Object.entries(v).forEach(([k, x]) => walk(x, path ? `${path}.${/^\d+$/.test(k) ? '*' : k}` : k));
-    if (isLeak(v)) found.set(path, (found.get(path) || 0) + 1);
-  };
-  walk(copy, '');
-  return [...found.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([p, n]) => `${p} (${n})`);
+  return fieldList(findLeaks(copy, originals).paths, limit);
 }
