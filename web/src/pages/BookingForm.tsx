@@ -184,7 +184,8 @@ export function BookingFormPage() {
   const [loaded, setLoaded] = useState(!editing && !presetCustomerId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [addingService, setAddingService] = useState(false);
+  // A booking has exactly one service; this shows the service picker to switch it.
+  const [changingService, setChangingService] = useState(false);
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
 
   useEffect(() => {
@@ -402,7 +403,7 @@ export function BookingFormPage() {
                 onChange={(v) => set({ location_id: v, services: [], frequency_id: null })}
               />
             )}
-            {form.services.map((line, index) => {
+            {!changingService && form.services.slice(0, 1).map((line, index) => {
               const svc = serviceById.get(line.id);
               const update = (patch: Partial<ServiceLine>) => set({ services: form.services.map((l, i) => (i === index ? { ...l, ...patch } : l)) });
               return (
@@ -410,8 +411,8 @@ export function BookingFormPage() {
                   <div className="bf-line-head">
                     <strong>{svc?.name || `Service #${line.id}`}</strong>
                     {svc && <span className="muted small mono">{fmtMoney(svc.price)}{svc.hourly ? ' / hour' : ''}</span>}
-                    <button type="button" className="link small" onClick={() => set({ services: form.services.filter((_, i) => i !== index) })}>
-                      Remove
+                    <button type="button" className="link small" onClick={() => setChangingService(true)}>
+                      Change service
                     </button>
                   </div>
                   <div className="bf-qtys">
@@ -448,16 +449,18 @@ export function BookingFormPage() {
                 </div>
               );
             })}
-            {(!form.services.length || addingService) && (
+            {(!form.services.length || changingService) && (
               <div className="bf-svc-grid">
                 {services.data?.map((sv) => (
                   <button
                     key={sv.id}
                     type="button"
-                    className="bf-svc"
+                    className={form.services[0]?.id === sv.id ? 'bf-svc on' : 'bf-svc'}
+                    aria-pressed={form.services[0]?.id === sv.id}
                     onClick={() => {
-                      set({ services: [...form.services, newServiceLine(sv)] });
-                      setAddingService(false);
+                      // Keep the current choices when re-picking the same service.
+                      if (form.services[0]?.id !== sv.id) set({ services: [newServiceLine(sv)] });
+                      setChangingService(false);
                     }}
                   >
                     <strong>{sv.name}</strong>
@@ -467,9 +470,9 @@ export function BookingFormPage() {
                 {services.isLoading && <div className="muted">Loading services…</div>}
               </div>
             )}
-            {!!form.services.length && !addingService && (
-              <button type="button" className="secondary" onClick={() => setAddingService(true)}>
-                + Add another service
+            {!!form.services.length && changingService && (
+              <button type="button" className="secondary" onClick={() => setChangingService(false)}>
+                Keep {serviceById.get(form.services[0].id)?.name || 'current service'}
               </button>
             )}
           </Step>
