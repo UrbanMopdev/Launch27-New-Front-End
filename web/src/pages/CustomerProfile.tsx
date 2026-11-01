@@ -5,13 +5,12 @@ import { l27 } from '../api';
 import { useCanWrite } from '../hooks';
 import type { Customer } from '../types';
 import { CustomerEditor } from '../components/CustomerEditor';
+import { Icon } from '../components/Icon';
 import { Customer360 } from '../inbox/Customer360';
 import { inbox } from '../inbox/api';
-import { DialButton } from './SupportPages';
-import { customerName } from './Customers';
+import { CallButton } from '../components/CallButton';
 
-// The one customer page: everything from Launch27 (bookings, money, ratings, home) plus
-// conversations, in the Customer 360 layout. Every customer link in the app lands here.
+// The one customer page: the full Customer 360. Every customer link in the app lands here.
 export function CustomerProfilePage() {
   const { id } = useParams();
   const cid = Number(id);
@@ -34,46 +33,44 @@ export function CustomerProfilePage() {
       setError((err as Error).message);
     }
   };
+  const phone = contact.data?.identities.find((i) => i.kind === 'phone' && !i.opted_out)?.value;
 
   if (customer.error) return <div className="error">{(customer.error as Error).message}</div>;
   const c = customer.data;
 
+  const actions = (
+    <>
+      <button type="button" onClick={() => start('sms')} disabled={!contact.data}>
+        <Icon name="sms" /> Text
+      </button>
+      <button type="button" className="secondary" onClick={() => start('email')} disabled={!contact.data}>
+        <Icon name="email" /> Email
+      </button>
+      <CallButton phone={phone || c?.phone} />
+      {canWrite && (
+        <Link to={`/bookings/new?customer=${cid}`} className="button secondary-link">
+          New booking
+        </Link>
+      )}
+      {canWrite && c && !editing && (
+        <button type="button" className="secondary" onClick={() => setEditing(true)}>
+          Edit customer
+        </button>
+      )}
+    </>
+  );
+
   return (
     <>
-      <header className="page-header">
-        <div>
-          <div className="muted small">
-            <Link to="/customers">Customers</Link> /
-          </div>
-          <h1>
-            {c ? customerName(c) : 'Loading…'} {c && !c.active && <span className="badge danger">inactive</span>}
-          </h1>
-        </div>
-        <div className="actions">
-          {contact.data && (
-            <>
-              <button type="button" onClick={() => start('sms')}>Text</button>
-              <button type="button" className="secondary" onClick={() => start('email')}>Email</button>
-              <DialButton contact={contact.data} />
-            </>
-          )}
-          {canWrite && c && !editing && (
-            <>
-              <button type="button" className="secondary" onClick={() => setEditing(true)}>Edit customer</button>
-              <Link to={`/bookings/new?customer=${cid}`} className="button">New booking</Link>
-            </>
-          )}
-        </div>
-      </header>
+      <div className="crumbs small">
+        <Link to="/customers">Customers</Link> / {c ? [c.first_name, c.last_name].filter(Boolean).join(' ') || c.company_name : '…'}
+      </div>
       {error && <div className="error">{error}</div>}
       {editing && c && <CustomerEditor customer={c} onDone={() => setEditing(false)} />}
-
       {contact.error ? (
         <div className="error">Couldn't load this customer's profile: {(contact.error as Error).message}</div>
       ) : contact.data ? (
-        <div className="card flush">
-          <Customer360 contact={contact.data} full />
-        </div>
+        <Customer360 contact={contact.data} full actions={actions} />
       ) : (
         <div className="muted">Loading…</div>
       )}

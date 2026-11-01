@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { inbox, type Presence } from './api';
+import { inbox } from './api';
 import { ago, useInboxMe } from './util';
+import { Icon } from '../components/Icon';
 
 // Sidebar footer: my availability for routed work, and my notifications.
 export function SupportStatus() {
@@ -13,23 +14,34 @@ export function SupportStatus() {
   const notes = useQuery({ queryKey: ['inbox', 'notifications'], queryFn: inbox.notifications, refetchInterval: 15_000, enabled: !!me.data });
   if (!me.data) return null;
   const unread = notes.data?.filter((n) => !n.read_at).length || 0;
-  const setPresence = async (p: Presence) => {
-    const r = await inbox.setPresence(p);
+  const changeStatus = async (id: number) => {
+    const r = await inbox.setStatus(id);
     queryClient.invalidateQueries({ queryKey: ['inbox'] });
     if (r.requeued) alert(`${r.requeued} open conversation(s) went back to their queues.`);
   };
+  const current = me.data.status;
+  const mins = current?.status_since ? Math.floor((Date.now() - new Date(current.status_since).getTime()) / 60_000) : null;
+  const over = !!current?.max_minutes && mins !== null && mins > current.max_minutes;
+  const options = (me.data.statuses || []).filter((x) => x.selectable || x.id === current?.id);
   return (
     <div className="support-status">
-      <label className="presence">
-        <span className={`presence-dot ${me.data.presence}`} />
-        <select value={me.data.presence} onChange={(e) => setPresence(e.target.value as Presence)}>
-          <option value="available">Available</option>
-          <option value="busy">Busy</option>
-          <option value="offline">Offline</option>
+      <label className="presence" title={current ? `${current.name}${mins !== null ? ` for ${mins} min` : ''}` : undefined}>
+        <span className="status-dot" style={{ background: current?.color || '#6b7280' }} />
+        <span className="sr-only">My status</span>
+        <select value={current?.id ?? ''} onChange={(e) => changeStatus(Number(e.target.value))}>
+          {!current && <option value="">Set status…</option>}
+          {options.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+              {x.max_minutes ? ` (${x.max_minutes} min)` : ''}
+            </option>
+          ))}
         </select>
+        {mins !== null && current?.kind !== 'available' && <span className={over ? 'status-time over' : 'status-time'}>{mins}m</span>}
       </label>
-      <button className="link bell" onClick={() => setOpen(!open)} aria-label="Notifications">
-        🔔{unread > 0 && <span className="count late">{unread}</span>}
+      <button className="icon-button bell" onClick={() => setOpen(!open)} aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'} title="Notifications">
+        <Icon name="bell" size={18} />
+        {unread > 0 && <span className="bell-badge">{unread}</span>}
       </button>
       {open && (
         <div className="notif-pop">

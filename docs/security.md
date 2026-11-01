@@ -46,6 +46,13 @@ SMS/email connector is swapped for a sandbox stand-in, and RingCentral works onl
 its sandbox. Tests in `server/test/platform.test.js` cover each guard, and the smoke test
 checks them on every deploy.
 
+## Real data in QA
+
+QA can show an anonymized copy of production data (docs/environments.md → "Data in dev
+and QA"). Personal fields are replaced before the copy leaves production, it is checked
+on both sides, and QA never receives Launch27 credentials. The shared
+`QA_SNAPSHOT_TOKEN` only lets production write a copy into QA; it reads nothing.
+
 ## Logging without personal data
 
 `server/src/log.js` writes JSON lines and redacts before writing:

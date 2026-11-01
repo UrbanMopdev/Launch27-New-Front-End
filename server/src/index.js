@@ -5,6 +5,7 @@ import { configErrors, loadConfig } from './config.js';
 import { createApp } from './app.js';
 import { openDb } from './db/index.js';
 import { createLogger } from './log.js';
+import { createQaSender, createQaStore } from './qa/service.js';
 import { createMockLaunch27 } from './mock/launch27.js';
 import { SessionStore } from './sessions.js';
 import { seed } from './inbox/seed.js';
@@ -24,9 +25,14 @@ const db = await openDb({ databaseUrl: config.databaseUrl, pgliteDir: config.pgl
 await seed(db);
 
 const sessions = new SessionStore({ db, secret: config.sessionSecret, log });
-const fetchImpl = config.l27Mode === 'mock' ? createMockLaunch27({ password: config.mockPassword }) : fetch;
+// QA can serve an anonymized copy of production data (sent by production); otherwise the
+// synthetic Launch27 generates data.
+const qaStore = config.l27Mode === 'mock' && !config.production ? createQaStore({ db, log }) : null;
+if (qaStore) await qaStore.load();
+const fetchImpl = config.l27Mode === 'mock' ? createMockLaunch27({ password: config.mockPassword, snapshot: () => qaStore?.current() || null }) : fetch;
+const qaSender = createQaSender({ config, fetchImpl, log });
 const jobs = { consecutiveFailures: 0, lastSuccessAt: null, lastError: null };
-const app = createApp(config, { db, sessions, fetchImpl, log, jobs });
+const app = createApp(config, { db, sessions, fetchImpl, log, jobs, qa: { store: qaStore, sender: qaSender } });
 if (config.sampleData && config.l27Mode === 'mock') {
   await loadSampleInbox(db, { fetchImpl, baseUrl: config.l27BaseUrl, log: (level, msg, fields) => log[level](msg, fields) }).catch((err) => log.error('sample inbox failed', { error: err.message }));
 }

@@ -194,3 +194,42 @@ describe('sample inbox', () => {
     assert.equal(loadConfig({ APP_ENV: 'development', SAMPLE_DATA: 'true' }).sampleData, true);
   });
 });
+
+describe('synthetic Launch27 pricing', () => {
+  test('matches every real-booking case to the cent', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { priceBooking } = await import('../src/mock/pricing.js');
+    const { cases } = JSON.parse(readFileSync(new URL('../../web/src/lib/pricing.fixtures.json', import.meta.url), 'utf8'));
+    assert.ok(cases.length > 100);
+    for (const c of cases) {
+      const got = priceBooking(c.input);
+      assert.equal(got.total, c.expected.total, c.scenario);
+      assert.equal(got.revenue, c.expected.revenue, c.scenario);
+      assert.equal(got.tax, c.expected.tax, c.scenario);
+    }
+  });
+
+  test('a booking made in the form is priced like Launch27 (frequency, code after frequency, non-discountable extra)', async () => {
+    const mock = createMockLaunch27({ password: 'demo' });
+    const call = (path, init = {}) => mock(`https://mock${path}`, { ...init, headers: { authorization: 'Bearer mock-bearer' } });
+    const res = await call('/v1/staff/bookings', {
+      method: 'POST',
+      body: JSON.stringify({
+        user: { id: 50000 },
+        service_date: '2026-11-10T09:00:00',
+        frequency_id: 74, // weekly 15%
+        discount_code: 'welcome10',
+        services: [{ id: 1182, pricing_parameters: [{ id: 137, quantity: 2 }, { id: 138, quantity: 1 }], extras: [{ id: 227, quantity: 1 }, { id: 232, quantity: 1 }] }],
+      }),
+    });
+    const { id } = await res.json();
+    const b = await (await call(`/v1/staff/bookings/${id}`)).json();
+    // 151.25 + 55 + 18.33 + Move In Move Out 210.83 (no frequency discount) + Basement 68.75 = 504.16
+    assert.equal(Math.round((b.summary.services + b.summary.pricing_parameters + b.summary.extras) * 100) / 100, 504.16);
+    assert.equal(b.discount_info.frequency_amount, 44); // 15% of 293.33 = 43.9995
+    assert.equal(b.discount_info.discount_amount, 46.02); // 10% of (504.16 − 44.00)
+    assert.equal(b.summary.revenue, 414.14);
+    assert.equal(b.summary.tax.tax_amount, 53.84);
+    assert.equal(b.summary.total, 467.98);
+  });
+});

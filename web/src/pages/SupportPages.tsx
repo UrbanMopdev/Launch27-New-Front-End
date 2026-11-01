@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { inbox, type Channel, type Contact, type Role, type Rule } from '../inbox/api';
+import { inbox, type Channel, type Contact, type Role } from '../inbox/api';
 import { Customer360 } from '../inbox/Customer360';
 import { Cleaner360 } from '../inbox/Cleaner360';
 import { CHANNEL_ICON, ROLE_LABEL, ago, displayIdentity, useInboxMe, useMeta } from '../inbox/util';
-import { fmtDateTime } from '../format';
 
 // ---------- Contact profile (full-page 360) ----------
 
@@ -173,6 +172,13 @@ export function OpenL27Contact({ customerId, teamId, label = 'Support profile' }
 
 export function SupervisorPage() {
   const data = useQuery({ queryKey: ['inbox', 'supervisor'], queryFn: inbox.supervisor, refetchInterval: 10_000 });
+  const me = useInboxMe();
+  const queryClient = useQueryClient();
+  const setAgentStatus = async (userId: number, statusId: number) => {
+    const r = await inbox.setUserStatus(userId, statusId);
+    queryClient.invalidateQueries({ queryKey: ['inbox'] });
+    if (r.requeued) alert(`${r.requeued} conversation(s) went back to their queues.`);
+  };
   if (data.isLoading) return <div className="muted">Loading…</div>;
   if (data.error) return <div className="error">{(data.error as Error).message}</div>;
   const d = data.data!;
@@ -203,15 +209,29 @@ export function SupervisorPage() {
         <section className="card no-pad">
           <div className="table-wrap flat">
             <table>
-              <thead><tr><th>Agent</th><th>Status</th><th className="num">Open</th><th className="num">Late</th><th className="num">Done today</th></tr></thead>
+              <thead><tr><th>Agent</th><th>Status</th><th className="num">Away today</th><th className="num">Open</th><th className="num">Late</th><th className="num">Done today</th></tr></thead>
               <tbody>
-                {d.agents.map((a) => (
+                {d.agents.map((a) => {
+                  const mins = a.status_since ? Math.floor((Date.now() - new Date(a.status_since).getTime()) / 60_000) : null;
+                  const over = !!a.status_max && mins !== null && mins > a.status_max;
+                  return (
                   <tr key={a.id} className="static">
                     <td>{a.name || a.email} <span className="muted small">{a.role !== 'agent' ? a.role : ''}</span></td>
-                    <td><span className={`presence-dot ${a.presence}`} /> {a.presence}</td>
+                    <td>
+                      <span className="status-cell">
+                        <span className="status-dot" style={{ background: a.status_color || '#9aa3ad' }} />
+                        <select aria-label={`Status for ${a.name || a.email}`} value={a.status_id ?? ''} onChange={(e) => setAgentStatus(a.id, Number(e.target.value))}>
+                          {!a.status_id && <option value="">—</option>}
+                          {me.data?.statuses?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                        </select>
+                        {mins !== null && <span className={over ? 'chip neg' : 'muted small'}>{mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`}{over ? ` (limit ${a.status_max}m)` : ''}</span>}
+                      </span>
+                    </td>
+                    <td className="num">{a.away_minutes_today ? `${a.away_minutes_today}m` : ''}</td>
                     <td className="num">{a.open}</td><td className={a.breached ? 'num neg' : 'num'}>{a.breached || ''}</td><td className="num">{a.done_today}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -310,205 +330,4 @@ export function SimulatorPage() {
   );
 }
 
-// ---------- Settings: routing, SLAs, saved replies, team ----------
-
-export function InboxSettingsPage() {
-  const me = useInboxMe();
-  const [tab, setTab] = useState<'rules' | 'sla' | 'canned' | 'team'>('rules');
-  const isAdmin = me.data?.role === 'admin';
-  return (
-    <>
-      <header className="page-header"><h1>Support settings</h1>{!isAdmin && <span className="muted small">Read-only: admins can change these.</span>}</header>
-      <div className="tabs">
-        {(['rules', 'sla', 'canned', 'team'] as const).map((t) => (
-          <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => setTab(t)}>{{ rules: 'Routing rules', sla: 'Reply targets', canned: 'Saved replies', team: 'Team & queues' }[t]}</button>
-        ))}
-      </div>
-      {tab === 'rules' && <RulesEditor canEdit={isAdmin} />}
-      {tab === 'sla' && <SlaEditor canEdit={isAdmin} />}
-      {tab === 'canned' && <CannedEditor canEdit={isAdmin || me.data?.role === 'supervisor'} />}
-      {tab === 'team' && <TeamEditor canEdit={isAdmin} />}
-    </>
-  );
-}
-
-function RulesEditor({ canEdit }: { canEdit: boolean }) {
-  const queryClient = useQueryClient();
-  const data = useQuery({ queryKey: ['inbox', 'rules'], queryFn: inbox.rules });
-  const [rules, setRules] = useState<Rule[] | null>(null);
-  const [editing, setEditing] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const list = rules || data.data?.rules || [];
-  const dirty = !!rules;
-  const save = useMutation({
-    mutationFn: () => inbox.saveRules(list),
-    onSuccess: () => {
-      setRules(null);
-      setError(null);
-      queryClient.invalidateQueries({ queryKey: ['inbox', 'rules'] });
-    },
-    onError: (err) => setError((err as Error).message),
-  });
-  const update = (i: number, r: Rule) => setRules(list.map((x, j) => (j === i ? r : x)));
-  const move = (i: number, d: number) => {
-    const next = [...list];
-    const [r] = next.splice(i, 1);
-    next.splice(i + d, 0, r);
-    setRules(next);
-  };
-  return (
-    <section className="card">
-      <p className="small muted">Checked top to bottom; the first match decides the queue and reply target. Anything unmatched goes to Fallback.</p>
-      {data.data?.warnings.map((w) => <div key={w.message} className="error small">{w.message}</div>)}
-      {list.map((r, i) => (
-        <div key={i} className={r.enabled ? 'rule-row' : 'rule-row disabled'}>
-          <div className="rule-head">
-            <span className="muted">{i + 1}.</span>
-            <b>{r.name}</b>
-            <span className="small muted">→ {String(r.action.queue || (r.action.mark_done ? 'mark done' : '—'))}{r.action.sla ? ` · ${String(r.action.sla)}` : ''}</span>
-            {canEdit && (
-              <span className="actions">
-                <button className="link" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
-                <button className="link" disabled={i === list.length - 1} onClick={() => move(i, 1)}>↓</button>
-                <label className="check small"><input type="checkbox" checked={r.enabled} onChange={(e) => update(i, { ...r, enabled: e.target.checked })} /> on</label>
-                <button className="link" onClick={() => setEditing(editing === i ? null : i)}>{editing === i ? 'close' : 'edit'}</button>
-              </span>
-            )}
-          </div>
-          <div className="small muted rule-conds">{describeConditions(r.conditions)}</div>
-          {r.replaces && <div className="small muted">Replaces Kustomer: {r.replaces}</div>}
-          {editing === i && <RuleJson rule={r} onChange={(nr) => update(i, nr)} />}
-        </div>
-      ))}
-      {canEdit && (
-        <div className="actions spaced">
-          <button className="secondary" onClick={() => setRules([...list, { name: 'New rule', enabled: true, conditions: { channel: ['email'] }, action: { queue: 'operations' } }])}>Add rule</button>
-          <button disabled={!dirty || save.isPending} onClick={() => save.mutate()}>Save order and changes</button>
-          {dirty && <button className="link" onClick={() => setRules(null)}>Discard</button>}
-        </div>
-      )}
-      {error && <div className="error small">{error}</div>}
-    </section>
-  );
-}
-
-function describeConditions(c: Record<string, unknown>): string {
-  const parts: string[] = [];
-  const list = (v: unknown) => (Array.isArray(v) ? v.map(String).join(' or ') : String(v));
-  for (const [k, v] of Object.entries(c)) {
-    if (k === 'any' && Array.isArray(v)) parts.push(`any of (${v.map((x) => describeConditions(x as Record<string, unknown>)).join(' | ')})`);
-    else parts.push(`${k.replace(/_/g, ' ')}: ${list(v)}`);
-  }
-  return parts.join(' and ') || 'matches everything';
-}
-
-function RuleJson({ rule, onChange }: { rule: Rule; onChange: (r: Rule) => void }) {
-  const [text, setText] = useState(JSON.stringify({ name: rule.name, conditions: rule.conditions, action: rule.action }, null, 2));
-  const [bad, setBad] = useState(false);
-  return (
-    <div className="rule-json">
-      <textarea
-        rows={10}
-        className={bad ? 'full bad' : 'full'}
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          try {
-            const v = JSON.parse(e.target.value);
-            setBad(false);
-            onChange({ ...rule, name: v.name, conditions: v.conditions || {}, action: v.action || {} });
-          } catch {
-            setBad(true);
-          }
-        }}
-      />
-      <div className="small muted">Conditions: channel, to, from_contains, subject_contains, text_contains, text_excludes, contact_role, lead_stage, any. Action: queue, sla, priority, mark_done, redact.</div>
-    </div>
-  );
-}
-
-function SlaEditor({ canEdit }: { canEdit: boolean }) {
-  const meta = useMeta();
-  const queryClient = useQueryClient();
-  return (
-    <section className="card">
-      <p className="small muted">Measured in business hours (Toronto, Mon–Sat 8am–8pm, Sun 9am–5pm, closed on holidays). Only human replies stop the clock; snoozing pauses it.</p>
-      <table>
-        <thead><tr><th>Target</th><th className="num">First reply (min)</th><th className="num">Warn before (min)</th></tr></thead>
-        <tbody>
-          {meta.data?.sla_policies.map((p) => (
-            <tr key={p.id} className="static">
-              <td>{p.name}</td>
-              <td className="num">{canEdit ? <input type="number" defaultValue={p.first_response_minutes} onBlur={(e) => Number(e.target.value) !== p.first_response_minutes && inbox.saveSla(p.id, { first_response_minutes: Number(e.target.value) }).then(() => queryClient.invalidateQueries({ queryKey: ['inbox', 'meta'] }))} className="num-input" /> : p.first_response_minutes}</td>
-              <td className="num">{p.warn_minutes}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <h3>Holidays</h3>
-      <div className="small">{meta.data?.holidays.map((h) => <span key={h.day} className="pill">{h.day} {h.name}</span>)}</div>
-    </section>
-  );
-}
-
-function CannedEditor({ canEdit }: { canEdit: boolean }) {
-  const meta = useMeta();
-  const queryClient = useQueryClient();
-  const [draft, setDraft] = useState({ shortcut: '', title: '', body: '' });
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['inbox', 'meta'] });
-  return (
-    <section className="card">
-      <p className="small muted">Type "/" in the composer to use these. {'{{first_name}}'} fills in the contact's first name.</p>
-      {meta.data?.canned.map((c) => (
-        <div key={c.id} className="row-line">
-          <span><b>/{c.shortcut}</b> {c.title}<div className="small muted">{c.body}</div></span>
-          {canEdit && <button className="link" onClick={() => inbox.deleteCanned(c.id).then(refresh)}>Delete</button>}
-        </div>
-      ))}
-      {canEdit && (
-        <div className="spaced">
-          <div className="grid-3">
-            <label>Shortcut<input value={draft.shortcut} onChange={(e) => setDraft({ ...draft, shortcut: e.target.value.replace(/\W/g, '') })} /></label>
-            <label>Title<input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></label>
-          </div>
-          <label>Text<textarea rows={3} className="full" value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} /></label>
-          <button disabled={!draft.shortcut || !draft.title || !draft.body} onClick={() => inbox.saveCanned(draft).then(() => { setDraft({ shortcut: '', title: '', body: '' }); refresh(); })}>Add saved reply</button>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function TeamEditor({ canEdit }: { canEdit: boolean }) {
-  const users = useQuery({ queryKey: ['inbox', 'users'], queryFn: inbox.users });
-  const meta = useMeta();
-  const queryClient = useQueryClient();
-  const save = (id: number, patch: { role?: string; queue_ids?: number[] }) => inbox.updateUser(id, patch).then(() => queryClient.invalidateQueries({ queryKey: ['inbox'] }));
-  return (
-    <section className="card no-pad">
-      <div className="table-wrap flat">
-        <table>
-          <thead><tr><th>Person</th><th>Role</th>{meta.data?.queues.map((q) => <th key={q.id} className="small">{q.name}</th>)}</tr></thead>
-          <tbody>
-            {users.data?.map((u) => (
-              <tr key={u.id} className="static">
-                <td>{u.name || u.email}<div className="muted small">{u.email} · last seen {fmtDateTime((u as { last_seen_at?: string }).last_seen_at)}</div></td>
-                <td>{canEdit ? <select value={u.role} onChange={(e) => save(u.id, { role: e.target.value })}><option value="agent">agent</option><option value="supervisor">supervisor</option><option value="admin">admin</option></select> : u.role}</td>
-                {meta.data?.queues.map((q) => {
-                  const ids = (u.queue_ids || []).map(Number);
-                  const on = ids.includes(q.id);
-                  return (
-                    <td key={q.id}>
-                      <input type="checkbox" disabled={!canEdit} checked={on} onChange={() => save(u.id, { queue_ids: on ? ids.filter((x) => x !== q.id) : [...ids, q.id] })} />
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="small muted pad">People appear here after they first sign in. Queue membership decides who receives routed work.</p>
-    </section>
-  );
-}
+export { InboxSettingsPage } from './SupportSettings';

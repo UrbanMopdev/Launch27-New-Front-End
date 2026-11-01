@@ -15,6 +15,108 @@ export interface User {
   queues?: { id: number; slug: string; name: string }[];
   open_count?: number;
   queue_ids?: number[];
+  status?: (AgentStatus & { status_since: string | null }) | null;
+  statuses?: AgentStatus[];
+}
+
+export type StatusKind = 'available' | 'away' | 'offline';
+export interface AgentStatus {
+  id: number;
+  slug: string;
+  name: string;
+  kind: StatusKind;
+  color: string;
+  keeps_work?: boolean;
+  max_minutes: number | null;
+  selectable: boolean;
+  position?: number;
+  in_use?: number;
+}
+export type Capacity = Partial<Record<'email' | 'sms' | 'chat' | 'voice', number>>;
+export interface Team {
+  id?: number;
+  name: string;
+  description: string | null;
+  lead_user_id: number | null;
+  member_ids: number[];
+  queue_ids: number[];
+}
+export interface QueueSettings extends Queue {
+  position: number;
+  routing_mode: 'least_busy' | 'round_robin' | 'manual';
+  schedule_id: number | null;
+  default_sla_id: number | null;
+  overflow_minutes: number | null;
+  overflow_queue_id: number | null;
+  priority_boost: number;
+}
+export interface Schedule {
+  id?: number;
+  name: string;
+  time_zone: string;
+  week: Record<string, [string, string] | null>;
+  is_default: boolean;
+}
+export interface WorkspaceSettings {
+  default_capacity: Capacity;
+  offline_returns_work: boolean;
+  auto_offline_idle_minutes: number;
+  pull_waiting_on_available: boolean;
+  assign_on_reply: boolean;
+  reopen_to_previous_owner: boolean;
+  reopen_window_hours: number;
+  require_disposition: boolean;
+  alert_on_long_away: boolean;
+  settings_editors: SettingsEditors;
+}
+export type SettingsEditors = 'everyone' | 'supervisors' | 'admins';
+
+export interface HistoryEntry {
+  id: number;
+  action: string;
+  object_type: string;
+  object_id: string | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+  actor_name: string | null;
+  actor_email: string | null;
+}
+export interface WorkforceAgent {
+  id: number;
+  email: string;
+  name: string | null;
+  role: User['role'];
+  active: boolean;
+  capacity: Capacity;
+  status_id: number | null;
+  status_since: string | null;
+  queue_ids: number[];
+  team_ids: number[];
+}
+export interface QaCopySummary {
+  created_at: string;
+  window: { from: string; to: string };
+  bookings: number;
+  customers: number;
+  cleaners: number;
+}
+export interface QaCopyStatus {
+  env: string;
+  can_send: boolean;
+  receiving: boolean;
+  current: QaCopySummary | null;
+  job: { state: 'idle' | 'running' | 'done' | 'failed'; started_at?: string; finished_at?: string; by?: string; step?: string; summary?: QaCopySummary; error?: string } | null;
+}
+
+export interface Workforce {
+  statuses: AgentStatus[];
+  teams: Team[];
+  queues: QueueSettings[];
+  schedules: Schedule[];
+  sla_policies: { id: number; slug: string; name: string }[];
+  settings: WorkspaceSettings;
+  channels: ('email' | 'sms' | 'chat' | 'voice')[];
+  agents: WorkforceAgent[];
 }
 
 export interface Queue {
@@ -211,7 +313,19 @@ export const inbox = {
   setPresence: (presence: Presence) => call<{ presence: Presence; requeued: number }>('PUT', '/me/presence', { presence }),
   rename: (name: string) => call<User>('PATCH', '/me', { name }),
   users: () => call<User[]>('GET', '/users'),
-  updateUser: (id: number, patch: { role?: string; queue_ids?: number[]; name?: string }) => call<User>('PATCH', `/users/${id}`, patch),
+  updateUser: (id: number, patch: { role?: string; queue_ids?: number[]; name?: string; team_ids?: number[]; capacity?: Capacity; active?: boolean }) => call<User>('PATCH', `/users/${id}`, patch),
+  setStatus: (status_id: number) => call<{ status_id: number; status: string; presence: Presence; requeued: number }>('PUT', '/me/status', { status_id }),
+  setUserStatus: (userId: number, status_id: number) => call<{ requeued: number }>('PUT', `/users/${userId}/status`, { status_id }),
+  workforce: () => call<Workforce>('GET', '/admin/workforce'),
+  saveSettings: (patch: Partial<WorkspaceSettings>) => call<WorkspaceSettings>('PUT', '/admin/settings', patch),
+  saveStatuses: (statuses: Partial<AgentStatus>[]) => call<AgentStatus[]>('PUT', '/admin/statuses', { statuses }),
+  saveTeams: (teams: Team[]) => call<void>('PUT', '/admin/teams', { teams }),
+  createQueue: (name: string, description?: string) => call<QueueSettings>('POST', '/admin/queues', { name, description }),
+  updateQueue: (id: number, patch: Partial<QueueSettings>) => call<QueueSettings>('PATCH', `/admin/queues/${id}`, patch),
+  qaCopy: () => call<QaCopyStatus>('GET', '/admin/qa-copy'),
+  sendQaCopy: () => call<{ job: QaCopyStatus['job'] }>('POST', '/admin/qa-copy'),
+  clearQaCopy: () => call<void>('DELETE', '/admin/qa-copy'),
+  saveSchedule: (s: Schedule) => call<Schedule>('PUT', s.id ? `/admin/schedules/${s.id}` : '/admin/schedules', s),
   meta: () => call<Meta>('GET', '/meta'),
   counts: () => call<Counts>('GET', '/counts'),
   list: (params: { view?: string; status?: string; channel?: string; role?: string; q?: string; contact_id?: number; booking_id?: number }) => call<ConversationRow[]>('GET', `/conversations${qs(params)}`),
@@ -234,13 +348,14 @@ export const inbox = {
   search: (q: string) => call<{ contacts: (Pick<Contact, 'id' | 'name' | 'roles' | 'l27_customer_id' | 'l27_team_id'> & { identities: string | null })[]; conversations: { id: number; channel: Channel; status: Status; subject: string | null; contact_name: string | null; snippet: string | null; last_message_at: string }[] }>('GET', `/search${qs({ q })}`),
   notifications: () => call<Notification[]>('GET', '/notifications'),
   readNotifications: () => call<void>('POST', '/notifications/read'),
-  supervisor: () => call<{ queues: { id: number; name: string; slug: string; open: number; unassigned: number; breached: number; oldest_waiting: string | null; done_today: number }[]; agents: { id: number; name: string | null; email: string; presence: Presence; role: string; open: number; breached: number; done_today: number }[]; first_response: { median_minutes: number | null; n: number } }>('GET', '/supervisor'),
+  supervisor: () => call<{ queues: { id: number; name: string; slug: string; open: number; unassigned: number; breached: number; oldest_waiting: string | null; done_today: number }[]; agents: { id: number; name: string | null; email: string; presence: Presence; role: string; open: number; breached: number; done_today: number; status_id: number | null; status: string | null; status_kind: StatusKind | null; status_color: string | null; status_max: number | null; status_since: string | null; away_minutes_today: number }[]; first_response: { median_minutes: number | null; n: number } }>('GET', '/supervisor'),
   rules: () => call<{ rules: Rule[]; warnings: { ruleId: number; message: string }[] }>('GET', '/admin/rules'),
   saveRules: (rules: Rule[]) => call<{ rules: Rule[]; warnings: { ruleId: number; message: string }[] }>('PUT', '/admin/rules', { rules }),
   testRules: (body: { channel: Channel; to?: string; from: string; subject?: string; body?: string; roles?: Role[]; lead_stage?: string; rules?: Rule[] }) => call<{ rule: string | null; action: Record<string, unknown> }>('POST', '/admin/rules/test', body),
   saveCanned: (c: Partial<Canned>) => call<Canned>('PUT', `/admin/canned${c.id ? `/${c.id}` : ''}`, c),
   deleteCanned: (id: number) => call<void>('DELETE', `/admin/canned/${id}`),
-  saveSla: (id: number, patch: { first_response_minutes: number; warn_minutes?: number }) => call<SlaPolicy>('PUT', `/admin/sla/${id}`, patch),
+  history: () => call<HistoryEntry[]>('GET', '/admin/history'),
+  saveSla: (id: number, patch: { first_response_minutes: number; warn_minutes?: number; business_hours?: boolean }) => call<SlaPolicy>('PUT', `/admin/sla/${id}`, patch),
   simulate: (body: { channel: Channel; from: string; to?: string; subject?: string; body: string; from_name?: string; thread_key?: string }) => call<{ conversationId: number; isNew: boolean; reopened: boolean }>('POST', '/simulate/inbound', body),
   logCall: (body: Record<string, unknown>) => call<{ conversationId: number }>('POST', '/calls', body),
   lookup: (kind: 'phone' | 'email', value: string) => call<{ contacts: Contact[]; open: { id: number; channel: Channel; subject: string | null }[]; l27: { name: string; roles: Role[] } | null }>('GET', `/lookup${qs({ kind, value })}`),
