@@ -130,6 +130,80 @@ function buildCustomers() {
   });
 }
 
+// Synthetic quote inquiries for the /admin/quotes page. booking_draft mirrors a
+// POST /v1/staff/bookings body (see BookingForm.tsx's fromQuoteDraft), so "Create
+// booking from this quote" has something real to prefill from in dev/QA.
+function buildQuotes(nowMs) {
+  const r = rng(99);
+  return Array.from({ length: 16 }, (_, i) => {
+    const first = FIRST[(i * 5 + 2) % FIRST.length];
+    const last = LAST[(i * 11 + 4) % LAST.length];
+    const svc = CATALOG.services[r.int(7)];
+    const freq = FREQUENCIES[r.int(FREQUENCIES.length)];
+    const hourly = svc.hourly ? { quantity: 1, minutes: 180 } : null;
+    const pricing_parameters = (svc.pricing_parameters || []).map((p, pi) => ({ id: p.id, quantity: pi === 0 ? 1 + r.int(2) : 0 }));
+    const extra = svc.extras?.length && r.next() < 0.3 ? svc.extras[r.int(svc.extras.length)] : null;
+    const extras = extra ? [{ id: extra.id, quantity: 1, recurring: null }] : [];
+    const basePrice = hourly ? svc.price * (hourly.minutes / 60) * hourly.quantity : svc.price;
+    const ppTotal = pricing_parameters.reduce((s, p) => s + (svc.pricing_parameters.find((x) => x.id === p.id)?.price || 0) * p.quantity, 0);
+    const extrasTotal = extras.reduce((s, x) => s + (extra?.price || 0) * x.quantity, 0);
+    const subtotal = basePrice + ppTotal + extrasTotal;
+    const discount = r2(subtotal * (freq.percent / 100));
+    const createdDaysAgo = 2 + r.int(45);
+    const createdAt = new Date(nowMs - createdDaysAgo * 86_400_000);
+    const expiresAt = new Date(createdAt.getTime() + 7 * 86_400_000);
+    const phone = `(613) 555-030${i % 10}`;
+    // A quote "becomes" a booking two days after it was created, on a day that genuinely
+    // has a booking (not a Sunday, when the mock schedules none), so the link resolves.
+    const bookedDayIdx = dayIndex(iso(createdAt).slice(0, 10)) + 2;
+    const bookedWeekday = new Date(`${dateOf(bookedDayIdx)}T12:00:00Z`).getUTCDay();
+    const booked = i % 7 === 3 && createdDaysAgo > 3 && bookedWeekday !== 0;
+    return {
+      id: 70000 + i,
+      digest: `mockquote${i}`,
+      name: `${first} ${last}`,
+      first_name: first,
+      last_name: last,
+      email: `lead${i + 1}@example.com`,
+      phone,
+      created_at: iso(createdAt),
+      expires_at: iso(expiresAt),
+      created_by: i % 3 === 0 ? { id: 1, first_name: 'Demo', last_name: 'User', name: 'Demo User', role: 'admin' } : null,
+      booking_draft: {
+        email: `lead${i + 1}@example.com`,
+        first_name: first,
+        last_name: last,
+        location_id: LOCATIONS[0].id,
+        address: `${200 + i * 5} ${r.pick(STREETS)}`,
+        city: 'Ottawa',
+        state: 'ON',
+        zip: 'K1A 0A1',
+        phone,
+        sms_notifications: true,
+        frequency_id: freq.id,
+        services: [{ id: svc.id, hourly, extras, pricing_parameters }],
+        discount_code: null,
+        price_adjustment_recurring: false,
+        tip_recurring: false,
+        final_price: r2(subtotal - discount),
+        payment_method: 'check',
+        arrival_window: 60,
+        custom_fields: CATALOG.custom_fields.slice(0, 2).map((f) => ({ id: f.id, values: f.options?.length ? [{ id: f.options[r.int(f.options.length)].id, other: null }] : [] })),
+      },
+      booking_ids: booked ? [bookedDayIdx * 100] : null,
+    };
+  });
+}
+
+function filterQuotes(list, q) {
+  const from = q.get('from');
+  const to = q.get('to');
+  return list.filter((quote) => {
+    const d = quote.created_at.slice(0, 10);
+    return (!from || d >= from) && (!to || d <= to);
+  });
+}
+
 // snapshot: optional () => anonymized copy of real data (QA). When it returns a copy,
 // that data is served instead of the generated synthetic data.
 export function createMockLaunch27({ password = 'demo', now = () => Date.now(), snapshot = () => null } = {}) {
@@ -163,6 +237,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
   const catalogServices = (loc) => (snap ? snap.services[loc] || Object.values(snap.services)[0] || [] : CATALOG.services);
   const allServices = () => (snap ? Object.values(snap.services).flat() : CATALOG.services);
   const frequencyList = () => (snap ? snap.staff_frequencies : FREQUENCIES);
+  const quotes = buildQuotes(now());
   const overlay = new Map(); // booking id -> partial changes
   const created = new Map(); // booking id -> booking created through the API
   let nextId = 900_000;
@@ -457,6 +532,10 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       }
       if (!sub) return [200, b];
     }
+
+    // Quotes
+    if (path === '/v1/staff/quotes') return [200, page(filterQuotes(quotes, q), q)];
+    if (path === '/v1/staff/quotes/count') return [200, { count: filterQuotes(quotes, q).length }];
 
     // Reports
     if (path === '/v1/staff/reports/customer_feedbacks') return [200, []];

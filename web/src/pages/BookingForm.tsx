@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { inbox } from '../inbox/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { l27, l27All, l27Write } from '../api';
@@ -9,7 +9,7 @@ import { cleanerAffinity } from '../lib/customer360';
 import type { RatedBooking } from '../lib/feedbackModel';
 import { priceBooking, type PriceService } from '../lib/pricing';
 import { useActiveTeams, useCanWrite, useLocations } from '../hooks';
-import type { Booking, Customer } from '../types';
+import type { Booking, Customer, Quote } from '../types';
 import { fmtMoney, TIMEZONE } from '../format';
 import { customerName } from './Customers';
 
@@ -161,6 +161,38 @@ function fromBooking(b: Booking): FormState {
   };
 }
 
+// A quote's booking_draft is almost a booking already; carry it straight into the form
+// (a new customer by name/email, since quotes aren't tied to a customer record).
+function fromQuoteDraft(q: Quote): Partial<FormState> {
+  const bd = q.booking_draft || {};
+  const custom: FormState['custom'] = {};
+  for (const cf of bd.custom_fields || []) {
+    if (cf.values?.length) custom[cf.id] = cf.values.map((v) => v.id);
+  }
+  return {
+    first_name: bd.first_name || q.first_name || '',
+    last_name: bd.last_name || q.last_name || '',
+    email: bd.email || q.email || '',
+    address: bd.address || '',
+    city: bd.city || '',
+    state: bd.state || 'ON',
+    zip: bd.zip || '',
+    phone: bd.phone || q.phone || '',
+    location_id: bd.location_id ?? null,
+    frequency_id: bd.frequency_id ?? null,
+    arrival_window: Number(bd.arrival_window) || ARRIVAL_WINDOW,
+    services: (bd.services || []).map((s) => ({
+      id: s.id,
+      pricing: Object.fromEntries((s.pricing_parameters || []).map((p) => [p.id, p.quantity])),
+      extras: Object.fromEntries((s.extras || []).map((x) => [x.id, x.quantity])),
+      hourly: s.hourly ? { quantity: s.hourly.quantity, minutes: s.hourly.minutes } : undefined,
+    })),
+    discount_code: bd.discount_code || '',
+    sms_notifications: bd.sms_notifications ?? true,
+    custom,
+  };
+}
+
 function newServiceLine(svc: BookableService): ServiceLine {
   return {
     id: svc.id,
@@ -175,6 +207,7 @@ export function BookingFormPage() {
   const editing = !!id;
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  const routerLocation = useLocation();
   const queryClient = useQueryClient();
   const canWrite = useCanWrite();
 
@@ -185,9 +218,12 @@ export function BookingFormPage() {
     queryFn: () => l27<Customer>(`/v1/staff/customers/${presetCustomerId}`),
     enabled: !editing && !!presetCustomerId,
   });
+  // Opened with "Create booking from this quote": the quote row travels via router
+  // state (there's no single-quote GET to re-fetch it from), set once on arrival.
+  const fromQuote = (routerLocation.state as { quote?: Quote } | null)?.quote;
 
   const [form, setForm] = useState<FormState>(EMPTY);
-  const [loaded, setLoaded] = useState(!editing && !presetCustomerId);
+  const [loaded, setLoaded] = useState(!editing && !presetCustomerId && !fromQuote);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A booking has exactly one service; this shows the service picker to switch it.
@@ -200,6 +236,13 @@ export function BookingFormPage() {
       setLoaded(true);
     }
   }, [editing, existing.data, loaded]);
+
+  useEffect(() => {
+    if (!editing && fromQuote && !loaded) {
+      setForm((f) => ({ ...f, ...fromQuoteDraft(fromQuote) }));
+      setLoaded(true);
+    }
+  }, [editing, fromQuote, loaded]);
 
   useEffect(() => {
     const c = presetCustomer.data;
@@ -375,6 +418,7 @@ export function BookingFormPage() {
         <Link to="/bookings">Bookings</Link> {editing && <>/ <Link to={`/bookings/${id}`}>#{id}</Link></>} / {editing ? 'Edit' : 'New'}
       </div>
       <h1 className="bf-title">{editing ? `Edit booking #${id}` : 'New booking'}</h1>
+      {fromQuote && <p className="muted small">Prefilled from <Link to={`/quotes/${fromQuote.id}`}>quote #{fromQuote.id}</Link>.</p>}
       {error && <div className="error pre">{error}</div>}
 
       <div className="bf-cols">
@@ -770,7 +814,8 @@ function SumLine({ label, value, strong, sep }: { label: string; value: number; 
 }
 
 function CustomerPicker({ form, set }: { form: FormState; set: (p: Partial<FormState>) => void }) {
-  const [mode, setMode] = useState<'search' | 'new'>('search');
+  // Prefilled from a quote (a name but no customer record yet): start on "New customer".
+  const [mode, setMode] = useState<'search' | 'new'>(() => (form.first_name ? 'new' : 'search'));
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
   useEffect(() => {

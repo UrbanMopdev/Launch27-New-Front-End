@@ -67,6 +67,19 @@ export interface WorkspaceSettings {
   reopen_window_hours: number;
   require_disposition: boolean;
   alert_on_long_away: boolean;
+  settings_editors: SettingsEditors;
+}
+export type SettingsEditors = 'everyone' | 'supervisors' | 'admins';
+
+export interface HistoryEntry {
+  id: number;
+  action: string;
+  object_type: string;
+  object_id: string | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+  actor_name: string | null;
+  actor_email: string | null;
 }
 export interface WorkforceAgent {
   id: number;
@@ -341,7 +354,8 @@ export const inbox = {
   testRules: (body: { channel: Channel; to?: string; from: string; subject?: string; body?: string; roles?: Role[]; lead_stage?: string; rules?: Rule[] }) => call<{ rule: string | null; action: Record<string, unknown> }>('POST', '/admin/rules/test', body),
   saveCanned: (c: Partial<Canned>) => call<Canned>('PUT', `/admin/canned${c.id ? `/${c.id}` : ''}`, c),
   deleteCanned: (id: number) => call<void>('DELETE', `/admin/canned/${id}`),
-  saveSla: (id: number, patch: { first_response_minutes: number; warn_minutes?: number }) => call<SlaPolicy>('PUT', `/admin/sla/${id}`, patch),
+  history: () => call<HistoryEntry[]>('GET', '/admin/history'),
+  saveSla: (id: number, patch: { first_response_minutes: number; warn_minutes?: number; business_hours?: boolean }) => call<SlaPolicy>('PUT', `/admin/sla/${id}`, patch),
   simulate: (body: { channel: Channel; from: string; to?: string; subject?: string; body: string; from_name?: string; thread_key?: string }) => call<{ conversationId: number; isNew: boolean; reopened: boolean }>('POST', '/simulate/inbound', body),
   logCall: (body: Record<string, unknown>) => call<{ conversationId: number }>('POST', '/calls', body),
   lookup: (kind: 'phone' | 'email', value: string) => call<{ contacts: Contact[]; open: { id: number; channel: Channel; subject: string | null }[]; l27: { name: string; roles: Role[] } | null }>('GET', `/lookup${qs({ kind, value })}`),
