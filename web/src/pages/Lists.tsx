@@ -17,22 +17,32 @@ const daysAgo = (n: number) => {
 };
 const weekStart = () => daysAgo(new Date().getDay());
 
+// A quote is "Booked" once it has produced a booking, "Expired" past its expires_at
+// with no booking yet, otherwise still "Open" for the office to act on.
+export function quoteStatus(expiresAt?: string, bookingIds?: number[] | null): { label: string; cls: string } {
+  if (bookingIds?.length) return { label: 'Booked', cls: 'chip ok' };
+  if (expiresAt && new Date(expiresAt).getTime() < Date.now()) return { label: 'Expired', cls: 'chip neg' };
+  return { label: 'Open', cls: 'chip accent' };
+}
+
 // /admin/quotes: GET /v1/staff/quotes?from&to (+ /count)
 export function QuotesPage() {
+  const navigate = useNavigate();
   return (
     <ResourceList<Row>
       title="Quote inquiries"
       path="/v1/staff/quotes"
       dates="range"
       defaultFrom={daysAgo(30)}
+      onRowClick={(q) => navigate(`/quotes/${q.id}`, { state: { quote: q } })}
       columns={[
         { header: 'Name', render: (q) => person(q) },
         { header: 'Email', render: (q) => q.email || '—' },
         { header: 'Phone', render: (q) => q.phone || '—' },
         { header: 'Quoted', render: (q) => fmtMoney(q.booking_draft?.final_price) },
+        { header: 'Status', render: (q) => <span className={quoteStatus(q.expires_at, q.booking_ids).cls}>{quoteStatus(q.expires_at, q.booking_ids).label}</span> },
         { header: 'Created', render: (q) => `${fmtDateTime(q.created_at)}${q.created_by ? ` by ${person(q.created_by)}` : ''}` },
         { header: 'Expires', render: (q) => fmtDateTime(q.expires_at) },
-        { header: 'Booked', render: (q) => (q.booking_ids?.length ? q.booking_ids.join(', ') : '—') },
       ]}
     />
   );

@@ -36,6 +36,7 @@ import {
   ClosedDatesPage,
   BouncesPage,
 } from './pages/Lists';
+import { QuoteDetailPage } from './pages/QuoteDetail';
 import { ApiCatalogPage } from './pages/ApiCatalog';
 import { InboxPage } from './pages/Inbox';
 import { ContactPage, InboxSettingsPage, SimulatorPage, SupervisorPage } from './pages/SupportPages';
@@ -86,6 +87,7 @@ export function App() {
         <Route path="teams" element={<TeamsPage />} />
         <Route path="time-tracking" element={<TimeTrackingPage />} />
         <Route path="quotes" element={<QuotesPage />} />
+        <Route path="quotes/:id" element={<QuoteDetailPage />} />
         <Route path="charges" element={<ChargesPage />} />
         <Route path="profitability" element={<MarginsPage />} />
         <Route path="declined-charges" element={<DeclinedChargesPage />} />
