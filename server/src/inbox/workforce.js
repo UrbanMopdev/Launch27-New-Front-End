@@ -29,7 +29,22 @@ export const DEFAULT_SETTINGS = {
   require_disposition: true,
   // Tell supervisors when someone stays in a status past its time limit.
   alert_on_long_away: true,
+  // Who can change support settings (routing rules, queues, reply targets, hours,
+  // policies, statuses, saved replies): 'everyone', 'supervisors' (and admins) or
+  // 'admins'. Roles, active/inactive, teams and private queues are always admins only,
+  // because they decide who can see restricted conversations.
+  settings_editors: 'everyone',
 };
+
+export const SETTINGS_EDITORS = ['everyone', 'supervisors', 'admins'];
+
+// Can this user change support settings?
+export function canEditSettings(user, settings) {
+  if (user?.role === 'admin') return true;
+  const who = settings?.settings_editors || DEFAULT_SETTINGS.settings_editors;
+  if (who === 'everyone') return true;
+  return who === 'supervisors' && user?.role === 'supervisor';
+}
 
 export const DEFAULT_STATUSES = [
   { slug: 'available', name: 'Available', kind: 'available', color: '#15803d', keeps_work: true, max_minutes: null },
@@ -98,6 +113,10 @@ export function validateSettings(patch) {
       if (!Number.isFinite(n) || n < 0) throw new Error(`${k} must be a number 0 or more`);
       out[k] = n;
     } else if (k === 'default_capacity') out[k] = normalizeCapacity(v, def);
+    else if (k === 'settings_editors') {
+      if (!SETTINGS_EDITORS.includes(v)) throw new Error('settings_editors must be everyone, supervisors or admins');
+      out[k] = v;
+    }
   }
   return out;
 }

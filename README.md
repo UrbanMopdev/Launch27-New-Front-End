@@ -112,7 +112,7 @@ inside a conversation.
 | Booking actions | From the pinned booking: edit/reschedule (booking form), cancel, restore, new booking, text the assigned cleaner. Each change is logged on the conversation |
 | Composer | Reply by text or email from any UrbanMop identity, "/" for saved replies with `{{first_name}}`, internal notes with @mentions, SMS segment count, drafts kept per conversation, STOP-blocked numbers refused |
 | Work handling | Push routing to available agents, claim (race-safe), assign, move queue, snooze, done with who/reason/outcome, complaint record with cost to us |
-| Routing | 15 ordered rules rebuilt from the Kustomer audit (Kustomer had 14 queues and 72 rules), editable in Support settings with warnings for rules that can never match and a live preview |
+| Routing | 15 ordered rules rebuilt from the Kustomer audit (Kustomer had 14 queues and 72 rules), built in Support settings with menus and chips (no JSON): conditions, “or” options, queue / reply target / priority, drag to reorder, warnings for rules that can never match, and a “try a message” tester that uses unsaved changes |
 | Reply targets | Business-hours SLAs (Toronto hours, Ontario holidays, DST-safe), warnings and breach alerts, paused while snoozed, stopped only by human replies |
 | Supervisor (`/supervisor`) | Live queue depth, unassigned, late, oldest waiting, per-agent load, median first reply |
 | Workforce (Support settings) | Kustomer-style agent statuses (Available, Busy, Break, Lunch, Meeting, Training, Wrap-up, Offline: add your own, with time limits and keep-or-return-work), teams that work queues, per-agent and default capacity per channel, per-queue routing mode (least busy / round robin / manual), default reply target, business hours, overflow and priority, plus workspace routing policies (offline returns work, idle auto-offline, assign on reply, reopen to previous owner, required disposition, long-break alerts) |
@@ -140,7 +140,7 @@ Every page makes the same Launch27 calls as the admin page it replaces (see
 
 | Section | Pages |
 | --- | --- |
-| Support | Inbox, Contact profile (360), Supervisor, Channel simulator, Support settings (routing rules, reply targets, saved replies, team and queues) |
+| Support | Inbox, Contact profile (360), Supervisor, Channel simulator, Support settings (routing rules, queues, reply targets, hours, policies, agents, teams, statuses, saved replies, change history). Everyone on the team can change support settings by default; admins can narrow that to supervisors or admins (Routing policies), and roles, teams and private queues are always admins only |
 | Operations | Dispatch board (drag-and-drop cleaner assignment, travel per cleaner), Routes & travel (map, legs, tight connections, closer cleaners), Bookings (filters: all / unassigned / recurring / new customer / cancelled), Booking detail, Time tracking, Quotes, Quote detail (requested service, contact, custom field answers; turns into a prefilled new booking), Customers, Customer detail (upcoming / past / cancelled / feedback), Teams |
 | Money | Job profitability (gross margin per job, flags, cost assumptions), Charge customers, Team payments |
 | Reports | Customer feedback |
