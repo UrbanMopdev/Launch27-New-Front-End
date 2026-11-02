@@ -176,7 +176,7 @@ export const scheduleApi = {
   changes: () => call<{ items: Change[]; today: string }>('GET', '/changes'),
   resolve: (id: number, resolution: 'fixed' | 'dismissed') => call<void>('POST', `/changes/${id}/resolve`, { resolution }),
   findSlots: (q: SlotQuery) => call<{ place_known: boolean; frequency: string; duration: number; customer: { id: number; name: string; main: string | null } | null; slots: Slot[] }>('POST', '/find-slots', q),
-  assign: (visit_keys: string[], cleaner_id: number) => call<{ assigned: number; projected: number; cleaner: string; confirm_first: boolean }>('POST', '/assign', { visit_keys, cleaner_id }),
+  assign: (visit_keys: string[], cleaner_id: number, recommended = false) => call<{ assigned: number; projected: number; cleaner: string; confirm_first: boolean }>('POST', '/assign', { visit_keys, cleaner_id, recommended }),
   unavailable: (cleaner_id: number, day: string, unavailable = true) => call<{ cleaner: string; day: string; unavailable: boolean; affected: number }>('PUT', '/unavailable', { cleaner_id, day, unavailable }),
   refresh: () => call<{ running: boolean }>('POST', '/refresh'),
 };

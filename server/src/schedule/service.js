@@ -420,7 +420,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     if (!s) throw Object.assign(new Error('The schedule has not been loaded yet. It loads automatically within a few minutes, or click "Refresh now".'), { status: 409 });
     return s;
   }
-  const cleanerOut = (c) => ({ id: c.id, name: c.name, status: c.status, status_label: STATUS_LABEL[c.status], assignable: c.assignable, is_new: c.isNew, gender: c.gender, hours_type: c.hoursType, color: c.color, area: c.area, phone: c.phone, weekly_hours: c.weekly_hours, tags: c.tags, rules: c.rules });
+  const cleanerOut = (c) => ({ id: c.id, lat: c.lat, lng: c.lng, name: c.name, status: c.status, status_label: STATUS_LABEL[c.status], assignable: c.assignable, is_new: c.isNew, gender: c.gender, hours_type: c.hoursType, color: c.color, area: c.area, phone: c.phone, weekly_hours: c.weekly_hours, tags: c.tags, rules: c.rules });
 
   async function status() {
     const last = await latestRun();
@@ -737,7 +737,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
 
   // Assign a cleaner in Launch27 (signed-in user's login). Projected visits of a series can't
   // be assigned one by one in Launch27; they are reported back.
-  async function assign({ visit_keys = [], cleaner_id }, bearer) {
+  async function assign({ visit_keys = [], cleaner_id, recommended = false }, bearer) {
     const s = await need();
     if (!config.allowWrites) throw Object.assign(new Error('Writes to Launch27 are turned off here'), { status: 403 });
     const c = s.byId.get(Number(cleaner_id));
@@ -763,7 +763,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       v.team_hours = { [c.id]: v.duration / 60 };
       const k = `${c.id}|${v.date}`;
       s.busy.set(k, [...(s.busy.get(k) || []), v]);
-      await db.query("UPDATE schedule_changes SET resolved_at = now(), resolution = 'fixed' WHERE visit_key = $1 AND resolved_at IS NULL", [v.key]);
+      await db.query('UPDATE schedule_changes SET resolved_at = now(), resolution = $2 WHERE visit_key = $1 AND resolved_at IS NULL', [v.key, recommended ? 'fixed_rec' : 'fixed']);
     }
     return { assigned: real.length, projected: projected.length, cleaner: c.name, confirm_first: c.rules.confirmFirst };
   }

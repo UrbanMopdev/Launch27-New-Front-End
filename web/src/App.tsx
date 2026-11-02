@@ -12,6 +12,8 @@ import { CustomersPage } from './pages/Customers';
 import { SegmentPage } from './pages/SegmentPage';
 import { SchedulingPage } from './pages/Scheduling';
 import { CleanerPlanPage } from './pages/CleanerPlan';
+import { SchedulingInsightsPage } from './pages/SchedulingInsights';
+import { CleanerReportsPage, CleanerReportPage } from './pages/CleanerReports';
 import { CustomerInsightsPage } from './pages/CustomerTrends';
 import { CustomerProfilePage } from './pages/CustomerProfile';
 import { TeamsPage } from './pages/Teams';
@@ -72,6 +74,9 @@ export function App() {
         <Route path="schedule/cleaner/:id" element={<CleanerPlanPage />} />
         <Route path="customers/trends" element={<Navigate to="/reports/customers" replace />} />
         <Route path="reports/customers" element={<CustomerInsightsPage />} />
+        <Route path="reports/scheduling" element={<SchedulingInsightsPage />} />
+        <Route path="reports/cleaners" element={<CleanerReportsPage />} />
+        <Route path="reports/cleaners/:id" element={<CleanerReportPage />} />
         <Route path="customers/segments/:segment" element={<SegmentPage />} />
         <Route path="customers/:id" element={<CustomerProfilePage />} />
         <Route path="teams" element={<TeamsPage />} />

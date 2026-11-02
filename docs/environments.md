@@ -129,6 +129,15 @@ its own `SESSION_SECRET`; never copy one between environments.
 - Production needs `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` for the automatic refresh (the
   same read-only login as segments); otherwise only "Refresh now" works.
 
+## Reports: Scheduling insights and Cleaner reports
+
+- Rebuilt overnight (after 4 am Toronto, and at boot if never built): a read-only pull of the
+  last 12 months of bookings, check-in/out times, ratings and cleaner pay, stored as one
+  snapshot. Forward-looking numbers (hours filled, lopsided weeks, unassigned) come from the
+  scheduling planner. Admins can rebuild with "Refresh now".
+- Cleaner pay is only returned by the API to admins.
+- Production needs the same `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` for the nightly build.
+
 ## Local development
 
 ```bash

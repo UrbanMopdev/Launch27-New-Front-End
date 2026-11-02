@@ -27,7 +27,6 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
     items: [
       { to: '/dispatch', label: 'Dispatch board', icon: 'truck' },
       { to: '/schedule', label: 'Scheduling planner', icon: 'repeat' },
-      { to: '/routes', label: 'Routes & travel', icon: 'route' },
       { to: '/bookings', label: 'Bookings', icon: 'calendar' },
       { to: '/time-tracking', label: 'Time tracking', icon: 'clock' },
       { to: '/quotes', label: 'Quotes', icon: 'file' },
@@ -47,6 +46,8 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
     section: 'Reports',
     items: [
       { to: '/reports/customers', label: 'Customer insights', icon: 'grid' },
+      { to: '/reports/scheduling', label: 'Scheduling insights', icon: 'route' },
+      { to: '/reports/cleaners', label: 'Cleaner reports', icon: 'users' },
       { to: '/feedback', label: 'Customer feedback', icon: 'star' },
     ],
   },

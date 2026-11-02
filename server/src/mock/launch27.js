@@ -327,11 +327,14 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const team = pool[r.int(pool.length)] || local[0];
     const hours = Math.round((duration / 60) * 100) / 100;
     const past = start.getTime() + duration * 60_000 < now();
-    const late = r.next() < 0.1 ? 25 : 0;
+    const late = r.next() < 0.08 ? 50 : 0;
     const checkin = new Date(start.getTime() + (5 + r.int(20) + late) * 60_000);
-    const checkout = new Date(checkin.getTime() + duration * 60_000 * (0.85 + r.next() * 0.3));
+    const checkout = new Date(checkin.getTime() + duration * 60_000 * (0.85 + r.next() * 0.4));
+    // About half of visits have the cleaner tapping 'en route' (as in real data), with a drive distance.
+    const tapsEnroute = r.next() < 0.5;
+    const driveKm = Math.round((2 + r.next() * 22) * 10) / 10;
     const tracking = !unassigned && (past || checkin.getTime() < now())
-      ? [{ id: id * 10, booking_id: id, team: { id: team.id, title: team.title, image: null }, state: 'draft', enroute_started_at: null, enroute_finished_at: null, checkin_at: iso(checkin), checkin_latitude: c.latitude, checkin_longitude: c.longitude, checkout_at: past ? iso(checkout) : null, distance: null, active: true }]
+      ? [{ id: id * 10, booking_id: id, team: { id: team.id, title: team.title, image: null }, state: 'draft', enroute_started_at: tapsEnroute ? iso(new Date(checkin.getTime() - (10 + Math.round(driveKm * 2)) * 60_000)) : null, enroute_finished_at: tapsEnroute ? iso(checkin) : null, checkin_at: iso(checkin), checkin_latitude: c.latitude, checkin_longitude: c.longitude, checkout_at: past ? iso(checkout) : null, distance: tapsEnroute ? driveKm : null, distance_unit: 'km', active: true }]
       : [];
     const rated = past && r.next() < 0.15;
     const rating = r.next() < 0.78 ? 2 : r.next() < 0.5 ? 1 : 0;

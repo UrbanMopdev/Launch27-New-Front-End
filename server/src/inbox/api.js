@@ -25,7 +25,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -842,6 +842,28 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     }));
     r.post('/schedule/refresh', sched(async (req, res) => {
       schedule.start({ bearer: req.bearer, trigger: 'manual' });
+      res.status(202).json({ running: true });
+    }));
+  }
+
+  // ---------- reports: scheduling insights and cleaner reports ----------
+  if (reports) {
+    const rep = (fn) => wrap(async (req, res) => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    const period = (req) => (['4w', '13w', '12m'].includes(req.query.period) ? req.query.period : '13w');
+    const admin = (req) => req.user.role === 'admin';
+    r.get('/reports/status', rep(async (req, res) => res.json(await reports.status())));
+    r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req)))));
+    r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req) }))));
+    r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req) }))));
+    r.post('/reports/refresh', needRole('admin'), rep(async (req, res) => {
+      reports.start({ bearer: req.bearer });
       res.status(202).json({ running: true });
     }));
   }

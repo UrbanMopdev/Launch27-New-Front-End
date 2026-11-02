@@ -75,7 +75,7 @@ function NotLoaded({ message }: { message: string }) {
 function useAssign(onDone?: (msg: string) => void) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ keys, cleaner }: { keys: string[]; cleaner: number }) => scheduleApi.assign(keys, cleaner),
+    mutationFn: ({ keys, cleaner, recommended }: { keys: string[]; cleaner: number; recommended?: boolean }) => scheduleApi.assign(keys, cleaner, recommended),
     onSuccess: (r) => {
       const parts = [`Assigned ${r.assigned} visit${r.assigned === 1 ? '' : 's'} to ${r.cleaner}.`];
       if (r.projected) parts.push(`${r.projected} projected visit${r.projected === 1 ? '' : 's'} follow the series in Launch27.`);
@@ -212,7 +212,7 @@ function ChangesTab({ initialKind = null }: { initialKind?: ChangeKind | null })
         <section key={g.heading} className="sch-day">
           <h2 className={g.urgent ? 'sch-day-head urgent' : 'sch-day-head'}>{g.heading}<span className="muted small"> · {g.items.length} to handle</span></h2>
           <div className="sch-list">
-            {g.items.map((c) => <ChangeCard key={c.id} c={c} onResolve={(r) => resolve.mutate({ id: c.id, r })} onAssign={(cleaner) => c.visit && assign.mutate({ keys: c.series?.visit_keys || [c.visit.key], cleaner })} busy={assign.isPending || resolve.isPending} />)}
+            {g.items.map((c) => <ChangeCard key={c.id} c={c} onResolve={(r) => resolve.mutate({ id: c.id, r })} onAssign={(cleaner, recommended) => c.visit && assign.mutate({ keys: c.series?.visit_keys || [c.visit.key], cleaner, recommended })} busy={assign.isPending || resolve.isPending} />)}
           </div>
         </section>
       ))}
@@ -255,7 +255,7 @@ function ClientWants({ client }: { client: Change['client'] }) {
   );
 }
 
-function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r: 'fixed' | 'dismissed') => void; onAssign: (cleaner: number) => void; busy: boolean }) {
+function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r: 'fixed' | 'dismissed') => void; onAssign: (cleaner: number, recommended?: boolean) => void; busy: boolean }) {
   const [more, setMore] = useState(false);
   const v = c.visit;
   const { headline, why } = explain(c);
@@ -290,7 +290,7 @@ function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r
             <span className="eyebrow accent">{REC_LABEL[c.kind] || 'Recommended'}</span>
             <div className="sch-who"><CleanerDot color={rec.color} /><b className="sch-rec-name">{rec.name}</b></div>
             <Reasons reasons={rec.reasons} />
-            <button disabled={busy} onClick={() => onAssign(rec.cleaner_id)}>{c.series && c.series.count > 1 ? `Give all ${c.series.count - c.series.projected} to ${first(rec.name)}` : `${verb} ${first(rec.name)}`}{v?.projected && !c.series ? ' (in Launch27)' : ''}</button>
+            <button disabled={busy} onClick={() => onAssign(rec.cleaner_id, true)}>{c.series && c.series.count > 1 ? `Give all ${c.series.count - c.series.projected} to ${first(rec.name)}` : `${verb} ${first(rec.name)}`}{v?.projected && !c.series ? ' (in Launch27)' : ''}</button>
             {c.series && c.series.projected > 0 && <span className="muted small">{c.series.projected} projected visit{c.series.projected === 1 ? '' : 's'} follow the series in Launch27.</span>}
             {others.length > 0 && <button className="link small" onClick={() => setMore(!more)}>{more ? 'Hide other options' : `Other options (${others.length})`}</button>}
             {more && <div className="sch-cands">{others.map((o) => <CandidateRow key={o.cleaner_id} c={o} busy={busy} onAssign={() => onAssign(o.cleaner_id)} label={`${verb} ${first(o.name)}`} />)}</div>}
