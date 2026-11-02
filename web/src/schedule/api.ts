@@ -52,7 +52,7 @@ export interface Candidate {
   reasons: Reason[];
 }
 
-export interface Status { taken_at: string | null; running: boolean; last_error: string | null; refresh_minutes: number }
+export interface Status { taken_at: string | null; full_at: string | null; running: boolean; last_error: string | null; refresh_minutes: number; full_minutes: number }
 
 export interface Overview {
   taken_at: string;

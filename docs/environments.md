@@ -114,8 +114,11 @@ its own `SESSION_SECRET`; never copy one between environments.
 
 ## Scheduling planner: how fresh it is
 
-- Re-reads Launch27 every 15 minutes (cleaners, their availability, the past 13 weeks and
-  next 8 weeks of visits), and a minute after any booking change made in this app.
+- Polls Launch27 (no webhooks): the next 14 days of bookings every 3 minutes, a full
+  refresh hourly (cleaners, their hours and status, the past 13 weeks and next 8 weeks), and
+  a quick refresh 20 seconds after any booking change made in this app. About 6,000
+  read-only calls a day. A booking that leaves the 14-day window is looked up on its own,
+  so a visit moved further out shows as moved, not cancelled.
 - Comparing each read with the previous one fills "Changes to handle" (moved, cancelled,
   cleaner changed, availability changed) plus problems in the next 14 days (no cleaner,
   outside hours, double-booked, cleaner on hold, usual cleaner free to take it back).

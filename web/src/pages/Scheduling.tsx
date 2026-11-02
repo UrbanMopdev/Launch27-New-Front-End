@@ -101,7 +101,7 @@ function CandidateRow({ c, onAssign, busy, label = 'Assign' }: { c: Candidate; o
 
 // ---------- changes ----------
 const KIND_LABEL: Record<ChangeKind, string> = {
-  moved: 'Moved by customer',
+  moved: 'Moved',
   cancelled: 'Cancelled',
   cleaner_changed: 'Cleaner changed',
   availability: 'Availability changed',

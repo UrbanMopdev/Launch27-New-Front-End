@@ -137,6 +137,11 @@ function world() {
       }
       return json({});
     }
+    const one = u.pathname.match(/^\/v1\/staff\/bookings\/(\d+)$/);
+    if (one) {
+      const b = bookings.find((x) => x.id === Number(one[1]));
+      return b ? json(b) : json({ error: 'not found' }, 404);
+    }
     if (u.pathname === '/v1/staff/bookings') {
       const from = u.searchParams.get('from');
       const to = u.searchParams.get('to');
@@ -218,6 +223,46 @@ describe('schedule: sync, plan, assign, changes', () => {
     const one = after.find((i) => i.kind === 'cancelled');
     await s.resolveChange(one.id, 'dismissed', null);
     assert.ok((await s.changes()).items.every((i) => i.id !== one.id));
+  });
+
+  test('quick refresh: next 14 days every few minutes; moved further out reads as moved, not cancelled', async () => {
+    const w = world();
+    const db = await openDb();
+    let clock = NOW;
+    const s = createSchedule({ db, config: loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' }), fetchImpl: w.fetchImpl, log: quiet, now: () => clock });
+    await s.maybeRun();
+    await new Promise((r) => setTimeout(r, 50));
+    while (s.isRunning()) await new Promise((r) => setTimeout(r, 20));
+    const first = await s.status();
+    assert.ok(first.taken_at && first.full_at === first.taken_at, 'first refresh is a full one');
+
+    // Client 3's one-time moves from Nov 5 to Nov 25 (beyond 14 days); client 2's Nov 4 visit is cancelled.
+    const moved = w.bookings.find((b) => b.user.id === 3);
+    moved.service_date = at('2026-11-25', 10);
+    const cancelledAt = w.bookings.findIndex((b) => b.user.id === 2 && b.service_date.startsWith('2026-11-04'));
+    w.bookings.splice(cancelledAt, 1);
+
+    clock += 4 * 60_000; // past the quick-refresh interval, well before the hourly full one
+    await s.maybeRun();
+    await new Promise((r) => setTimeout(r, 50));
+    while (s.isRunning()) await new Promise((r) => setTimeout(r, 20));
+    const st = await s.status();
+    assert.notEqual(st.taken_at, first.taken_at);
+    assert.equal(st.full_at, first.full_at, 'a quick refresh, not a full one');
+    const items = (await s.changes()).items;
+    assert.ok(items.some((i) => i.kind === 'moved' && /Client 3 moved from Thu, Nov 5 9am to Wed, Nov 25 10am/.test(i.title)));
+    assert.ok(items.some((i) => i.kind === 'cancelled' && i.title.includes('Client 2')));
+    assert.ok(!items.some((i) => i.kind === 'cancelled' && i.title.includes('Client 3')));
+    // The moved visit is in the schedule at its new date.
+    const plan = await s.plan(2);
+    assert.ok(plan.weeks.some((wk) => wk.cells.some((c) => c.date === '2026-11-25' && c.visits.some((v) => v.customer === 'Client 3'))));
+
+    // An hour on, the next refresh is a full one.
+    clock += 61 * 60_000;
+    await s.maybeRun();
+    await new Promise((r) => setTimeout(r, 50));
+    while (s.isRunning()) await new Promise((r) => setTimeout(r, 20));
+    assert.notEqual((await s.status()).full_at, first.full_at);
   });
 
   test('production refreshes only with its own read-only login', async () => {

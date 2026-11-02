@@ -43,7 +43,7 @@ export function ScheduleStatus() {
   const mins = s.taken_at ? Math.max(0, Math.round((Date.now() - new Date(s.taken_at).getTime()) / 60_000)) : null;
   return (
     <span className="muted small sch-status">
-      {s.running ? 'Refreshing from Launch27…' : mins === null ? 'Not loaded yet' : `Updated ${mins === 0 ? 'just now' : `${mins} min ago`} · refreshes every ${s.refresh_minutes} min and a minute after changes made here`}
+      {s.running ? 'Refreshing from Launch27…' : mins === null ? 'Not loaded yet' : `Updated ${mins === 0 ? 'just now' : `${mins} min ago`} · bookings refresh every ${s.refresh_minutes} min, cleaners' hours every ${s.full_minutes} min, and right after changes made here`}
       {s.last_error && <span className="warn"> · last refresh failed: {s.last_error}</span>}
       {!s.running && <button className="link" disabled={refresh.isPending} onClick={() => refresh.mutate()}>Refresh now</button>}
     </span>

@@ -9,7 +9,9 @@ import {
 const PAST_DAYS = 91;
 const AHEAD_DAYS = 56;
 const NEAR_DAYS = 14; // problems are raised for this many days ahead
-const SYNC_EVERY_MS = 15 * 60_000;
+const NEAR_EVERY_MS = 3 * 60_000; // next 14 days of bookings
+const FULL_EVERY_MS = 60 * 60_000; // cleaners' hours and status, the whole window
+const CHANGE_DELAY_MS = 20_000; // after a booking change made in this app
 const PROBLEM_KINDS = ['unassigned', 'outside_hours', 'double_booked', 'different_cleaner', 'cleaner_unavailable'];
 const DAYNAME = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const pad = (n) => String(n).padStart(2, '0');
@@ -280,26 +282,67 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   }
 
   // ---------- sync ----------
-  async function sync({ bearer, trigger = 'manual' } = {}) {
-    const run = (await db.query('INSERT INTO schedule_runs (trigger) VALUES ($1) RETURNING *', [trigger])).rows[0];
+  // Two kinds of refresh, both read-only:
+  //  - full (hourly): cleaners, their hours and status, 13 weeks back and 8 weeks ahead
+  //  - near (every few minutes): just the next 14 days of bookings, merged into the last full
+  //    copy. A booking that vanished from those 14 days is looked up on its own, so a visit moved
+  //    further out reads as moved, not cancelled.
+  let cachedBearer = null; // { bearer, at }
+  async function bearerFor(given) {
+    if (given) return given;
+    if (cachedBearer && now() - cachedBearer.at < 30 * 60_000) return cachedBearer.bearer;
+    const b = await syncBearer();
+    if (b) cachedBearer = { bearer: b, at: now() };
+    return b;
+  }
+
+  async function fullData(bearer, t) {
+    const teams = (await pullAll(bearer, '/v1/staff/teams', {}, 40)).filter((x) => x.active !== false);
+    const cleaners = [];
+    for (const tm of teams) {
+      const c = parseCleaner(tm);
+      c.availability = await get(bearer, `/v1/staff/teams/${tm.id}/availability`).catch(() => []);
+      c.weekly_hours = weeklyHours(c.availability);
+      c.area = areaOf(c);
+      c.share = tm.share || null;
+      cleaners.push(c);
+    }
+    const visits = await pullRange(bearer, addDays(t, -PAST_DAYS), addDays(t, AHEAD_DAYS));
+    const iso = new Date(now()).toISOString();
+    return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits };
+  }
+
+  async function nearData(bearer, prev, t) {
+    const until = addDays(t, NEAR_DAYS);
+    const fresh = await pullRange(bearer, t, until);
+    const freshKeys = new Set(fresh.map((v) => v.key));
+    const extra = [];
+    const gone = new Set();
+    for (const v of prev.visits) {
+      if (!v.id || v.date < t || v.date > until || freshKeys.has(v.key)) continue;
+      try {
+        const b = await get(bearer, `/v1/staff/bookings/${v.id}`);
+        if (b && b.active !== false && b.service_date) extra.push(slimVisit(b));
+        else gone.add(v.key);
+      } catch {
+        gone.add(v.key);
+      }
+    }
+    const replaced = new Set([...freshKeys, ...extra.map((v) => v.key), ...gone]);
+    const kept = prev.visits.filter((v) => !(v.date >= t && v.date <= until) && !replaced.has(v.key));
+    return { taken_at: new Date(now()).toISOString(), full_at: prev.full_at || prev.taken_at, today: t, cycle_anchor: prev.cycle_anchor, cleaners: prev.cleaners, visits: [...kept, ...fresh, ...extra] };
+  }
+
+  async function sync({ bearer, trigger = 'manual', kind = 'full' } = {}) {
+    const run = (await db.query('INSERT INTO schedule_runs (trigger) VALUES ($1) RETURNING *', [`${trigger}:${kind}`])).rows[0];
     lastRun = run;
     try {
-      bearer = bearer || (await syncBearer());
+      bearer = await bearerFor(bearer);
       if (!bearer) throw new Error('No Launch27 login for the schedule sync (set L27_SYNC_EMAIL and L27_SYNC_PASSWORD)');
       const t = today();
-      const teams = (await pullAll(bearer, '/v1/staff/teams', {}, 40)).filter((x) => x.active !== false);
-      const cleaners = [];
-      for (const tm of teams) {
-        const c = parseCleaner(tm);
-        c.availability = await get(bearer, `/v1/staff/teams/${tm.id}/availability`).catch(() => []);
-        c.weekly_hours = weeklyHours(c.availability);
-        c.area = areaOf(c);
-        c.share = tm.share || null;
-        cleaners.push(c);
-      }
-      const visits = await pullRange(bearer, addDays(t, -PAST_DAYS), addDays(t, AHEAD_DAYS));
-      const data = { taken_at: new Date(now()).toISOString(), today: t, cycle_anchor: '2026-11-02', cleaners, visits };
       const prev = await load();
+      const doNear = kind === 'near' && prev && prev.today === t;
+      const data = doNear ? await nearData(bearer, prev, t) : await fullData(bearer, t);
       await loadUnavailable();
       const next = index(data);
       const found = [...(prev ? diff(prev, next) : []), ...problems(next)];
@@ -310,10 +353,11 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
         added = await recordChanges(q, found);
       });
       snap = next;
-      lastRun = (await db.query("UPDATE schedule_runs SET status = 'done', finished_at = now(), visits = $2, cleaners = $3, changes = $4 WHERE id = $1 RETURNING *", [run.id, visits.length, cleaners.length, added])).rows[0];
-      log.info('schedule updated', { trigger, visits: visits.length, cleaners: cleaners.length, changes: added });
+      lastRun = (await db.query("UPDATE schedule_runs SET status = 'done', finished_at = now(), visits = $2, cleaners = $3, changes = $4 WHERE id = $1 RETURNING *", [run.id, data.visits.length, data.cleaners.length, added])).rows[0];
+      log.info('schedule updated', { trigger, kind: doNear ? 'near' : 'full', visits: data.visits.length, cleaners: data.cleaners.length, changes: added });
       return lastRun;
     } catch (err) {
+      if (/returned 401/.test(err.message)) cachedBearer = null;
       lastRun = (await db.query("UPDATE schedule_runs SET status = 'failed', finished_at = now(), error = $2 WHERE id = $1 RETURNING *", [run.id, String(err.message).slice(0, 500)])).rows[0];
       log.error('schedule sync failed', { trigger, error: err.message });
       throw err;
@@ -323,14 +367,15 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     if (!running) running = sync(opts).catch(() => null).finally(() => (running = null));
     return running;
   }
-  // A booking changed in this app: refresh within a minute (one refresh for a burst of edits).
+  // A booking changed in this app: quick refresh shortly after (one for a burst of edits).
   let soonTimer = null;
   function soon(bearer) {
     if (soonTimer) return;
     soonTimer = setTimeout(() => {
       soonTimer = null;
-      start({ bearer, trigger: 'change' });
-    }, 60_000);
+      if (running) running.then(() => start({ bearer, trigger: 'change', kind: 'near' }));
+      else start({ bearer, trigger: 'change', kind: 'near' });
+    }, CHANGE_DELAY_MS);
     soonTimer.unref?.();
   }
   async function latestRun() {
@@ -341,13 +386,17 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     if (running) return;
     const last = await latestRun();
     const t = now();
-    if (last && t - new Date(last.started_at).getTime() < (last.status === 'failed' ? 30 * 60_000 : SYNC_EVERY_MS)) return;
+    if (last?.status === 'failed' && t - new Date(last.started_at).getTime() < 10 * 60_000) return;
     if (config.l27Mode !== 'mock' && !(config.l27SyncEmail && config.l27SyncPassword)) {
       if (!warnedNoCreds) log.warn('schedule: no automatic refresh until L27_SYNC_EMAIL and L27_SYNC_PASSWORD are set (use "Refresh now")');
       warnedNoCreds = true;
       return;
     }
-    start({ trigger: last ? 'auto' : 'boot' });
+    const s = await load();
+    const fullAge = s ? t - new Date(s.full_at || s.taken_at).getTime() : Infinity;
+    const anyAge = s ? t - new Date(s.taken_at).getTime() : Infinity;
+    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today()) start({ trigger: s ? 'auto' : 'boot', kind: 'full' });
+    else if (anyAge >= NEAR_EVERY_MS) start({ trigger: 'auto', kind: 'near' });
   }
 
   // ---------- reads ----------
@@ -361,7 +410,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   async function status() {
     const last = await latestRun();
     const s = await load();
-    return { taken_at: s?.taken_at || null, running: !!running, last_error: last?.status === 'failed' ? last.error : null, refresh_minutes: SYNC_EVERY_MS / 60_000 };
+    return { taken_at: s?.taken_at || null, full_at: s?.full_at || s?.taken_at || null, running: !!running, last_error: last?.status === 'failed' ? last.error : null, refresh_minutes: NEAR_EVERY_MS / 60_000, full_minutes: FULL_EVERY_MS / 60_000 };
   }
 
   async function overview() {
