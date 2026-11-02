@@ -1,5 +1,6 @@
 // Scheduling planner: sync from Launch27 (read-only), detect changes, answer the screens.
 // Writes (assigning a cleaner) go to Launch27 with the signed-in user's own login.
+import { SAMPLE_VERSION } from '../mock/launch27.js';
 import {
   FREQ_LABEL, STATUS_LABEL, addDays, areaOf, customerPrefs, cycleWeek, cycleWeeks, daysBetween, fitsDay, frequencyKind,
   isPrepaid, km, nameMatches, localDate, localMinutes, mainCleaner, mondayOf, openGaps, parseCleaner, rankCleaners, seriesDates,
@@ -355,14 +356,19 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       bearer = await bearerFor(bearer);
       if (!bearer) throw new Error('No Launch27 login for the schedule sync (set L27_SYNC_EMAIL and L27_SYNC_PASSWORD)');
       const t = today();
-      const prev = await load();
+      const loaded = await load();
+      // Sample data (dev/QA only) was regenerated: start over rather than diffing against it.
+      const sample = config.l27Mode === 'mock' ? SAMPLE_VERSION : undefined;
+      const restart = config.l27Mode === 'mock' && loaded && loaded.sample !== sample;
+      const prev = restart ? null : loaded;
       const doNear = kind === 'near' && prev && prev.today === t;
-      const data = doNear ? await nearData(bearer, prev, t) : await fullData(bearer, t);
+      const data = { ...(doNear ? await nearData(bearer, prev, t) : await fullData(bearer, t)), sample };
       await loadUnavailable();
       const next = index(data);
       const found = [...(prev ? diff(prev, next) : []), ...problems(next)];
       let added = 0;
       await db.tx(async (q) => {
+        if (restart) await q.query("UPDATE schedule_changes SET resolved_at = now(), resolution = 'gone' WHERE resolved_at IS NULL");
         await q.query('INSERT INTO schedule_snapshots (data) VALUES ($1::jsonb)', [JSON.stringify(data)]);
         await q.query('DELETE FROM schedule_snapshots WHERE id NOT IN (SELECT id FROM schedule_snapshots ORDER BY id DESC LIMIT 2)');
         added = await recordChanges(q, found);
