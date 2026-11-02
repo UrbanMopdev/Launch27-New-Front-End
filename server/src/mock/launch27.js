@@ -54,6 +54,8 @@ function rng(seed) {
 const hash = (str) => [...str].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const iso = (d) => d.toISOString().replace('.000Z', 'Z');
 const DAY0 = Date.UTC(2020, 0, 1);
+// Monday of week A in the scheduling planner's 4-week cycle (server/src/schedule/rules.js).
+const CYCLE_IDX = Math.round((Date.UTC(2026, 10, 2) - DAY0) / 86_400_000);
 // Launch27 takes service_date as local (Toronto) wall-clock time and returns UTC.
 export function torontoToUtc(local) {
   if (!local) return new Date().toISOString();
@@ -130,9 +132,9 @@ function buildTeams() {
 
 function buildCustomers() {
   const r = rng(7);
-  return Array.from({ length: 80 }, (_, i) => {
+  return Array.from({ length: 160 }, (_, i) => {
     const first = FIRST[i % FIRST.length];
-    const last = LAST[(i * 3 + 1) % LAST.length];
+    const last = LAST[(i * 3 + 1 + Math.floor(i / 20)) % LAST.length];
     return {
       id: 50000 + i,
       company_name: i % 13 === 0 ? `${last} Property Group` : null,
@@ -140,7 +142,7 @@ function buildCustomers() {
       last_name: last,
       email: `customer${i + 1}@example.com`,
       has_generated_email: false,
-      phone: `(613) 555-01${String(i % 100).padStart(2, '0')}`,
+      phone: `(613) 555-${String(100 + i).padStart(4, '0')}`,
       address: `${10 + i * 3} ${r.pick(STREETS)}`,
       city: r.pick(['Ottawa', 'Ottawa', 'Nepean', 'Gloucester', 'Kanata']),
       state: 'ON',
@@ -162,7 +164,8 @@ function buildCustomers() {
         i % 8 === 4 ? `DO NOT assign ${FIRST[(i * 3 + 6) % FIRST.length]}` : null,
         i % 13 === 5 ? '#female cleaner only' : null,
       ].filter(Boolean).map((name, k) => ({ id: 800 + i * 10 + k, name, type: 'regular', color: null })),
-      frequency: FREQUENCIES[i % FREQUENCIES.length],
+      // Mix like the real business: 20% weekly, 45% biweekly, 15% monthly, 20% one-time.
+      frequency: FREQUENCIES[[3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 0, 0, 0, 0][i % 20]],
       location: i % 10 === 9 ? LOCATIONS[1] : LOCATIONS[0],
     };
   });
@@ -276,6 +279,63 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
   const allServices = () => (snap ? Object.values(snap.services).flat() : CATALOG.services);
   const frequencyList = () => (snap ? snap.staff_frequencies : FREQUENCIES);
   const quotes = buildQuotes(now());
+  // Each client's series: weekday, time, service, usual cleaner and (for biweekly/monthly)
+  // which weeks of the planner's 4-week cycle. Deterministic, so the data is stable.
+  // Fixed when the mock starts so visits don't drift day to day while a server runs.
+  const baseIdx = dayIndex(new Date(now()).toISOString().slice(0, 10));
+  // Each cleaner's taken time per weekday and cycle week, so home slots don't overlap.
+  const taken = new Map(); // `${teamId}:${weekday}:${letter}` -> [[start, end]] in hours
+  const hoursOf = (teamId, weekday) => {
+    const row = mockAvailability(teamId)[weekday];
+    return row.dayoff ? null : [Number(row.start_time.slice(0, 2)), Number(row.end_time.slice(0, 2))];
+  };
+  const isFree = (teamId, weekday, letters, start, end) =>
+    letters.every((l) => !(taken.get(`${teamId}:${weekday}:${l}`) || []).some(([s0, e0]) => start < e0 + 0.5 && s0 < end + 0.5));
+  const take = (teamId, weekday, letters, start, end) => {
+    for (const l of letters) {
+      const k = `${teamId}:${weekday}:${l}`;
+      (taken.get(k) || taken.set(k, []).get(k)).push([start, end]);
+    }
+  };
+  const series = genCustomers.map((c, i) => {
+    const r = rng(hash(`series:${c.id}:${i * 7919}`));
+    r.next();
+    const interval = c.frequency.interval;
+    const svc = c.location.id === 167 ? SERVICES[4] : SERVICES[r.int(4)];
+    const baths = 1 + r.int(3);
+    const len = (svc.duration + (baths - 1) * 30) / 60;
+    if (interval === 'o') {
+      const first = -300 + r.int(345);
+      return { c, svc, hour: [8, 9, 10, 12, 13][r.int(5)], baths, len, once: r.next() < 0.3 && first < -60 ? [first, first + 35 + r.int(40)] : [first] };
+    }
+    const every = interval === 'w' ? 1 : interval === 'b' ? 2 : 4;
+    const phase = every === 1 ? 0 : r.int(every);
+    const letters = [0, 1, 2, 3].filter((l) => l % every === phase);
+    const local = genTeams.filter((t) => t.locations[0].id === c.location.id);
+    // Most clients sit with an active or new cleaner; a few with someone who needs replacing.
+    const preferred = r.next() < 0.93 ? local.filter((t) => /^\((1|2)\)/.test(t.title)) : local;
+    const days = [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6];
+    const start = r.int(days.length);
+    for (let d = 0; d < days.length; d++) {
+      const weekday = days[(start + d) % days.length];
+      const order = [...preferred].sort((x, y) => hash(`${c.id}:${x.id}`) - hash(`${c.id}:${y.id}`));
+      for (const t of order) {
+        const h = hoursOf(t.id, weekday);
+        if (!h) continue;
+        for (let hour = h[0]; hour + len <= h[1]; hour++) {
+          if (!isFree(t.id, weekday, letters, hour, hour + len)) continue;
+          take(t.id, weekday, letters, hour, hour + len);
+          return {
+            c, svc, hour, baths, len, weekday, every, phase, teamId: t.id,
+            startAgo: 20 + r.int(480),
+            endAgo: r.next() < 0.12 ? 10 + r.int(200) : null,
+          };
+        }
+      }
+    }
+    // No room anywhere: the client still books, but nobody is set to clean for them.
+    return { c, svc, hour: 9, baths, len, weekday: days[start], every, phase, teamId: null, startAgo: 20 + r.int(200), endAgo: null };
+  });
   const overlay = new Map(); // booking id -> partial changes
   const created = new Map(); // booking id -> booking created through the API
   let nextId = 900_000;
@@ -287,22 +347,54 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       return list.map(applyOverlay);
     }
     const idx = dayIndex(date);
-    const r = rng(hash(date));
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
-    const count = weekday === 0 ? 0 : weekday === 6 ? 4 + r.int(3) : 11 + r.int(6);
-    const list = [];
-    for (let i = 0; i < count; i++) list.push(makeBooking(idx * 100 + i, date, r));
+    const wk = Math.floor((idx - CYCLE_IDX) / 7);
+    const todayIdx = baseIdx;
+    // Recurring clients repeat on their own slot; one-time clients appear on their date(s).
+    const due = [];
+    for (const sp of series) {
+      if (sp.once) {
+        if (sp.once.includes(idx - todayIdx)) due.push(sp);
+        continue;
+      }
+      if (sp.weekday !== weekday || idx < todayIdx - sp.startAgo || idx > todayIdx + 400 || (sp.endAgo != null && idx > todayIdx - sp.endAgo)) continue;
+      if (sp.every === 2 && ((wk % 2) + 2) % 2 !== sp.phase) continue;
+      if (sp.every === 4 && ((wk % 4) + 4) % 4 !== sp.phase) continue;
+      if (rng(hash(`${date}:${sp.c.id}`)).next() < 0.04) continue; // the odd skipped visit
+      due.push(sp);
+    }
+    // One-time clients go to whoever is free that day.
+    const busy = due.filter((sp) => !sp.once);
+    for (const sp of due) {
+      if (!sp.once) continue;
+      const local = genTeams.filter((t) => t.locations[0].id === sp.c.location.id && /^\((1|2)\)/.test(t.title));
+      let pick = null;
+      for (const t of local) {
+        const h = hoursOf(t.id, weekday);
+        if (!h) continue;
+        for (let hour = Math.max(h[0], sp.hour); hour + sp.len <= h[1] && !pick; hour++) {
+          if (busy.some((o) => o.teamId === t.id && hour < o.hour + o.len + 0.5 && o.hour < hour + sp.len + 0.5)) continue;
+          pick = { ...sp, hour, teamId: t.id };
+        }
+        if (pick) break;
+      }
+      const chosen = pick || { ...sp, teamId: null };
+      busy.push(chosen);
+      due[due.indexOf(sp)] = chosen;
+    }
+    due.sort((a, b) => a.hour - b.hour || a.c.id - b.c.id);
+    const list = due.slice(0, 99).map((sp, k) => makeBooking(idx * 100 + k, date, rng(hash(`${date}:${sp.c.id}:v`)), sp.c, sp, idx - todayIdx));
     for (const b of created.values()) if (b.service_date.slice(0, 10) === date) list.push(b);
     return list.map(applyOverlay);
   }
 
-  function makeBooking(id, date, r) {
-    const c = customers[(id * 7 + 3) % customers.length];
-    const svc = c.location.id === 167 ? SERVICES[4] : SERVICES[r.int(4)];
-    const hour = [8, 8, 9, 9, 10, 12, 13, 13, 14][r.int(9)];
+  // sp: the client's series (fixed service, time, usual cleaner); daysAhead: from today.
+  function makeBooking(id, date, r, c = customers[(id * 7 + 3) % customers.length], sp = null, daysAhead = 0) {
+    const svc = sp ? sp.svc : c.location.id === 167 ? SERVICES[4] : SERVICES[r.int(4)];
+    const hour = sp ? sp.hour : [8, 8, 9, 9, 10, 12, 13, 13, 14][r.int(9)];
     const start = new Date(`${date}T${String(hour + 5).padStart(2, '0')}:00:00Z`); // ~EST
-    const extras = r.next() < 0.2 ? [{ ...r.pick(EXTRAS), quantity: 1 }] : [];
-    const baths = 1 + r.int(3);
+    const extras = r.next() < (sp ? 0.04 : 0.2) ? [{ ...r.pick(EXTRAS), quantity: 1 }] : [];
+    const baths = sp ? sp.baths : 1 + r.int(3);
     const pp = [
       { id: 137, type: 'flat', name: 'Full Bathrooms', price: 27.5, quantity: baths, total: 27.5 * baths },
       { id: 138, type: 'flat', name: 'Half Bathrooms', price: 18.33, quantity: 0, total: 0 },
@@ -312,19 +404,21 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const revenue = Math.round((subtotal - discount) * 100) / 100;
     const tax = Math.round(revenue * 0.13 * 100) / 100;
     const duration = svc.duration + (baths - 1) * 30 + extras.length * 60;
-    const unassigned = r.next() < 0.08;
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
     const local = teams.filter((t) => t.locations[0].id === c.location.id);
-    // Prefer a cleaner who works then (by their hours); otherwise anyone local.
-    const working = local.filter((t) => {
-      const row = mockAvailability(t.id).find((a) => a.weekday === weekday);
-      if (!row || row.dayoff) return false;
-      const [sh] = row.start_time.split(':').map(Number);
-      const [eh] = row.end_time.split(':').map(Number);
-      return hour >= sh && hour + (svc.duration || 180) / 60 <= eh + 1;
-    });
-    const pool = working.length ? working : local;
-    const team = pool[r.int(pool.length)] || local[0];
+    let team;
+    let unassigned;
+    if (sp) {
+      // Usual cleaner most of the time; sometimes someone covers; a few future visits not yet assigned.
+      const roll = r.next();
+      unassigned = !sp.teamId || (daysAhead > 0 && daysAhead <= 56 && roll < 0.06);
+      const cover = roll >= 0.06 && roll < 0.14;
+      const others = local.filter((t) => t.id !== sp.teamId && /^\((1|2)\)/.test(t.title) && !mockAvailability(t.id)[weekday].dayoff);
+      team = (cover && others.length ? others[r.int(others.length)] : teams.find((t) => t.id === sp.teamId)) || local[0];
+    } else {
+      unassigned = r.next() < 0.08;
+      team = local[r.int(local.length)] || local[0];
+    }
     const hours = Math.round((duration / 60) * 100) / 100;
     const past = start.getTime() + duration * 60_000 < now();
     const late = r.next() < 0.08 ? 50 : 0;
