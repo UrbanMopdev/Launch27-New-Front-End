@@ -250,6 +250,23 @@ describe('schedule: sync, plan, assign, changes', () => {
     assert.ok((await s.changes()).items.every((i) => i.id !== one.id));
   });
 
+  test('regenerated sample data starts the planner fresh instead of flagging every visit as moved', async () => {
+    const w = world();
+    const db = await openDb();
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const s = createSchedule({ db, config, fetchImpl: w.fetchImpl, log: quiet, now: () => NOW });
+    await s.sync();
+    // Pretend the stored snapshot came from an older generator, then the sample visits all change.
+    await db.query("UPDATE schedule_snapshots SET data = data - 'sample'");
+    await db.query("INSERT INTO schedule_changes (key, kind, title) VALUES ('old:1', 'moved', 'Old noise')");
+    for (const b of w.bookings) b.service_date = b.service_date.replace(/T(\d\d)/, (m, h) => `T${String((Number(h) + 1) % 24).padStart(2, '0')}`);
+    const s2 = createSchedule({ db, config, fetchImpl: w.fetchImpl, log: quiet, now: () => NOW });
+    await s2.sync();
+    const items = (await s2.changes()).items;
+    assert.ok(!items.some((i) => ['moved', 'cancelled', 'cleaner_changed'].includes(i.kind)), 'no diff noise');
+    assert.ok(!items.some((i) => i.title === 'Old noise'), 'old open items are cleared');
+  });
+
   test('quick refresh: next 14 days every few minutes; moved further out reads as moved, not cancelled', async () => {
     const w = world();
     const db = await openDb();
