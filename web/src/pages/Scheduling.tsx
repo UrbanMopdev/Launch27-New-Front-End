@@ -101,16 +101,69 @@ function CandidateRow({ c, onAssign, busy, label = 'Assign' }: { c: Candidate; o
 
 // ---------- changes ----------
 const KIND_LABEL: Record<ChangeKind, string> = {
+  unassigned: 'Needs a cleaner',
+  double_booked: 'Clash',
+  outside_hours: 'Outside hours',
+  cleaner_unavailable: 'Cleaner unavailable',
+  different_cleaner: 'Usual cleaner free',
   moved: 'Moved',
   cancelled: 'Cancelled',
   cleaner_changed: 'Cleaner changed',
-  availability: 'Availability changed',
-  unassigned: 'No cleaner',
-  outside_hours: 'Outside hours',
-  double_booked: 'Double-booked',
-  different_cleaner: 'Usual cleaner is free',
-  cleaner_unavailable: "Cleaner can't take it",
+  availability: 'Hours changed',
 };
+const KIND_ORDER: ChangeKind[] = ['unassigned', 'cleaner_unavailable', 'double_booked', 'outside_hours', 'moved', 'cancelled', 'cleaner_changed', 'availability', 'different_cleaner'];
+const first = (name?: string | null) => String(name || '').split(' ')[0] || 'them';
+const list = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+const WEEKDAY = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+// One plain sentence for what is happening, one for why it matters.
+export function explain(c: Change): { headline: string; why: string } {
+  const v = c.visit;
+  const client = c.client?.name || v?.customer || 'A client';
+  const cl = c.cleaner;
+  const d = c.detail;
+  const when = v ? `${v.time}–${v.end}` : '';
+  switch (c.kind) {
+    case 'unassigned':
+      return { headline: `No cleaner yet for ${client}`, why: `${v ? `${v.freq} clean, ${when}.` : ''} Someone needs to be assigned.` };
+    case 'outside_hours':
+      return {
+        headline: `${client}'s clean is outside ${first(cl?.name)}'s working hours`,
+        why: cl?.working ? `${cl.name} works ${cl.hours} that day, but this clean runs ${when}.` : `${cl?.name || 'The cleaner'} doesn't work on ${v ? WEEKDAY[new Date(`${v.date}T12:00:00Z`).getUTCDay()] : 'that day'}s.`,
+      };
+    case 'double_booked':
+      return { headline: `${first(cl?.name)} is booked for two cleans at the same time`, why: `${client} (${when}) overlaps with ${list(d.with || []) || 'another clean'}.` };
+    case 'cleaner_unavailable':
+      return { headline: `${first(cl?.name)} can't do ${client}'s clean`, why: `${cl?.name || 'The cleaner'} is ${d.why || 'unavailable'}, so this clean needs someone else.` };
+    case 'different_cleaner':
+      return {
+        headline: `${client}'s usual cleaner is free for this visit`,
+        why: `It's booked with ${list(d.booked || []) || 'someone else'}. ${c.client?.main ? `${c.client.main.name} did ${c.client.main.visits} of their last ${c.client.main.of} visits and is free then.` : ''}`,
+      };
+    case 'moved':
+      return { headline: `${client}'s clean was moved`, why: `From ${d.from_label} to ${d.to_label}.` };
+    case 'cancelled':
+      return { headline: `${client} cancelled a clean`, why: `${d.when_label || ''}${cl ? `. ${cl.name} now has ${Math.round(((d.duration as number) || 0) / 6) / 10}h free.` : '.'}` };
+    case 'cleaner_changed': {
+      const wasUsual = c.client?.main && (d.from_names || []).includes(c.client.main.name);
+      return { headline: `${client}'s cleaner was changed`, why: `${list(d.from_names || []) || 'No one'} → ${list(d.to_names || []) || 'no one'}.${wasUsual ? ' That was their usual cleaner.' : ''}` };
+    }
+    case 'availability': {
+      const n = d.affected_visits?.length || 0;
+      return { headline: c.title.split(':')[0], why: n ? `${n} upcoming clean${n === 1 ? ' no longer fits' : 's no longer fit'}. Each one is listed below.` : 'No upcoming cleans are affected.' };
+    }
+    default:
+      return { headline: c.title, why: '' };
+  }
+}
+
+function dayHeading(c: Change) {
+  if (c.days_away === null || !c.due) return 'No date';
+  if (c.days_away <= 0) return `Today · ${niceDate(c.due)}`;
+  if (c.days_away === 1) return `Tomorrow · ${niceDate(c.due)}`;
+  return niceDate(c.due);
+}
+
 function ChangesTab() {
   const queryClient = useQueryClient();
   const [kind, setKind] = useState<ChangeKind | null>(null);
@@ -122,56 +175,142 @@ function ChangesTab() {
   const byKind = useMemo(() => {
     const m = new Map<ChangeKind, number>();
     for (const i of items) m.set(i.kind, (m.get(i.kind) || 0) + 1);
-    return m;
+    return KIND_ORDER.filter((k) => m.has(k)).map((k) => [k, m.get(k)!] as const);
   }, [items]);
-  const shown = items.filter((i) => !kind || i.kind === kind);
+  const shown = items.filter((i) => !kind || i.kind === kind).slice(0, 60);
+  const groups: { heading: string; urgent: boolean; items: Change[] }[] = [];
+  for (const c of shown) {
+    const h = dayHeading(c);
+    const g = groups.find((x) => x.heading === h);
+    if (g) g.items.push(c);
+    else groups.push({ heading: h, urgent: c.urgent, items: [c] });
+  }
   return (
     <div className="sch-tab">
+      <p className="muted sch-intro">Each card says what's happening, what the client wants, and the one thing we recommend. Nothing changes until you click.</p>
       <div className="seg-filter">
         <button className={!kind ? 'chip-btn active' : 'chip-btn'} onClick={() => setKind(null)}>All <span className="seg-chip-count">{items.length}</span></button>
-        {[...byKind].map(([k, n]) => (
+        {byKind.map(([k, n]) => (
           <button key={k} className={kind === k ? 'chip-btn active' : 'chip-btn'} onClick={() => setKind(kind === k ? null : k)}>{KIND_LABEL[k]} <span className="seg-chip-count">{n}</span></button>
         ))}
       </div>
       {toast && <div className="sch-toast" role="status">{toast} <button className="link" onClick={() => setToast(null)}>OK</button></div>}
       {assign.isError && <div className="error">{(assign.error as Error).message}</div>}
-      {changes.data && shown.length === 0 && <div className="card muted">Nothing to handle. Changes appear here as customers and cleaners change things in Launch27.</div>}
-      <div className="sch-list">
-        {shown.slice(0, 80).map((c) => <ChangeCard key={c.id} c={c} onResolve={(r) => resolve.mutate({ id: c.id, r })} onAssign={(cleaner) => c.visit && assign.mutate({ keys: [c.visit.key], cleaner })} busy={assign.isPending || resolve.isPending} />)}
+      {changes.data && shown.length === 0 && <div className="card muted">All clear. New changes appear here within a few minutes of happening in Launch27.</div>}
+      {groups.map((g) => (
+        <section key={g.heading} className="sch-day">
+          <h2 className={g.urgent ? 'sch-day-head urgent' : 'sch-day-head'}>{g.heading}<span className="muted small"> · {g.items.length} to handle</span></h2>
+          <div className="sch-list">
+            {g.items.map((c) => <ChangeCard key={c.id} c={c} onResolve={(r) => resolve.mutate({ id: c.id, r })} onAssign={(cleaner) => c.visit && assign.mutate({ keys: [c.visit.key], cleaner })} busy={assign.isPending || resolve.isPending} />)}
+          </div>
+        </section>
+      ))}
+      {items.filter((i) => !kind || i.kind === kind).length > 60 && <p className="muted small">Showing the first 60, soonest first. Use the filters to narrow down.</p>}
+    </div>
+  );
+}
+
+const REC_LABEL: Partial<Record<ChangeKind, string>> = {
+  unassigned: 'Recommended cleaner',
+  double_booked: 'Recommended: move this clean to',
+  outside_hours: 'Recommended: move this clean to',
+  cleaner_unavailable: 'Recommended: move this clean to',
+  different_cleaner: 'Recommended: back to their usual cleaner',
+  moved: 'Recommended cleaner at the new time',
+  cleaner_changed: 'Recommended cleaner',
+};
+
+function ClientWants({ client }: { client: Change['client'] }) {
+  if (!client) return null;
+  const p = client.prefs;
+  const chips: { text: string; tone: 'good' | 'warn' | 'neutral' }[] = [];
+  if (p.female_only) chips.push({ text: 'Female cleaner only', tone: 'warn' });
+  else if (p.prefers_female) chips.push({ text: 'Prefers a female cleaner', tone: 'neutral' });
+  if (p.prefers_male) chips.push({ text: 'Prefers a male cleaner', tone: 'neutral' });
+  if (p.consistent) chips.push({ text: 'Wants the same cleaner every time', tone: 'neutral' });
+  for (const n of p.prefers) chips.push({ text: `Asks for ${n}`, tone: 'good' });
+  for (const n of p.avoid) chips.push({ text: `Never send ${n}`, tone: 'warn' });
+  return (
+    <div className="sch-wants">
+      <span className="eyebrow">What the client wants</span>
+      <div className="sch-wants-row">
+        <span className="muted small">Usual cleaner</span>
+        <b>{client.main ? `${client.main.name}` : 'None yet'}</b>
+        {client.main && <span className="muted small">{client.main.visits} of their last {client.main.of} visits{client.main.available ? '' : ' · not taking bookings now'}</span>}
       </div>
-      {shown.length > 80 && <p className="muted small">Showing the first 80, soonest first.</p>}
+      {chips.length > 0 ? <div className="sch-reasons">{chips.map((x) => <span key={x.text} className={`sch-reason t-${x.tone}`}>{x.text}</span>)}</div> : <span className="muted small">No cleaner preferences on file.</span>}
+      {client.notes.length > 0 && <div className="small sch-notes">Notes: {client.notes.join(' · ')}</div>}
     </div>
   );
 }
 
 function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r: 'fixed' | 'dismissed') => void; onAssign: (cleaner: number) => void; busy: boolean }) {
+  const [more, setMore] = useState(false);
   const v = c.visit;
+  const { headline, why } = explain(c);
+  const [rec, ...others] = c.suggestions;
+  const verb = c.kind === 'different_cleaner' ? 'Move back to' : 'Give to';
   return (
     <article className={c.urgent ? 'card sch-change urgent' : 'card sch-change'}>
       <div className="sch-change-top">
         <span className={`sch-kind k-${c.kind}`}>{KIND_LABEL[c.kind]}</span>
-        {c.due && <span className={c.urgent ? 'sch-due urgent' : 'sch-due'}>{c.urgent ? 'Within 48h · ' : ''}{niceDate(c.due)}</span>}
+        {c.urgent && <span className="sch-due urgent">Within 48 hours</span>}
       </div>
-      <b className="sch-change-title">{c.title}</b>
+      <h3 className="sch-headline">{headline}</h3>
+      {why && <p className="sch-why-line">{why}</p>}
       {v && (
-        <div className="muted small">
-          <FreqPill visit={v} /> {v.duration / 60}h{v.area ? ` · ${v.area}` : ''}{v.cleaners.length ? ` · now: ${v.cleaners.map((x) => x.name).join(' & ')}` : ''}
+        <div className="sch-visit-strip">
+          <span><b>{niceDate(v.date)}</b> · {v.time}–{v.end}</span>
+          <span>{Math.round((v.duration / 60) * 10) / 10}h</span>
+          <FreqPill visit={v} />
+          {v.area && <span>{v.area}</span>}
+          <span>Cleaner: <b>{v.cleaners.length ? v.cleaners.map((x) => x.name).join(' & ') : 'none'}</b></span>
         </div>
       )}
-      {c.kind === 'moved' && (
-        <p className="small sch-note">Is this a one-off, or their new usual time? A one-off leaves their usual slot alone. For a permanent change, edit the series.</p>
+      {c.kind === 'availability' && (c.detail.affected_visits || []).length > 0 && (
+        <ul className="sch-affected">
+          {(c.detail.affected_visits || []).map((a) => <li key={a.key}>{niceDate(a.date)} · {a.time} · {a.customer} <FreqPill visit={a} /></li>)}
+        </ul>
       )}
-      {c.suggestions.length > 0 && (
-        <div className="sch-cands">
-          {c.suggestions.map((s) => <CandidateRow key={s.cleaner_id} c={s} busy={busy} onAssign={() => onAssign(s.cleaner_id)} label={v?.projected ? 'Assign (in Launch27)' : 'Assign'} />)}
-        </div>
-      )}
-      <div className="sch-actions">
-        {c.kind === 'moved' && <button className="secondary" disabled={busy} onClick={() => onResolve('fixed')}>Just this visit</button>}
-        {c.kind === 'moved' && v?.id && <Link className="button secondary-link" to={`/bookings/${v.id}/edit`}>From now on: edit series</Link>}
-        {v?.id && <Link className="button secondary-link" to={`/bookings/${v.id}`}>Open booking</Link>}
-        {c.kind !== 'moved' && <button className="secondary" disabled={busy} onClick={() => onResolve('fixed')}>Mark handled</button>}
-        <button className="link" disabled={busy} onClick={() => onResolve('dismissed')}>Dismiss</button>
+      <div className="sch-change-body">
+        <ClientWants client={c.client} />
+        {rec ? (
+          <div className="sch-rec">
+            <span className="eyebrow accent">{REC_LABEL[c.kind] || 'Recommended'}</span>
+            <div className="sch-who"><CleanerDot color={rec.color} /><b className="sch-rec-name">{rec.name}</b></div>
+            <Reasons reasons={rec.reasons} />
+            <button disabled={busy} onClick={() => onAssign(rec.cleaner_id)}>{verb} {first(rec.name)}{v?.projected ? ' (in Launch27)' : ''}</button>
+            {others.length > 0 && <button className="link small" onClick={() => setMore(!more)}>{more ? 'Hide other options' : `Other options (${others.length})`}</button>}
+            {more && <div className="sch-cands">{others.map((o) => <CandidateRow key={o.cleaner_id} c={o} busy={busy} onAssign={() => onAssign(o.cleaner_id)} label={`${verb} ${first(o.name)}`} />)}</div>}
+          </div>
+        ) : c.kind === 'moved' ? (
+          <div className="sch-rec">
+            <span className="eyebrow accent">Is this a one-off?</span>
+            <p className="small">A one-off leaves their usual day and time alone. If it's their new usual time, change the series so future visits follow.</p>
+            <div className="sch-actions">
+              <button disabled={busy} onClick={() => onResolve('fixed')}>Just this visit</button>
+              {v?.id && <Link className="button secondary-link" to={`/bookings/${v.id}/edit`}>From now on: edit series</Link>}
+            </div>
+          </div>
+        ) : ['unassigned', 'cleaner_unavailable', 'double_booked', 'outside_hours'].includes(c.kind) ? (
+          <div className="sch-rec empty">
+            <span className="eyebrow">Recommended</span>
+            <p className="small">Nobody else is free at this time. Call the client to offer another time: <Link to={`/schedule?tab=find${c.client ? `&customer=${c.client.id}` : ''}`}>find a slot</Link>.</p>
+          </div>
+        ) : (
+          <div className="sch-rec empty">
+            <span className="eyebrow">Recommended</span>
+            <p className="small">{c.kind === 'cancelled' ? 'Nothing to fix. Use the free time for an unassigned visit nearby (see Needs a cleaner).' : 'Check it looks right, then mark it handled.'}</p>
+          </div>
+        )}
+      </div>
+      <div className="sch-footer">
+        {v?.id && <Link to={`/bookings/${v.id}`}>Open booking</Link>}
+        {c.client && <Link to={`/customers/${c.client.id}`}>Client profile</Link>}
+        <span className="sch-footer-right">
+          <button className="secondary" disabled={busy} onClick={() => onResolve('fixed')}>Handled</button>
+          <button className="link" disabled={busy} onClick={() => onResolve('dismissed')}>Dismiss</button>
+        </span>
       </div>
     </article>
   );

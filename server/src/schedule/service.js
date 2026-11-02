@@ -2,7 +2,7 @@
 // Writes (assigning a cleaner) go to Launch27 with the signed-in user's own login.
 import {
   FREQ_LABEL, STATUS_LABEL, addDays, areaOf, customerPrefs, cycleWeek, cycleWeeks, daysBetween, fitsDay, frequencyKind,
-  isPrepaid, km, localDate, localMinutes, mainCleaner, mondayOf, openGaps, parseCleaner, rankCleaners, seriesDates,
+  isPrepaid, km, nameMatches, localDate, localMinutes, mainCleaner, mondayOf, openGaps, parseCleaner, rankCleaners, seriesDates,
   weekday, weeklyHours, workingWindow,
 } from './rules.js';
 
@@ -212,7 +212,8 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       if (cust?.main && v.kind !== 'one' && !v.team_ids.includes(cust.main.id)) {
         // Only when the usual cleaner could take it back: that is the one dispatch can act on.
         const main = s.byId.get(cust.main.id);
-        const free = main?.assignable && fitsDay({ window: windowFor(main, v.date), busy: busyFor(s)(main.id, v.date), start: v.start, duration: v.duration, place: v, transit: main.rules.transit, ignoreKeys: new Set([v.key]) }).ok;
+        const allowed = main && !cust.prefs.avoid.some((n) => nameMatches(main.name, n)) && !(cust.prefs.femaleOnly && main.gender !== 'F');
+        const free = allowed && main?.assignable && fitsDay({ window: windowFor(main, v.date), busy: busyFor(s)(main.id, v.date), start: v.start, duration: v.duration, place: v, transit: main.rules.transit, ignoreKeys: new Set([v.key]) }).ok;
         if (main && free) out.push({ ...base, cleaner_id: cust.main.id, kind: 'different_cleaner', key: `different_cleaner:${v.key}:${v.team_ids.join('-')}`, title: `${main.name} is free to take back ${v.customer} · ${when}`, detail: { main: main.name, booked: v.team_ids.map((id) => s.byId.get(id)?.name || 'Unknown') } });
       }
     }
@@ -593,6 +594,31 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return { taken_at: s.taken_at, clients, always, three_plus: three, visit_share: visits ? withMain / visits : null, upcoming_count: upcoming.length, upcoming: upcoming.slice(0, 100), without_main: noMain };
   }
 
+  // What a client wants, in plain terms, for the cards.
+  const titleCase = (x) => String(x || '').replace(/\b\w/g, (c) => c.toUpperCase());
+  const PREF_TAG = /prefer|do\s*not\s*assign|female|\bmale\b|consistent|same cleaner/i;
+  function clientOut(s, customerId) {
+    const cu = customerId != null ? s.customers.get(customerId) : null;
+    if (!cu) return null;
+    const main = cu.main ? s.byId.get(cu.main.id) : null;
+    return {
+      id: cu.id,
+      name: cu.name,
+      phone: cu.phone || null,
+      recurring: cu.recurring,
+      main: main ? { id: main.id, name: main.name, visits: cu.main.visits, of: cu.main.of, available: main.assignable } : null,
+      prefs: {
+        female_only: cu.prefs.femaleOnly,
+        prefers_female: cu.prefs.prefersFemale && !cu.prefs.femaleOnly,
+        prefers_male: cu.prefs.prefersMale,
+        consistent: cu.prefs.consistent,
+        prefers: cu.prefs.prefers.map(titleCase),
+        avoid: cu.prefs.avoid.map(titleCase),
+      },
+      notes: (cu.tags || []).filter((t) => !PREF_TAG.test(t)).slice(0, 6),
+    };
+  }
+
   async function changes() {
     const s = await need();
     const rows = (await db.query('SELECT * FROM schedule_changes WHERE resolved_at IS NULL ORDER BY due NULLS LAST, id')).rows;
@@ -603,12 +629,30 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       if (v && ['unassigned', 'outside_hours', 'double_booked', 'different_cleaner', 'cleaner_unavailable', 'moved', 'cleaner_changed'].includes(r.kind) && v.date >= s.today) {
         const cu = s.customers.get(v.customer_id);
         const job = { dates: [v.date], start: v.start, duration: v.duration, place: { lat: v.lat, lng: v.lng }, kind: v.kind, services: v.services, prefs: cu?.prefs, mainCleanerId: cu?.main?.id, history: cu?.history, firstDate: v.date };
-        suggestions = rankCleaners(job, s.cleaners.filter((c) => !v.team_ids.includes(c.id) || r.kind === 'different_cleaner'), ctx, { limit: 3, ignoreKeys: new Set([v.key]) }).filter((x) => !v.team_ids.includes(x.cleaner_id));
+        suggestions = rankCleaners(job, s.cleaners.filter((c) => !v.team_ids.includes(c.id) || r.kind === 'different_cleaner'), ctx, { limit: 4, ignoreKeys: new Set([v.key]) }).filter((x) => !v.team_ids.includes(x.cleaner_id));
+        if (r.kind === 'different_cleaner') suggestions = suggestions.filter((x) => x.cleaner_id === cu?.main?.id);
       }
-      const urgent = r.due && daysBetween(s.today, dateStr(r.due)) <= 2;
-      return { id: Number(r.id), kind: r.kind, title: r.title, due: dateStr(r.due), urgent, detail: r.detail, created_at: r.created_at, visit: v ? visitOut(s, v) : null, suggestions };
+      const c = r.cleaner_id != null ? s.byId.get(Number(r.cleaner_id)) : null;
+      const day = v?.date || dateStr(r.due);
+      const w = c && day ? windowFor(c, day) : null;
+      const cleaner = c ? { id: c.id, name: c.name, status: STATUS_LABEL[c.status], hours: w ? `${clock(w[0])}–${clock(w[1])}` : null, working: !!w } : null;
+      const detail = { ...(r.detail || {}) };
+      if (r.kind === 'availability' && Array.isArray(detail.affected)) detail.affected_visits = detail.affected.map((k) => s.visits.find((x) => x.key === k)).filter(Boolean).map((x) => visitOut(s, x));
+      if (r.kind === 'moved' && detail.from) detail.from_label = `${nice(detail.from.date)} at ${clock(detail.from.start)}`;
+      if (r.kind === 'moved' && detail.to) detail.to_label = `${nice(detail.to.date)} at ${clock(detail.to.start)}`;
+      if (r.kind === 'cancelled' && detail.date) detail.when_label = `${nice(detail.date)} at ${clock(detail.start)}`;
+      if (r.kind === 'cleaner_changed') {
+        detail.from_names = (detail.from || []).map((id) => s.byId.get(id)?.name || 'Unknown');
+        detail.to_names = (detail.to || []).map((id) => s.byId.get(id)?.name || 'Unknown');
+      }
+      const urgent = !!r.due && daysBetween(s.today, dateStr(r.due)) <= 2;
+      return {
+        id: Number(r.id), kind: r.kind, title: r.title, due: dateStr(r.due), urgent, days_away: r.due ? daysBetween(s.today, dateStr(r.due)) : null,
+        detail, created_at: r.created_at, visit: v ? { ...visitOut(s, v), end: clock(v.end), services: v.services } : null,
+        cleaner, client: clientOut(s, r.customer_id != null ? Number(r.customer_id) : v?.customer_id), suggestions,
+      };
     });
-    return { taken_at: s.taken_at, items };
+    return { taken_at: s.taken_at, today: s.today, items };
   }
 
   async function resolveChange(id, resolution, userId) {

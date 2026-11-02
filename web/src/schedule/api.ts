@@ -110,7 +110,29 @@ export interface Continuity {
 }
 
 export type ChangeKind = 'moved' | 'cancelled' | 'cleaner_changed' | 'availability' | 'unassigned' | 'outside_hours' | 'double_booked' | 'different_cleaner' | 'cleaner_unavailable';
-export interface Change { id: number; kind: ChangeKind; title: string; due: string | null; urgent: boolean; detail: Record<string, unknown>; created_at: string; visit: Visit | null; suggestions: Candidate[] }
+export interface ClientInfo {
+  id: number;
+  name: string;
+  phone: string | null;
+  recurring: boolean;
+  main: { id: number; name: string; visits: number; of: number; available: boolean } | null;
+  prefs: { female_only: boolean; prefers_female: boolean; prefers_male: boolean; consistent: boolean; prefers: string[]; avoid: string[] };
+  notes: string[];
+}
+export interface Change {
+  id: number;
+  kind: ChangeKind;
+  title: string;
+  due: string | null;
+  urgent: boolean;
+  days_away: number | null;
+  detail: Record<string, unknown> & { why?: string; hours?: string; with?: string[]; from_label?: string; to_label?: string; when_label?: string; duration?: number; from_names?: string[]; to_names?: string[]; main?: string; booked?: string[]; affected_visits?: Visit[] };
+  created_at: string;
+  visit: (Visit & { end: string; services: string[] }) | null;
+  cleaner: { id: number; name: string; status: string; hours: string | null; working: boolean } | null;
+  client: ClientInfo | null;
+  suggestions: Candidate[];
+}
 
 export interface Slot {
   date: string;
@@ -150,7 +172,7 @@ export const scheduleApi = {
   gap: (cleaner: number, date: string, start: number, end: number) => call<GapOptions>('GET', `/gap?cleaner=${cleaner}&date=${date}&start=${start}&end=${end}`),
   unassigned: () => call<{ total_series: number; total_visits: number; series: Series[] }>('GET', '/unassigned'),
   continuity: () => call<Continuity>('GET', '/continuity'),
-  changes: () => call<{ items: Change[] }>('GET', '/changes'),
+  changes: () => call<{ items: Change[]; today: string }>('GET', '/changes'),
   resolve: (id: number, resolution: 'fixed' | 'dismissed') => call<void>('POST', `/changes/${id}/resolve`, { resolution }),
   findSlots: (q: SlotQuery) => call<{ place_known: boolean; frequency: string; duration: number; customer: { id: number; name: string; main: string | null } | null; slots: Slot[] }>('POST', '/find-slots', q),
   assign: (visit_keys: string[], cleaner_id: number) => call<{ assigned: number; projected: number; cleaner: string; confirm_first: boolean }>('POST', '/assign', { visit_keys, cleaner_id }),
