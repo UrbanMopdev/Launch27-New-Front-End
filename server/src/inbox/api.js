@@ -821,6 +821,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     r.get('/schedule/overview', sched(async (req, res) => res.json(await schedule.overview())));
     r.get('/schedule/cleaners', sched(async (req, res) => res.json(await schedule.cleaners())));
     r.get('/schedule/plan/:id', sched(async (req, res) => res.json(await schedule.plan(req.params.id))));
+    r.get('/schedule/cleaner/:id/profile', sched(async (req, res) => res.json(await schedule.cleanerProfile(req.params.id))));
     r.get('/schedule/gap', sched(async (req, res) => res.json(await schedule.gapOptions(req.query.cleaner, String(req.query.date), Number(req.query.start), Number(req.query.end)))));
     r.get('/schedule/unassigned', sched(async (req, res) => res.json(await schedule.unassigned())));
     r.get('/schedule/continuity', sched(async (req, res) => res.json(await schedule.continuity())));

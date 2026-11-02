@@ -151,6 +151,7 @@ export function CleanerReportPage() {
         </div>
         <div className="rep-head-actions">
           <PeriodPicker value={period} onChange={setPeriod} />
+          <Link className="button secondary-link" to={`/cleaners/${c.id}`}>Profile</Link>
           <Link className="button secondary-link" to={`/schedule/cleaner/${c.id}`}>Open plan</Link>
         </div>
       </section>

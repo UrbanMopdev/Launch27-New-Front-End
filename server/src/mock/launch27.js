@@ -461,6 +461,9 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const customerId = Number(q.get('customers')) || null;
     let out = list;
     if (customerId) out = out.filter((b) => b.user.id === customerId);
+    // ?teams=<id>[,<id>]: only bookings assigned to those cleaners (as Launch27 does).
+    const teamIds = (q.get('teams') || '').split(',').map(Number).filter(Boolean);
+    if (teamIds.length) out = out.filter((b) => b.teams.some((t) => teamIds.includes(t.id)));
     if (filter === 'cancelled') out = out.filter((b) => !b.active);
     else out = out.filter((b) => b.active);
     if (filter === 'unassigned') out = out.filter((b) => !b.teams.length);

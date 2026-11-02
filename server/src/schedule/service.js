@@ -3,7 +3,7 @@
 import {
   FREQ_LABEL, STATUS_LABEL, addDays, areaOf, customerPrefs, cycleWeek, cycleWeeks, daysBetween, fitsDay, frequencyKind,
   isPrepaid, km, nameMatches, localDate, localMinutes, mainCleaner, mondayOf, openGaps, parseCleaner, rankCleaners, seriesDates,
-  weekday, weeklyHours, workingWindow,
+  weekday, weeklyHours, workingWindow, toMinutes as toMinutesHM, travelMinutes,
 } from './rules.js';
 
 const PAST_DAYS = 91;
@@ -781,11 +781,76 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return { cleaner: c.name, day, unavailable: on, affected };
   }
 
+  // Everything the cleaner profile needs from the planner's stored schedule.
+  async function cleanerProfile(cleanerId) {
+    const s = await need();
+    const c = s.byId.get(Number(cleanerId));
+    if (!c) throw Object.assign(new Error('This cleaner is not in the active list'), { status: 404 });
+    const t = s.today;
+    const mine = (from, to) => s.future.filter((v) => v.date >= from && v.date <= to && v.team_ids.includes(c.id)).sort((a, b) => a.date.localeCompare(b.date) || a.start - b.start);
+    const todayVisits = mine(t, t);
+    const next14 = mine(addDays(t, 1), addDays(t, 14));
+    const weekStart = mondayOf(t);
+    const week = [1, 2, 3, 4, 5, 6, 0].map((wd) => {
+      const d = addDays(weekStart, (wd + 6) % 7);
+      const w = windowFor(c, d);
+      const booked = (s.busy.get(`${c.id}|${d}`) || []).reduce((m, v) => m + v.duration / Math.max(v.team_ids.length, 1), 0);
+      return { date: d, day: DAYNAME[wd], past: d < t, working: !!w, unavailable: !!unavailable.get(c.id)?.has(d), capacity_h: w ? Math.round((w[1] - w[0]) / 6) / 10 : 0, booked_h: Math.round(booked / 6) / 10 };
+    });
+    // Today: their day in order, with drive estimates between visits and any problems.
+    const w0 = windowFor(c, t);
+    let prev = null;
+    const today = todayVisits.map((v) => {
+      const drive = prev ? travelMinutes(km(prev, v), c.rules.transit) : null;
+      const issues = [];
+      if (!w0) issues.push('Not a working day for them');
+      else if (v.end > w0[1]) issues.push(`Ends after their ${clock(w0[1])} finish`);
+      else if (v.start < w0[0]) issues.push(`Starts before their ${clock(w0[0])} start`);
+      if (prev && prev.end + (drive || 0) > v.start) issues.push('Tight: not enough time to get there');
+      prev = v;
+      const cu = s.customers.get(v.customer_id);
+      return { ...visitOut(s, v), end: clock(v.end), services: v.services, drive_before: drive, issues, note: cu?.prefs.consistent ? 'wants the same cleaner every time' : null };
+    });
+    // Clients who asked never to have them; usual hours as plain text.
+    const avoidedBy = [...s.customers.values()].filter((cu) => cu.prefs.avoid.some((n) => nameMatches(c.name, n))).length;
+    const rows = c.availability || [];
+    const groups = [];
+    for (const wd of [1, 2, 3, 4, 5, 6, 0]) {
+      const r = rows.find((x) => !x.date && Number(x.weekday) === wd);
+      const label = r && !r.dayoff && r.start_time && r.end_time ? `${clock(toMinutesHM(r.start_time))} – ${clock(toMinutesHM(r.end_time))}` : 'Off';
+      const g = groups.at(-1);
+      if (g && g.label === label) g.days.push(DAYNAME[wd]);
+      else groups.push({ label, days: [DAYNAME[wd]] });
+    }
+    const hours = groups.map((g) => ({ days: g.days.length > 2 ? `${g.days[0]} – ${g.days.at(-1)}` : g.days.join(', '), label: g.label }));
+    const daysOff = [...(unavailable.get(c.id) || [])].filter((d) => d >= t).sort();
+    return {
+      taken_at: s.taken_at,
+      today_date: t,
+      cleaner: { ...cleanerOut(c), title: c.title },
+      hours,
+      days_off: daysOff,
+      week: { days: week, booked_h: Math.round(week.reduce((a, d) => a + d.booked_h, 0) * 10) / 10, capacity_h: Math.round(week.reduce((a, d) => a + d.capacity_h, 0) * 10) / 10 },
+      today,
+      today_drive_min: today.reduce((a, v) => a + (v.drive_before || 0), 0),
+      next14: { cleans: next14.length, hours: Math.round(next14.reduce((a, v) => a + v.duration / Math.max(v.team_ids.length, 1), 0) / 6) / 10 },
+      rules: [
+        c.rules.maxTravelMin ? `Max ${c.rules.maxTravelMin} minutes travel to a booking` : null,
+        ...c.rules.doNotPair.map((n) => `Never paired with ${n.replace(/\b\w/g, (x) => x.toUpperCase())} on a booking`),
+        c.rules.noShort ? 'No short (2-hour) bookings' : null,
+        c.rules.confirmFirst ? 'Call or text to confirm before giving them a new booking' : null,
+        c.rules.lastMinute ? 'Happy to take last-minute bookings' : null,
+        c.rules.transit ? 'Travels by public transit' : null,
+        avoidedBy ? `${avoidedBy} client${avoidedBy === 1 ? ' has' : 's have'} asked never to have them` : null,
+      ].filter(Boolean),
+    };
+  }
+
   async function cleaners() {
     const s = await need();
     return { cleaners: s.cleaners.map(cleanerOut).sort((a, b) => Number(b.assignable) - Number(a.assignable) || a.name.localeCompare(b.name)) };
   }
 
-  return { sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
+  return { cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
 }
 

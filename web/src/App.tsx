@@ -27,7 +27,7 @@ import { QuotesPage, TeamPaymentsPage } from './pages/Lists';
 import { QuoteDetailPage } from './pages/QuoteDetail';
 import { ApiCatalogPage } from './pages/ApiCatalog';
 import { InboxPage } from './pages/Inbox';
-import { ContactPage, InboxSettingsPage, SimulatorPage, SupervisorPage } from './pages/SupportPages';
+import { ContactPage, InboxSettingsPage, SimulatorPage, SupervisorPage, CleanerRedirectPage } from './pages/SupportPages';
 
 // The map library is large, so the Routes page loads on demand.
 const RoutesPage = lazy(() => import('./pages/Routes').then((m) => ({ default: m.RoutesPage })));
@@ -71,6 +71,7 @@ export function App() {
         <Route path="bookings/:id/edit" element={<BookingFormPage />} />
         <Route path="customers" element={<CustomersPage />} />
         <Route path="schedule" element={<SchedulingPage />} />
+        <Route path="cleaners/:id" element={<CleanerRedirectPage />} />
         <Route path="schedule/cleaner/:id" element={<CleanerPlanPage />} />
         <Route path="customers/trends" element={<Navigate to="/reports/customers" replace />} />
         <Route path="reports/customers" element={<CustomerInsightsPage />} />

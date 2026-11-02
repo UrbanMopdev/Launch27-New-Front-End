@@ -52,6 +52,19 @@ export interface Candidate {
   reasons: Reason[];
 }
 
+export interface CleanerProfileData {
+  taken_at: string;
+  today_date: string;
+  cleaner: Cleaner & { title: string };
+  hours: { days: string; label: string }[];
+  days_off: string[];
+  week: { days: { date: string; day: string; past: boolean; working: boolean; unavailable: boolean; capacity_h: number; booked_h: number }[]; booked_h: number; capacity_h: number };
+  today: (Visit & { end: string; services: string[]; drive_before: number | null; issues: string[]; note: string | null })[];
+  today_drive_min: number;
+  next14: { cleans: number; hours: number };
+  rules: string[];
+}
+
 export interface Status { taken_at: string | null; full_at: string | null; running: boolean; last_error: string | null; refresh_minutes: number; full_minutes: number }
 
 export interface Overview {
@@ -170,6 +183,7 @@ export const scheduleApi = {
   status: () => call<Status>('GET', '/status'),
   overview: () => call<Overview>('GET', '/overview'),
   plan: (id: number) => call<Plan>('GET', `/plan/${id}`),
+  cleanerProfile: (id: number) => call<CleanerProfileData>('GET', `/cleaner/${id}/profile`),
   gap: (cleaner: number, date: string, start: number, end: number) => call<GapOptions>('GET', `/gap?cleaner=${cleaner}&date=${date}&start=${start}&end=${end}`),
   unassigned: () => call<{ total_series: number; total_visits: number; series: Series[] }>('GET', '/unassigned'),
   continuity: () => call<Continuity>('GET', '/continuity'),
