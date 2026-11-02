@@ -200,6 +200,19 @@ describe('schedule: sync, plan, assign, changes', () => {
     assert.equal(slots.slots[0].cleaner.name, 'Ann Usual');
     assert.ok(slots.slots.every((x) => x.cleaner.name !== 'Cat Held'));
 
+    // Rescheduling: the client asked for the same cleaner -> only Ann's openings.
+    const same = await s.findSlots({ customer_id: 1, duration: 180, kind: 'bi', cleaner: 'same' });
+    assert.equal(same.cleaner, 'same');
+    assert.ok(same.slots.length > 0 && same.slots.every((x) => x.cleaner.name === 'Ann Usual'));
+    // Same cleaner but nothing fits (8h a week) -> no slots, and a count of what others could do.
+    const tight = await s.findSlots({ customer_id: 1, duration: 600, kind: 'weekly', cleaner: 'same' });
+    assert.equal(tight.slots.length, 0);
+    assert.equal(typeof tight.any_count, 'number');
+    // No usual cleaner on file -> falls back to any cleaner and says so.
+    const fresh = await s.findSlots({ duration: 180, kind: 'one', cleaner: 'same' });
+    assert.equal(fresh.no_usual, true);
+    assert.equal(fresh.cleaner, 'any');
+
     // Assign the series to Ann: one Launch27 call per real booking, change resolved.
     const res = await s.assign({ visit_keys: un.series[0].visits.map((v) => v.key), cleaner_id: 1 }, 'user-bearer');
     assert.equal(res.assigned, 2);

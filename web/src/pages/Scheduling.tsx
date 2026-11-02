@@ -519,8 +519,12 @@ export function FindSlotTab({ presetCustomer }: { presetCustomer?: { id: number;
   const [from, setFrom] = useState('');
   const [days, setDays] = useState<number[]>([]);
   const [time, setTime] = useState<'any' | 'am' | 'pm'>('any');
+  // Asked when a client is picked (e.g. rescheduling): their usual cleaner only, or anyone.
+  const [who, setWho] = useState<'same' | 'any' | null>(null);
   const search = useQuery({ queryKey: ['schedule', 'customer-search', q], queryFn: () => segmentsApi.customers({ q, limit: 6 }), enabled: q.trim().length >= 2 && !customer });
-  const slots = useMutation({ mutationFn: () => scheduleApi.findSlots({ customer_id: customer?.id, duration: Math.round(hours * 60), kind, from: from || undefined, weekdays: days.length ? days : undefined, earliest: time === 'pm' ? 12 * 60 : 0, latest: time === 'am' ? 12 * 60 + 30 : 24 * 60 }) });
+  const slots = useMutation({ mutationFn: (override?: 'same' | 'any') => scheduleApi.findSlots({ customer_id: customer?.id, duration: Math.round(hours * 60), kind, from: from || undefined, weekdays: days.length ? days : undefined, earliest: time === 'pm' ? 12 * 60 : 0, latest: time === 'am' ? 12 * 60 + 30 : 24 * 60, cleaner: (override ?? who) === 'same' ? 'same' : 'any' }) });
+  const needWho = !!customer && !who;
+  const anyInstead = () => { setWho('any'); slots.mutate('any'); };
   const book = (s: Slot) => navigate(`/bookings/new?${new URLSearchParams({ ...(customer ? { customer: String(customer.id) } : {}), date: s.date, time: `${String(Math.floor(s.start / 60)).padStart(2, '0')}:${String(s.start % 60).padStart(2, '0')}`, team: String(s.cleaner.id), freq: kind })}`);
   return (
     <div className="sch-tab sch-find">
@@ -528,7 +532,7 @@ export function FindSlotTab({ presetCustomer }: { presetCustomer?: { id: number;
         <h2>Find the best slot</h2>
         <label>Client
           {customer ? (
-            <span className="sch-picked">{customer.name} <button className="link" onClick={() => setCustomer(null)}>change</button></span>
+            <span className="sch-picked">{customer.name} <button className="link" onClick={() => { setCustomer(null); setWho(null); }}>change</button></span>
           ) : (
             <>
               <input type="search" placeholder="Search by name, email or phone (optional)" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -555,18 +559,38 @@ export function FindSlotTab({ presetCustomer }: { presetCustomer?: { id: number;
           <span className="small seg-traits-label">Time</span>
           {(['any', 'am', 'pm'] as const).map((t) => <button key={t} className={time === t ? 'chip-btn active' : 'chip-btn'} onClick={() => setTime(t)}>{t === 'any' ? 'Any' : t === 'am' ? 'Morning' : 'Afternoon'}</button>)}
         </div>
-        <button disabled={slots.isPending} onClick={() => slots.mutate()}>{slots.isPending ? 'Looking…' : 'Find slots'}</button>
+        {customer && (
+          <div className="sch-who-ask" role="group" aria-label="Cleaner preference">
+            <span className="small seg-traits-label">Ask {customer.name.split(' ')[0]}: keep their usual cleaner, or any cleaner?</span>
+            <button className={who === 'same' ? 'chip-btn active' : 'chip-btn'} aria-pressed={who === 'same'} onClick={() => setWho('same')}>Usual cleaner only</button>
+            <button className={who === 'any' ? 'chip-btn active' : 'chip-btn'} aria-pressed={who === 'any'} onClick={() => setWho('any')}>Any cleaner</button>
+          </div>
+        )}
+        <button disabled={slots.isPending || needWho} onClick={() => slots.mutate(undefined)}>{slots.isPending ? 'Looking…' : 'Find slots'}</button>
+        {needWho && <p className="muted small">Ask the client whether they want their usual cleaner before searching.</p>}
         {!customer && <p className="muted small">Without a client, distance can't be used. Pick the client for the best match.</p>}
       </section>
       {slots.isError && <div className="error">{(slots.error as Error).message}</div>}
       {slots.data && (
         <section className="sch-list">
           <p className="muted small">
-            {slots.data.slots.length ? `Best ${slots.data.frequency.toLowerCase()} slots. Recurring slots are free on every date for the next 8 weeks.` : 'No cleaner is free for that. Try other days, a shorter clean, or a later start date.'}
-            {slots.data.customer?.main && (slots.data.slots.some((x) => x.cleaner.name === slots.data!.customer!.main)
-              ? ` ${slots.data.customer.main} (usual cleaner) is ranked first where free.`
-              : ` ${slots.data.customer.main} (usual cleaner) isn't free at those times: try other days or times to keep them.`)}
+            {slots.data.cleaner === 'same' ? (
+              slots.data.slots.length
+                ? `Only ${slots.data.customer?.main} (usual cleaner), as the client asked. Recurring slots are free on every date for the next 8 weeks.`
+                : `${slots.data.customer?.main} (usual cleaner) isn't free for that. Try other days or times to keep them${slots.data.any_count ? `, or offer another cleaner: ${slots.data.any_count} slot${slots.data.any_count === 1 ? '' : 's'} open.` : '. No other cleaner is free either.'}`
+            ) : (
+              <>
+                {slots.data.no_usual && `${slots.data.customer?.name || 'This client'} has no usual cleaner yet, so these are open to any cleaner. `}
+                {slots.data.slots.length ? `Best ${slots.data.frequency.toLowerCase()} slots. Recurring slots are free on every date for the next 8 weeks.` : 'No cleaner is free for that. Try other days, a shorter clean, or a later start date.'}
+                {slots.data.customer?.main && (slots.data.slots.some((x) => x.cleaner.name === slots.data!.customer!.main)
+                  ? ` ${slots.data.customer.main} (usual cleaner) is ranked first where free.`
+                  : ` ${slots.data.customer.main} (usual cleaner) isn't free at those times: try other days or times to keep them.`)}
+              </>
+            )}
           </p>
+          {slots.data.cleaner === 'same' && !slots.data.slots.length && !!slots.data.any_count && (
+            <button className="secondary sch-any-instead" onClick={anyInstead}>Show slots with any cleaner</button>
+          )}
           {slots.data.slots.map((s) => (
             <article key={`${s.cleaner.id}-${s.date}`} className="card sch-slot">
               <div className="sch-slot-when">

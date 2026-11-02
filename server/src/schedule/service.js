@@ -681,7 +681,9 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   }
 
   // Best slots for a new or rescheduled booking.
-  async function findSlots({ customer_id, lat, lng, duration = 180, kind = 'one', from, days = 14, weekdays = null, earliest = 0, latest = 24 * 60, limit = 12 } = {}) {
+  // cleaner: 'any' (default) or 'same' = only the client's usual cleaner (asked when a client
+  // reschedules). With 'same' and nothing free, any_count says how many slots other cleaners have.
+  async function findSlots({ customer_id, lat, lng, duration = 180, kind = 'one', from, days = 14, weekdays = null, earliest = 0, latest = 24 * 60, limit = 12, cleaner = 'any' } = {}) {
     const s = await need();
     const ctx = ctxFor(s);
     const cu = customer_id ? s.customers.get(Number(customer_id)) : null;
@@ -694,11 +696,15 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const start = from && from >= s.today ? from : addDays(s.today, 1);
     const dur = Math.max(30, Math.min(Number(duration) || 180, 12 * 60));
     const horizon = addDays(s.today, AHEAD_DAYS);
+    const main = cu?.main ? s.byId.get(cu.main.id) || null : null;
+    const wantSame = cleaner === 'same';
+    const sameApplies = wantSame && !!main;
+    const pool = sameApplies ? [main] : s.cleaners;
     const found = [];
     for (let i = 0; i < Math.min(Number(days) || 14, 28); i++) {
       const d = addDays(start, i);
       if (weekdays?.length && !weekdays.includes(weekday(d))) continue;
-      for (const c of s.cleaners) {
+      for (const c of pool) {
         if (!c.assignable) continue;
         const w = windowFor(c, d);
         if (!w) continue;
@@ -732,7 +738,22 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       slots.push(f);
       if (slots.length >= limit) break;
     }
-    return { place_known: place.lat != null, kind: k, frequency: FREQ_LABEL[k], duration: dur, customer: cu ? { id: cu.id, name: cu.name, main: cu.main ? s.byId.get(cu.main.id)?.name || null : null } : null, slots };
+    let anyCount = null;
+    if (sameApplies && !slots.length) {
+      const other = await findSlots({ customer_id, lat, lng, duration, kind, from, days, weekdays, earliest, latest, limit, cleaner: 'any' });
+      anyCount = other.slots.length;
+    }
+    return {
+      place_known: place.lat != null,
+      kind: k,
+      frequency: FREQ_LABEL[k],
+      duration: dur,
+      customer: cu ? { id: cu.id, name: cu.name, main: main?.name || null } : null,
+      cleaner: sameApplies ? 'same' : 'any',
+      no_usual: wantSame && !main,
+      any_count: anyCount,
+      slots,
+    };
   }
 
   // Assign a cleaner in Launch27 (signed-in user's login). Projected visits of a series can't
