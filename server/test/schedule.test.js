@@ -212,6 +212,14 @@ describe('schedule: sync, plan, assign, changes', () => {
     const fresh = await s.findSlots({ duration: 180, kind: 'one', cleaner: 'same' });
     assert.equal(fresh.no_usual, true);
     assert.equal(fresh.cleaner, 'any');
+    // Moving an existing booking: its own time no longer blocks the search.
+    const own = w.bookings.find((b) => b.team_ids?.includes?.(1) || (b.teams || []).some((t) => t.id === 1));
+    assert.ok(own, "Ann has a booking to move");
+    {
+      const without = await s.findSlots({ customer_id: 1, duration: 180, kind: 'one', cleaner: 'same' });
+      const moving = await s.findSlots({ customer_id: 1, duration: 180, kind: 'one', cleaner: 'same', booking_id: own.id });
+      assert.ok(moving.slots.length >= without.slots.length);
+    }
 
     // Assign the series to Ann: one Launch27 call per real booking, change resolved.
     const res = await s.assign({ visit_keys: un.series[0].visits.map((v) => v.key), cleaner_id: 1 }, 'user-bearer');

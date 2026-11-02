@@ -162,7 +162,7 @@ export interface Slot {
   reasons: Reason[];
   travel: number | null;
 }
-export interface SlotQuery { customer_id?: number; duration: number; kind: Visit['kind']; from?: string; days?: number; weekdays?: number[]; earliest?: number; latest?: number; cleaner?: 'same' | 'any' }
+export interface SlotQuery { customer_id?: number; duration: number; kind: Visit['kind']; from?: string; days?: number; weekdays?: number[]; earliest?: number; latest?: number; cleaner?: 'same' | 'any'; booking_id?: number }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/schedule${path}`, {
@@ -189,7 +189,7 @@ export const scheduleApi = {
   continuity: () => call<Continuity>('GET', '/continuity'),
   changes: () => call<{ items: Change[]; today: string }>('GET', '/changes'),
   resolve: (id: number, resolution: 'fixed' | 'dismissed') => call<void>('POST', `/changes/${id}/resolve`, { resolution }),
-  findSlots: (q: SlotQuery) => call<{ place_known: boolean; frequency: string; duration: number; customer: { id: number; name: string; main: string | null } | null; cleaner: 'same' | 'any'; no_usual: boolean; any_count: number | null; slots: Slot[] }>('POST', '/find-slots', q),
+  findSlots: (q: SlotQuery) => call<{ place_known: boolean; kind: Visit['kind']; frequency: string; duration: number; customer: { id: number; name: string; main: string | null } | null; cleaner: 'same' | 'any'; no_usual: boolean; any_count: number | null; slots: Slot[] }>('POST', '/find-slots', q),
   assign: (visit_keys: string[], cleaner_id: number, recommended = false) => call<{ assigned: number; projected: number; cleaner: string; confirm_first: boolean }>('POST', '/assign', { visit_keys, cleaner_id, recommended }),
   unavailable: (cleaner_id: number, day: string, unavailable = true) => call<{ cleaner: string; day: string; unavailable: boolean; affected: number }>('PUT', '/unavailable', { cleaner_id, day, unavailable }),
   refresh: () => call<{ running: boolean }>('POST', '/refresh'),

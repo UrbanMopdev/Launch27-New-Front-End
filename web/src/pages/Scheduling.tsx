@@ -44,7 +44,7 @@ export function SchedulingPage() {
           {tab === 'changes' && <ChangesTab initialKind={initialKind} />}
           {tab === 'capacity' && <CapacityTab data={overview.data} />}
           {tab === 'continuity' && <ContinuityTab />}
-          {tab === 'find' && <FindFromLink customerId={Number(params.get('customer')) || null} />}
+          {tab === 'find' && <FindFromLink customerId={Number(params.get('customer')) || null} reschedule={rescheduleFrom(params)} />}
         </>
       )}
     </div>
@@ -52,11 +52,19 @@ export function SchedulingPage() {
 }
 
 // "Find the best slot" from a booking brings the client along.
-function FindFromLink({ customerId }: { customerId: number | null }) {
+export interface Reschedule { bookingId: number; next: string; hours?: number; kind?: Visit['kind']; current?: string }
+function rescheduleFrom(params: URLSearchParams): Reschedule | undefined {
+  const bookingId = Number(params.get('booking'));
+  const next = params.get('next') || '';
+  if (!bookingId || !next.startsWith('/bookings/')) return undefined; // only ever back to a booking form
+  const kind = params.get('freq');
+  return { bookingId, next, hours: Number(params.get('hours')) || undefined, kind: (['weekly', 'bi', 'monthly', 'one'].includes(kind || '') ? kind : undefined) as Visit['kind'] | undefined, current: params.get('current') || undefined };
+}
+function FindFromLink({ customerId, reschedule }: { customerId: number | null; reschedule?: Reschedule }) {
   const cust = useQuery({ queryKey: ['segments', 'customer', customerId], queryFn: () => segmentsApi.customer(customerId!), enabled: !!customerId, retry: false });
   if (customerId && cust.isLoading) return <p className="muted">Loading…</p>;
   const preset = customerId ? { id: customerId, name: cust.data?.name || `Customer #${customerId}` } : undefined;
-  return <FindSlotTab key={customerId || 0} presetCustomer={preset} />;
+  return <FindSlotTab key={`${customerId || 0}-${reschedule?.bookingId || 0}`} presetCustomer={preset} reschedule={reschedule} />;
 }
 
 function NotLoaded({ message }: { message: string }) {
@@ -510,26 +518,37 @@ function ContinuityTab() {
 
 // ---------- find a slot ----------
 const DAYS = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat']] as const;
-export function FindSlotTab({ presetCustomer }: { presetCustomer?: { id: number; name: string } }) {
+export function FindSlotTab({ presetCustomer, reschedule }: { presetCustomer?: { id: number; name: string }; reschedule?: Reschedule }) {
   const navigate = useNavigate();
   const [customer, setCustomer] = useState<{ id: number; name: string } | null>(presetCustomer || null);
   const [q, setQ] = useState('');
-  const [hours, setHours] = useState(3);
-  const [kind, setKind] = useState<Visit['kind']>('bi');
+  const [hours, setHours] = useState(reschedule?.hours || 3);
+  // Rescheduling starts with "just this visit" (one-time); pick the rhythm to move this and future visits.
+  const [kind, setKind] = useState<Visit['kind']>(reschedule ? 'one' : 'bi');
   const [from, setFrom] = useState('');
   const [days, setDays] = useState<number[]>([]);
   const [time, setTime] = useState<'any' | 'am' | 'pm'>('any');
   // Asked when a client is picked (e.g. rescheduling): their usual cleaner only, or anyone.
   const [who, setWho] = useState<'same' | 'any' | null>(null);
   const search = useQuery({ queryKey: ['schedule', 'customer-search', q], queryFn: () => segmentsApi.customers({ q, limit: 6 }), enabled: q.trim().length >= 2 && !customer });
-  const slots = useMutation({ mutationFn: (override?: 'same' | 'any') => scheduleApi.findSlots({ customer_id: customer?.id, duration: Math.round(hours * 60), kind, from: from || undefined, weekdays: days.length ? days : undefined, earliest: time === 'pm' ? 12 * 60 : 0, latest: time === 'am' ? 12 * 60 + 30 : 24 * 60, cleaner: (override ?? who) === 'same' ? 'same' : 'any' }) });
+  const slots = useMutation({ mutationFn: (override?: 'same' | 'any') => scheduleApi.findSlots({ customer_id: customer?.id, duration: Math.round(hours * 60), kind, from: from || undefined, weekdays: days.length ? days : undefined, earliest: time === 'pm' ? 12 * 60 : 0, latest: time === 'am' ? 12 * 60 + 30 : 24 * 60, cleaner: (override ?? who) === 'same' ? 'same' : 'any', booking_id: reschedule?.bookingId }) });
   const needWho = !!customer && !who;
   const anyInstead = () => { setWho('any'); slots.mutate('any'); };
+  const moveTo = (s: Slot) => {
+    const [path, qs] = reschedule!.next.split('?');
+    const q = new URLSearchParams(qs || '');
+    q.set('date', s.date);
+    q.set('time', `${String(Math.floor(s.start / 60)).padStart(2, '0')}:${String(s.start % 60).padStart(2, '0')}`);
+    q.set('team', String(s.cleaner.id));
+    if (kind !== 'one' && reschedule!.kind && reschedule!.kind !== 'one') q.set('future', '1'); else q.delete('future');
+    navigate(`${path}?${q.toString()}`);
+  };
   const book = (s: Slot) => navigate(`/bookings/new?${new URLSearchParams({ ...(customer ? { customer: String(customer.id) } : {}), date: s.date, time: `${String(Math.floor(s.start / 60)).padStart(2, '0')}:${String(s.start % 60).padStart(2, '0')}`, team: String(s.cleaner.id), freq: kind })}`);
   return (
     <div className="sch-tab sch-find">
       <section className="card sch-find-form">
-        <h2>Find the best slot</h2>
+        <h2>{reschedule ? `Reschedule booking #${reschedule.bookingId}` : 'Find the best slot'}</h2>
+        {reschedule && <p className="muted small">{reschedule.current ? `Now ${niceDate(reschedule.current.slice(0, 10))}. ` : ''}Pick a new time; you'll confirm the change on the booking before anything is saved.{reschedule.kind && reschedule.kind !== 'one' ? ' One-time moves just this visit; choose their rhythm to move this and future visits.' : ''}</p>}
         <label>Client
           {customer ? (
             <span className="sch-picked">{customer.name} <button className="link" onClick={() => { setCustomer(null); setWho(null); }}>change</button></span>
@@ -576,7 +595,7 @@ export function FindSlotTab({ presetCustomer }: { presetCustomer?: { id: number;
           <p className="muted small">
             {slots.data.cleaner === 'same' ? (
               slots.data.slots.length
-                ? `Only ${slots.data.customer?.main} (usual cleaner), as the client asked. Recurring slots are free on every date for the next 8 weeks.`
+                ? `Only ${slots.data.customer?.main} (usual cleaner), as the client asked.${slots.data.kind !== 'one' ? ' Recurring slots are free on every date for the next 8 weeks.' : ''}`
                 : `${slots.data.customer?.main} (usual cleaner) isn't free for that. Try other days or times to keep them${slots.data.any_count ? `, or offer another cleaner: ${slots.data.any_count} slot${slots.data.any_count === 1 ? '' : 's'} open.` : '. No other cleaner is free either.'}`
             ) : (
               <>
@@ -599,7 +618,7 @@ export function FindSlotTab({ presetCustomer }: { presetCustomer?: { id: number;
               </div>
               <div className="sch-who"><CleanerDot color={s.cleaner.color} /><Link to={`/schedule/cleaner/${s.cleaner.id}`} className="seg-name">{s.cleaner.name}</Link>{s.cleaner.is_new && <span className="seg-trait">New hire</span>}</div>
               <Reasons reasons={s.reasons} />
-              <button onClick={() => book(s)}>Book this slot</button>
+              {reschedule ? <button onClick={() => moveTo(s)}>Move to this slot</button> : <button onClick={() => book(s)}>Book this slot</button>}
             </article>
           ))}
         </section>
