@@ -181,18 +181,32 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   });
 
   // ---------- problems & changes ----------
+  // Visits without a cleaner, grouped into series (client + rhythm + weekday + time).
+  function unassignedSeries(s) {
+    const groups = new Map();
+    for (const v of s.future.filter((x) => !x.team_ids.length)) {
+      const k = `${v.customer_id}|${v.kind}|${weekday(v.date)}|${v.start}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(v);
+    }
+    for (const list of groups.values()) list.sort((a, b) => a.date.localeCompare(b.date));
+    return groups;
+  }
+  const seriesWhen = (v) => `${DAYNAME[weekday(v.date)]} ${clock(v.start)}${v.kind === 'bi' ? ` · weeks ${v.weeks.split('').join('/')}` : v.kind === 'monthly' ? ` · week ${v.weeks}` : ''}`;
+
   function problems(s) {
     const out = [];
+    for (const [k, list] of unassignedSeries(s)) {
+      const v = list[0];
+      out.push({ due: v.date, visit_key: v.key, customer_id: v.customer_id, kind: 'unassigned', key: `unassigned:${k}`, title: `No cleaner: ${v.customer} · ${seriesWhen(v)} · ${list.length} visit${list.length === 1 ? '' : 's'}`, detail: { series: k, freq: FREQ_LABEL[v.kind] } });
+    }
     const until = addDays(s.today, NEAR_DAYS);
     for (const v of s.future) {
       if (v.date > until) continue;
       const cust = s.customers.get(v.customer_id);
       const base = { due: v.date, visit_key: v.key, customer_id: v.customer_id };
       const when = `${nice(v.date)} ${clock(v.start)}`;
-      if (!v.team_ids.length) {
-        out.push({ ...base, kind: 'unassigned', key: `unassigned:${v.key}`, title: `No cleaner: ${v.customer} · ${when}`, detail: { freq: FREQ_LABEL[v.kind] } });
-        continue;
-      }
+      if (!v.team_ids.length) continue; // whole series, all 8 weeks: added below
       for (const id of v.team_ids) {
         const c = s.byId.get(id);
         if (!c) continue;
@@ -626,7 +640,12 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const items = rows.map((r) => {
       const v = r.visit_key ? s.visits.find((x) => x.key === r.visit_key) : null;
       let suggestions = [];
-      if (v && ['unassigned', 'outside_hours', 'double_booked', 'different_cleaner', 'cleaner_unavailable', 'moved', 'cleaner_changed'].includes(r.kind) && v.date >= s.today) {
+      const series = r.kind === 'unassigned' && r.detail?.series ? unassignedSeries(s).get(r.detail.series) || (v ? [v] : []) : null;
+      if (series?.length) {
+        const cu = s.customers.get(v?.customer_id);
+        const job = { dates: series.map((x) => x.date), start: series[0].start, duration: series[0].duration, place: { lat: series[0].lat, lng: series[0].lng }, kind: series[0].kind, services: series[0].services, prefs: cu?.prefs, mainCleanerId: cu?.main?.id, history: cu?.history, firstDate: series[0].date };
+        suggestions = rankCleaners(job, s.cleaners, ctx, { limit: 4 });
+      } else if (v && ['unassigned', 'outside_hours', 'double_booked', 'different_cleaner', 'cleaner_unavailable', 'moved', 'cleaner_changed'].includes(r.kind) && v.date >= s.today) {
         const cu = s.customers.get(v.customer_id);
         const job = { dates: [v.date], start: v.start, duration: v.duration, place: { lat: v.lat, lng: v.lng }, kind: v.kind, services: v.services, prefs: cu?.prefs, mainCleanerId: cu?.main?.id, history: cu?.history, firstDate: v.date };
         suggestions = rankCleaners(job, s.cleaners.filter((c) => !v.team_ids.includes(c.id) || r.kind === 'different_cleaner'), ctx, { limit: 4, ignoreKeys: new Set([v.key]) }).filter((x) => !v.team_ids.includes(x.cleaner_id));
@@ -650,6 +669,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
         id: Number(r.id), kind: r.kind, title: r.title, due: dateStr(r.due), urgent, days_away: r.due ? daysBetween(s.today, dateStr(r.due)) : null,
         detail, created_at: r.created_at, visit: v ? { ...visitOut(s, v), end: clock(v.end), services: v.services } : null,
         cleaner, client: clientOut(s, r.customer_id != null ? Number(r.customer_id) : v?.customer_id), suggestions,
+        series: series ? { count: series.length, when: seriesWhen(series[0]), first: series[0].date, last: series.at(-1).date, visit_keys: series.map((x) => x.key), projected: series.filter((x) => !x.id).length } : null,
       };
     });
     return { taken_at: s.taken_at, today: s.today, items };

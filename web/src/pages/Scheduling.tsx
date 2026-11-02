@@ -5,12 +5,15 @@ import { segmentsApi } from '../segments/api';
 import { scheduleApi, type Candidate, type Change, type ChangeKind, type Overview, type Series, type Slot, type Visit } from '../schedule/api';
 import { FreqPill, Reasons, ScheduleStatus, niceDate, CleanerDot } from '../schedule/ui';
 
-type Tab = 'changes' | 'unassigned' | 'capacity' | 'continuity' | 'find';
-const TABS: [Tab, string][] = [['changes', 'Changes to handle'], ['unassigned', 'Needs a cleaner'], ['capacity', 'Capacity'], ['continuity', 'Same cleaner'], ['find', 'Find a slot']];
+type Tab = 'changes' | 'capacity' | 'continuity' | 'find';
+const TABS: [Tab, string][] = [['changes', 'Changes to handle'], ['capacity', 'Capacity'], ['continuity', 'Same cleaner'], ['find', 'Find a slot']];
 
 export function SchedulingPage() {
   const [params, setParams] = useSearchParams();
-  const tab = (TABS.some(([t]) => t === params.get('tab')) ? params.get('tab') : 'changes') as Tab;
+  // Old links to the separate "Needs a cleaner" tab open that filter in Changes to handle.
+  const asked = params.get('tab');
+  const tab = (TABS.some(([t]) => t === asked) ? asked : 'changes') as Tab;
+  const initialKind = asked === 'unassigned' ? 'unassigned' : (params.get('kind') as ChangeKind | null);
   const go = (t: Tab) => {
     const next = new URLSearchParams(params);
     next.set('tab', t);
@@ -32,15 +35,13 @@ export function SchedulingPage() {
           <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => go(t)}>
             {label}
             {t === 'changes' && counts?.open_changes ? <span className="sch-count">{counts.open_changes}</span> : null}
-            {t === 'unassigned' && counts?.unassigned_visits ? <span className="sch-count warn">{counts.unassigned_visits}</span> : null}
           </button>
         ))}
       </div>
       {overview.isError && <NotLoaded message={(overview.error as Error).message} />}
       {overview.data && (
         <>
-          {tab === 'changes' && <ChangesTab />}
-          {tab === 'unassigned' && <UnassignedTab />}
+          {tab === 'changes' && <ChangesTab initialKind={initialKind} />}
           {tab === 'capacity' && <CapacityTab data={overview.data} />}
           {tab === 'continuity' && <ContinuityTab />}
           {tab === 'find' && <FindFromLink customerId={Number(params.get('customer')) || null} />}
@@ -125,7 +126,9 @@ export function explain(c: Change): { headline: string; why: string } {
   const when = v ? `${v.time}–${v.end}` : '';
   switch (c.kind) {
     case 'unassigned':
-      return { headline: `No cleaner yet for ${client}`, why: `${v ? `${v.freq} clean, ${when}.` : ''} Someone needs to be assigned.` };
+      return c.series && c.series.count > 1
+        ? { headline: `No cleaner yet for ${client}'s ${v?.freq.toLowerCase() || ''} cleans`, why: `${c.series.when}, ${c.series.count} visits from ${niceDate(c.series.first)} to ${niceDate(c.series.last)}. One cleaner for all of them keeps it consistent.` }
+        : { headline: `No cleaner yet for ${client}`, why: `${v ? `${v.freq} clean, ${when}.` : ''} Someone needs to be assigned.` };
     case 'outside_hours':
       return {
         headline: `${client}'s clean is outside ${first(cl?.name)}'s working hours`,
@@ -164,9 +167,10 @@ function dayHeading(c: Change) {
   return niceDate(c.due);
 }
 
-function ChangesTab() {
+function ChangesTab({ initialKind = null }: { initialKind?: ChangeKind | null }) {
   const queryClient = useQueryClient();
-  const [kind, setKind] = useState<ChangeKind | null>(null);
+  const [kind, setKind] = useState<ChangeKind | null>(initialKind);
+  const [bulk, setBulk] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const changes = useQuery({ queryKey: ['schedule', 'changes'], queryFn: scheduleApi.changes, refetchInterval: 60_000 });
   const resolve = useMutation({ mutationFn: ({ id, r }: { id: number; r: 'fixed' | 'dismissed' }) => scheduleApi.resolve(id, r), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }) });
@@ -194,14 +198,21 @@ function ChangesTab() {
           <button key={k} className={kind === k ? 'chip-btn active' : 'chip-btn'} onClick={() => setKind(kind === k ? null : k)}>{KIND_LABEL[k]} <span className="seg-chip-count">{n}</span></button>
         ))}
       </div>
+      {kind === 'unassigned' && shown.length > 1 && (
+        <div className="sch-bar">
+          <span className="muted small">Every visit without a cleaner in the next 8 weeks, one card per series.</span>
+          <button className={bulk ? 'secondary' : ''} onClick={() => setBulk(!bulk)}>{bulk ? 'Back to the cards' : 'Suggest for all'}</button>
+        </div>
+      )}
       {toast && <div className="sch-toast" role="status">{toast} <button className="link" onClick={() => setToast(null)}>OK</button></div>}
       {assign.isError && <div className="error">{(assign.error as Error).message}</div>}
+      {kind === 'unassigned' && bulk ? <BulkFromApi onDone={(m) => { setToast(m); setBulk(false); }} /> : null}
       {changes.data && shown.length === 0 && <div className="card muted">All clear. New changes appear here within a few minutes of happening in Launch27.</div>}
-      {groups.map((g) => (
+      {!(kind === 'unassigned' && bulk) && groups.map((g) => (
         <section key={g.heading} className="sch-day">
           <h2 className={g.urgent ? 'sch-day-head urgent' : 'sch-day-head'}>{g.heading}<span className="muted small"> · {g.items.length} to handle</span></h2>
           <div className="sch-list">
-            {g.items.map((c) => <ChangeCard key={c.id} c={c} onResolve={(r) => resolve.mutate({ id: c.id, r })} onAssign={(cleaner) => c.visit && assign.mutate({ keys: [c.visit.key], cleaner })} busy={assign.isPending || resolve.isPending} />)}
+            {g.items.map((c) => <ChangeCard key={c.id} c={c} onResolve={(r) => resolve.mutate({ id: c.id, r })} onAssign={(cleaner) => c.visit && assign.mutate({ keys: c.series?.visit_keys || [c.visit.key], cleaner })} busy={assign.isPending || resolve.isPending} />)}
           </div>
         </section>
       ))}
@@ -279,7 +290,8 @@ function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r
             <span className="eyebrow accent">{REC_LABEL[c.kind] || 'Recommended'}</span>
             <div className="sch-who"><CleanerDot color={rec.color} /><b className="sch-rec-name">{rec.name}</b></div>
             <Reasons reasons={rec.reasons} />
-            <button disabled={busy} onClick={() => onAssign(rec.cleaner_id)}>{verb} {first(rec.name)}{v?.projected ? ' (in Launch27)' : ''}</button>
+            <button disabled={busy} onClick={() => onAssign(rec.cleaner_id)}>{c.series && c.series.count > 1 ? `Give all ${c.series.count - c.series.projected} to ${first(rec.name)}` : `${verb} ${first(rec.name)}`}{v?.projected && !c.series ? ' (in Launch27)' : ''}</button>
+            {c.series && c.series.projected > 0 && <span className="muted small">{c.series.projected} projected visit{c.series.projected === 1 ? '' : 's'} follow the series in Launch27.</span>}
             {others.length > 0 && <button className="link small" onClick={() => setMore(!more)}>{more ? 'Hide other options' : `Other options (${others.length})`}</button>}
             {more && <div className="sch-cands">{others.map((o) => <CandidateRow key={o.cleaner_id} c={o} busy={busy} onAssign={() => onAssign(o.cleaner_id)} label={`${verb} ${first(o.name)}`} />)}</div>}
           </div>
@@ -295,7 +307,7 @@ function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r
         ) : ['unassigned', 'cleaner_unavailable', 'double_booked', 'outside_hours'].includes(c.kind) ? (
           <div className="sch-rec empty">
             <span className="eyebrow">Recommended</span>
-            <p className="small">Nobody else is free at this time. Call the client to offer another time: <Link to={`/schedule?tab=find${c.client ? `&customer=${c.client.id}` : ''}`}>find a slot</Link>.</p>
+            <p className="small">{c.kind === 'unassigned' ? 'Nobody is free at this time.' : 'Nobody else is free at this time.'} Call the client to offer another time: <Link to={`/schedule?tab=find${c.client ? `&customer=${c.client.id}` : ''}`}>find a slot</Link>.</p>
           </div>
         ) : (
           <div className="sch-rec empty">
@@ -316,47 +328,11 @@ function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r
   );
 }
 
-// ---------- needs a cleaner ----------
-function UnassignedTab() {
-  const [toast, setToast] = useState<string | null>(null);
-  const [bulk, setBulk] = useState(false);
+// ---------- bulk: a cleaner for every unassigned series ----------
+function BulkFromApi({ onDone }: { onDone: (msg: string) => void }) {
   const data = useQuery({ queryKey: ['schedule', 'unassigned'], queryFn: scheduleApi.unassigned });
-  const assign = useAssign(setToast);
-  const series = data.data?.series || [];
-  return (
-    <div className="sch-tab">
-      <div className="sch-bar">
-        <span className="muted">{data.data ? `${data.data.total_visits} visits without a cleaner, in ${data.data.total_series} series. One decision covers every visit in a series.` : 'Loading…'}</span>
-        {series.length > 0 && <button onClick={() => setBulk(!bulk)}>{bulk ? 'Back to the list' : 'Suggest for all'}</button>}
-      </div>
-      {toast && <div className="sch-toast" role="status">{toast} <button className="link" onClick={() => setToast(null)}>OK</button></div>}
-      {assign.isError && <div className="error">{(assign.error as Error).message}</div>}
-      {bulk ? <BulkAssign series={series} onDone={(m) => { setToast(m); setBulk(false); }} /> : (
-        <div className="sch-list">
-          {series.map((s) => <SeriesCard key={s.key} s={s} busy={assign.isPending} onAssign={(cleaner) => assign.mutate({ keys: s.visits.map((v) => v.key), cleaner })} />)}
-          {data.data && series.length === 0 && <div className="card muted">Every visit in the next 8 weeks has a cleaner.</div>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SeriesCard({ s, onAssign, busy }: { s: Series; onAssign: (cleaner: number) => void; busy: boolean }) {
-  return (
-    <article className="card sch-series">
-      <div className="sch-change-top">
-        <b className="sch-change-title">{s.customer}</b>
-        <FreqPill visit={{ kind: s.kind, freq: s.freq, prepaid: s.prepaid } as Visit} />
-      </div>
-      <div className="small">{s.when} · {s.duration / 60}h{s.area ? ` · ${s.area}` : ''} · {s.visits.length} visit{s.visits.length === 1 ? '' : 's'}{s.projected ? ` (${s.projected} projected)` : ''}</div>
-      {s.why && <div className="small sch-why">{s.why}</div>}
-      {s.candidates.length ? (
-        <div className="sch-cands">
-          {s.candidates.map((c) => <CandidateRow key={c.cleaner_id} c={c} busy={busy} onAssign={() => onAssign(c.cleaner_id)} label={s.visits.length > 1 ? `Assign all ${s.visits.length - s.projected}` : 'Assign'} />)}
-        </div>
-      ) : <p className="small warn">Nobody is free for these times. Try "Find a slot" to offer the client another time.</p>}
-    </article>
-  );
+  if (!data.data) return <p className="muted">Loading…</p>;
+  return <BulkAssign series={data.data.series} onDone={onDone} />;
 }
 
 function BulkAssign({ series, onDone }: { series: Series[]; onDone: (msg: string) => void }) {
@@ -448,7 +424,7 @@ function CapacityTab({ data }: { data: Overview }) {
             <tbody>
               <tr className="sch-unassigned-row">
                 <td><b>Needs a cleaner</b><div className="small">Unassigned hours</div></td>
-                {data.unassigned.map((h, i) => <td key={i} className="c"><Link to="/schedule?tab=unassigned" className="sch-unassigned-cell">{h}h</Link></td>)}
+                {data.unassigned.map((h, i) => <td key={i} className="c"><Link to="/schedule?tab=changes&kind=unassigned" className="sch-unassigned-cell">{h}h</Link></td>)}
               </tr>
               {rows.map((r) => (
                 <tr key={r.id} className={r.assignable ? '' : 'sch-muted'}>

@@ -182,6 +182,10 @@ describe('schedule: sync, plan, assign, changes', () => {
     const kinds = ch.items.map((i) => i.kind).sort();
     assert.ok(kinds.includes('unassigned'));
     assert.ok(kinds.includes('cleaner_unavailable'));
+    const un2 = ch.items.filter((i) => i.kind === 'unassigned');
+    assert.equal(un2.length, 1, 'one card per series, not per visit');
+    assert.equal(un2[0].series.count, 2);
+    assert.equal(un2[0].suggestions[0].name, 'Ann Usual');
     const held = ch.items.find((i) => i.kind === 'cleaner_unavailable');
     assert.ok(held.suggestions.length > 0 && held.suggestions.every((x) => x.name !== 'Cat Held'));
 

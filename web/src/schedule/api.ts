@@ -132,6 +132,7 @@ export interface Change {
   cleaner: { id: number; name: string; status: string; hours: string | null; working: boolean } | null;
   client: ClientInfo | null;
   suggestions: Candidate[];
+  series: { count: number; when: string; first: string; last: string; visit_keys: string[]; projected: number } | null;
 }
 
 export interface Slot {

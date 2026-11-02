@@ -3,7 +3,7 @@ import { explain } from '../pages/Scheduling';
 import type { Change } from './api';
 
 const visit = { key: '1', id: 1, date: '2026-11-03', start: 780, duration: 210, time: '1pm', end: '4:30pm', customer_id: 5, customer: 'Skyler Smith', area: 'Kanata', freq: 'Biweekly', kind: 'bi', prepaid: false, weeks: 'BD', projected: false, cleaners: [{ id: 9, name: 'Sage Young' }], services: [] } as Change['visit'];
-const base = (kind: Change['kind'], extra: Partial<Change> = {}): Change => ({ id: 1, kind, title: '', due: '2026-11-03', urgent: true, days_away: 1, detail: {}, created_at: '', visit, cleaner: { id: 9, name: 'Sage Young', status: 'Active', hours: '8am–1pm', working: true }, client: null, suggestions: [], ...extra });
+const base = (kind: Change['kind'], extra: Partial<Change> = {}): Change => ({ id: 1, kind, title: '', due: '2026-11-03', urgent: true, days_away: 1, detail: {}, created_at: '', visit, cleaner: { id: 9, name: 'Sage Young', status: 'Active', hours: '8am–1pm', working: true }, client: null, suggestions: [], series: null, ...extra });
 
 describe('Changes to handle: plain headlines', () => {
   it('outside hours says whose hours and when', () => {
@@ -27,5 +27,13 @@ describe('Changes to handle: plain headlines', () => {
     const e = explain(base('different_cleaner', { client, detail: { booked: ['Sage Young'] } }));
     expect(e.headline).toBe("Skyler Smith's usual cleaner is free for this visit");
     expect(e.why).toBe("It's booked with Sage Young. Riley Wright did 5 of their last 6 visits and is free then.");
+  });
+});
+
+describe('Changes to handle: a whole series without a cleaner', () => {
+  it('says how many visits and when', () => {
+    const e = explain(base('unassigned', { series: { count: 4, when: 'Tue 9am · weeks B/D', first: '2026-11-10', last: '2026-12-08', visit_keys: ['1', '2', '3', '4'], projected: 0 } }));
+    expect(e.headline).toBe("No cleaner yet for Skyler Smith's biweekly cleans");
+    expect(e.why).toBe('Tue 9am · weeks B/D, 4 visits from Tue, Nov 10 to Tue, Dec 8. One cleaner for all of them keeps it consistent.');
   });
 });
