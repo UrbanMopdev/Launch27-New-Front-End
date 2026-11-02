@@ -54,6 +54,11 @@ function rng(seed) {
 const hash = (str) => [...str].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const iso = (d) => d.toISOString().replace('.000Z', 'Z');
 const DAY0 = Date.UTC(2020, 0, 1);
+// Bump when the generated schedule changes shape, so the planner starts fresh instead of
+// reading the switch as hundreds of moved and cancelled visits.
+export const SAMPLE_VERSION = 2;
+// Monday of week A in the scheduling planner's 4-week cycle (server/src/schedule/rules.js).
+const CYCLE_IDX = Math.round((Date.UTC(2026, 10, 2) - DAY0) / 86_400_000);
 // Launch27 takes service_date as local (Toronto) wall-clock time and returns UTC.
 export function torontoToUtc(local) {
   if (!local) return new Date().toISOString();
@@ -65,6 +70,36 @@ export function torontoToUtc(local) {
 const dayIndex = (date) => Math.round((Date.parse(`${date}T00:00:00Z`) - DAY0) / 86_400_000);
 const dateOf = (index) => new Date(DAY0 + index * 86_400_000).toISOString().slice(0, 10);
 
+// Status codes in the title follow UrbanMop's convention: (1) active, (2) new hire,
+// (3) not ready, (X) off schedule, "ON HOLD" in front = not taking bookings; (F)/(M), (FT)/(PT).
+const TEAM_CODES = ['(1)(F)', '(1)(M)', '(1)(F)(FT)', '(1)(F)', '(2)(F)', '(1)(M)(PT)', '(1)(F)', '(2)(M)', '(1)(F)(PT)', '(3)(F)', '(1)(M)', 'ON HOLD(1)(F)', '(X)(1)(M)', '(1)(F)'];
+const TEAM_TAGS = [
+  ['Own Equipment', 'Vehicle', 'Female', 'Best for homemaking/recurring clients'],
+  ['Own Equipment', 'Vehicle', 'Male', 'Can take last minute bookings'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Speaks French'],
+  ['Own Equipment', 'Public transit', 'Female'],
+  ['Own Equipment', 'Vehicle', 'Female'],
+  ['Own Equipment', 'Vehicle', 'Male', 'Maximum of 45 mins travel time to a booking'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Deep cleaning cleaner', 'Move in/out cleaner'],
+  ['Own Equipment', 'Vehicle', 'Male', 'No 2-HOUR Booking'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Afraid of dogs'],
+  ['Own Equipment', 'Vehicle', 'Female'],
+  ['Own Equipment', 'Vehicle', 'Male'],
+  ['Own Equipment', 'Vehicle', 'Female'],
+  ['Own Equipment', 'Vehicle', 'Male'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Do not assign new booking without cleaner\'s confirmation via call or text'],
+];
+// Weekly hours per cleaner (weekday 0 = Sunday): varied so the planner has gaps to show.
+export function mockAvailability(teamId) {
+  const i = Number(teamId) - 9000;
+  const pattern = [
+    [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4], [2, 3, 4, 5, 6], [1, 3, 5], [1, 2, 3, 4, 5],
+    [1, 2, 3, 4, 5], [2, 4, 6], [1, 2, 3], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [3, 4, 5, 6],
+  ][((i % 14) + 14) % 14];
+  const [start, end] = [['08:00', '17:00'], ['09:00', '16:00'], ['08:00', '15:00'], ['10:00', '17:00']][((i % 4) + 4) % 4];
+  return [0, 1, 2, 3, 4, 5, 6].map((d) => ({ id: Number(teamId) * 10 + d, date: null, weekday: d, dayoff: !pattern.includes(d), start_time: pattern.includes(d) ? start : null, end_time: pattern.includes(d) ? end : null }));
+}
+
 function buildTeams() {
   const r = rng(42);
   return Array.from({ length: 14 }, (_, i) => {
@@ -72,7 +107,7 @@ function buildTeams() {
     const last = LAST[(i * 7) % LAST.length];
     return {
       id: 9000 + i,
-      title: `${first} ${last}`,
+      title: `${TEAM_CODES[i]}${first} ${last}`,
       first_name: first,
       last_name: last,
       email: `cleaner${i + 1}@example.com`,
@@ -92,7 +127,7 @@ function buildTeams() {
       active: true,
       confirmed: true,
       share: [20, 21, 22, 22, 22, 23, 24][i % 7],
-      tags_info: [],
+      tags_info: TEAM_TAGS[i].map((name, k) => ({ id: 700 + i * 10 + k, name })),
       locations: [i < 11 ? LOCATIONS[0] : LOCATIONS[1]].map(({ id, name }) => ({ id, name, active: true, default: id === 1 })),
     };
   });
@@ -100,9 +135,9 @@ function buildTeams() {
 
 function buildCustomers() {
   const r = rng(7);
-  return Array.from({ length: 80 }, (_, i) => {
+  return Array.from({ length: 160 }, (_, i) => {
     const first = FIRST[i % FIRST.length];
-    const last = LAST[(i * 3 + 1) % LAST.length];
+    const last = LAST[(i * 3 + 1 + Math.floor(i / 20)) % LAST.length];
     return {
       id: 50000 + i,
       company_name: i % 13 === 0 ? `${last} Property Group` : null,
@@ -110,7 +145,7 @@ function buildCustomers() {
       last_name: last,
       email: `customer${i + 1}@example.com`,
       has_generated_email: false,
-      phone: `(613) 555-01${String(i % 100).padStart(2, '0')}`,
+      phone: `(613) 555-${String(100 + i).padStart(4, '0')}`,
       address: `${10 + i * 3} ${r.pick(STREETS)}`,
       city: r.pick(['Ottawa', 'Ottawa', 'Nepean', 'Gloucester', 'Kanata']),
       state: 'ON',
@@ -123,8 +158,17 @@ function buildCustomers() {
       confirmed: true,
       is_new_customer: i % 17 === 0,
       created_at: iso(new Date(DAY0 - (400 - i * 4) * 86_400_000)),
-      tags_info: i % 11 === 0 ? [{ id: 1, name: 'VIP', type: 'regular', color: null }] : null,
-      frequency: FREQUENCIES[i % FREQUENCIES.length],
+      // Tags like real customers carry: VIP, cleaner preferences, do-not-assign.
+      tags_info: [
+        i % 11 === 0 ? 'VIP' : null,
+        i % 5 === 1 ? 'Prefers female cleaner' : null,
+        i % 9 === 2 ? 'prefers consistent cleaner' : null,
+        i % 7 === 3 ? `Prefers ${FIRST[(i * 3 + 3) % FIRST.length]}` : null,
+        i % 8 === 4 ? `DO NOT assign ${FIRST[(i * 3 + 6) % FIRST.length]}` : null,
+        i % 13 === 5 ? '#female cleaner only' : null,
+      ].filter(Boolean).map((name, k) => ({ id: 800 + i * 10 + k, name, type: 'regular', color: null })),
+      // Mix like the real business: 20% weekly, 45% biweekly, 15% monthly, 20% one-time.
+      frequency: FREQUENCIES[[3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 0, 0, 0, 0][i % 20]],
       location: i % 10 === 9 ? LOCATIONS[1] : LOCATIONS[0],
     };
   });
@@ -238,6 +282,63 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
   const allServices = () => (snap ? Object.values(snap.services).flat() : CATALOG.services);
   const frequencyList = () => (snap ? snap.staff_frequencies : FREQUENCIES);
   const quotes = buildQuotes(now());
+  // Each client's series: weekday, time, service, usual cleaner and (for biweekly/monthly)
+  // which weeks of the planner's 4-week cycle. Deterministic, so the data is stable.
+  // Fixed when the mock starts so visits don't drift day to day while a server runs.
+  const baseIdx = dayIndex(new Date(now()).toISOString().slice(0, 10));
+  // Each cleaner's taken time per weekday and cycle week, so home slots don't overlap.
+  const taken = new Map(); // `${teamId}:${weekday}:${letter}` -> [[start, end]] in hours
+  const hoursOf = (teamId, weekday) => {
+    const row = mockAvailability(teamId)[weekday];
+    return row.dayoff ? null : [Number(row.start_time.slice(0, 2)), Number(row.end_time.slice(0, 2))];
+  };
+  const isFree = (teamId, weekday, letters, start, end) =>
+    letters.every((l) => !(taken.get(`${teamId}:${weekday}:${l}`) || []).some(([s0, e0]) => start < e0 + 0.5 && s0 < end + 0.5));
+  const take = (teamId, weekday, letters, start, end) => {
+    for (const l of letters) {
+      const k = `${teamId}:${weekday}:${l}`;
+      (taken.get(k) || taken.set(k, []).get(k)).push([start, end]);
+    }
+  };
+  const series = genCustomers.map((c, i) => {
+    const r = rng(hash(`series:${c.id}:${i * 7919}`));
+    r.next();
+    const interval = c.frequency.interval;
+    const svc = c.location.id === 167 ? SERVICES[4] : SERVICES[r.int(4)];
+    const baths = 1 + r.int(3);
+    const len = (svc.duration + (baths - 1) * 30) / 60;
+    if (interval === 'o') {
+      const first = -300 + r.int(345);
+      return { c, svc, hour: [8, 9, 10, 12, 13][r.int(5)], baths, len, once: r.next() < 0.3 && first < -60 ? [first, first + 35 + r.int(40)] : [first] };
+    }
+    const every = interval === 'w' ? 1 : interval === 'b' ? 2 : 4;
+    const phase = every === 1 ? 0 : r.int(every);
+    const letters = [0, 1, 2, 3].filter((l) => l % every === phase);
+    const local = genTeams.filter((t) => t.locations[0].id === c.location.id);
+    // Most clients sit with an active or new cleaner; a few with someone who needs replacing.
+    const preferred = r.next() < 0.93 ? local.filter((t) => /^\((1|2)\)/.test(t.title)) : local;
+    const days = [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6];
+    const start = r.int(days.length);
+    for (let d = 0; d < days.length; d++) {
+      const weekday = days[(start + d) % days.length];
+      const order = [...preferred].sort((x, y) => hash(`${c.id}:${x.id}`) - hash(`${c.id}:${y.id}`));
+      for (const t of order) {
+        const h = hoursOf(t.id, weekday);
+        if (!h) continue;
+        for (let hour = h[0]; hour + len <= h[1]; hour++) {
+          if (!isFree(t.id, weekday, letters, hour, hour + len)) continue;
+          take(t.id, weekday, letters, hour, hour + len);
+          return {
+            c, svc, hour, baths, len, weekday, every, phase, teamId: t.id,
+            startAgo: 20 + r.int(480),
+            endAgo: r.next() < 0.12 ? 10 + r.int(200) : null,
+          };
+        }
+      }
+    }
+    // No room anywhere: the client still books, but nobody is set to clean for them.
+    return { c, svc, hour: 9, baths, len, weekday: days[start], every, phase, teamId: null, startAgo: 20 + r.int(200), endAgo: null };
+  });
   const overlay = new Map(); // booking id -> partial changes
   const created = new Map(); // booking id -> booking created through the API
   let nextId = 900_000;
@@ -249,22 +350,54 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       return list.map(applyOverlay);
     }
     const idx = dayIndex(date);
-    const r = rng(hash(date));
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
-    const count = weekday === 0 ? 0 : weekday === 6 ? 4 + r.int(3) : 11 + r.int(6);
-    const list = [];
-    for (let i = 0; i < count; i++) list.push(makeBooking(idx * 100 + i, date, r));
+    const wk = Math.floor((idx - CYCLE_IDX) / 7);
+    const todayIdx = baseIdx;
+    // Recurring clients repeat on their own slot; one-time clients appear on their date(s).
+    const due = [];
+    for (const sp of series) {
+      if (sp.once) {
+        if (sp.once.includes(idx - todayIdx)) due.push(sp);
+        continue;
+      }
+      if (sp.weekday !== weekday || idx < todayIdx - sp.startAgo || idx > todayIdx + 400 || (sp.endAgo != null && idx > todayIdx - sp.endAgo)) continue;
+      if (sp.every === 2 && ((wk % 2) + 2) % 2 !== sp.phase) continue;
+      if (sp.every === 4 && ((wk % 4) + 4) % 4 !== sp.phase) continue;
+      if (rng(hash(`${date}:${sp.c.id}`)).next() < 0.04) continue; // the odd skipped visit
+      due.push(sp);
+    }
+    // One-time clients go to whoever is free that day.
+    const busy = due.filter((sp) => !sp.once);
+    for (const sp of due) {
+      if (!sp.once) continue;
+      const local = genTeams.filter((t) => t.locations[0].id === sp.c.location.id && /^\((1|2)\)/.test(t.title));
+      let pick = null;
+      for (const t of local) {
+        const h = hoursOf(t.id, weekday);
+        if (!h) continue;
+        for (let hour = Math.max(h[0], sp.hour); hour + sp.len <= h[1] && !pick; hour++) {
+          if (busy.some((o) => o.teamId === t.id && hour < o.hour + o.len + 0.5 && o.hour < hour + sp.len + 0.5)) continue;
+          pick = { ...sp, hour, teamId: t.id };
+        }
+        if (pick) break;
+      }
+      const chosen = pick || { ...sp, teamId: null };
+      busy.push(chosen);
+      due[due.indexOf(sp)] = chosen;
+    }
+    due.sort((a, b) => a.hour - b.hour || a.c.id - b.c.id);
+    const list = due.slice(0, 99).map((sp, k) => makeBooking(idx * 100 + k, date, rng(hash(`${date}:${sp.c.id}:v`)), sp.c, sp, idx - todayIdx));
     for (const b of created.values()) if (b.service_date.slice(0, 10) === date) list.push(b);
     return list.map(applyOverlay);
   }
 
-  function makeBooking(id, date, r) {
-    const c = customers[(id * 7 + 3) % customers.length];
-    const svc = c.location.id === 167 ? SERVICES[4] : SERVICES[r.int(4)];
-    const hour = [8, 8, 9, 9, 10, 12, 13, 13, 14][r.int(9)];
+  // sp: the client's series (fixed service, time, usual cleaner); daysAhead: from today.
+  function makeBooking(id, date, r, c = customers[(id * 7 + 3) % customers.length], sp = null, daysAhead = 0) {
+    const svc = sp ? sp.svc : c.location.id === 167 ? SERVICES[4] : SERVICES[r.int(4)];
+    const hour = sp ? sp.hour : [8, 8, 9, 9, 10, 12, 13, 13, 14][r.int(9)];
     const start = new Date(`${date}T${String(hour + 5).padStart(2, '0')}:00:00Z`); // ~EST
-    const extras = r.next() < 0.2 ? [{ ...r.pick(EXTRAS), quantity: 1 }] : [];
-    const baths = 1 + r.int(3);
+    const extras = r.next() < (sp ? 0.04 : 0.2) ? [{ ...r.pick(EXTRAS), quantity: 1 }] : [];
+    const baths = sp ? sp.baths : 1 + r.int(3);
     const pp = [
       { id: 137, type: 'flat', name: 'Full Bathrooms', price: 27.5, quantity: baths, total: 27.5 * baths },
       { id: 138, type: 'flat', name: 'Half Bathrooms', price: 18.33, quantity: 0, total: 0 },
@@ -274,15 +407,31 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const revenue = Math.round((subtotal - discount) * 100) / 100;
     const tax = Math.round(revenue * 0.13 * 100) / 100;
     const duration = svc.duration + (baths - 1) * 30 + extras.length * 60;
-    const unassigned = r.next() < 0.08;
-    const team = teams.filter((t) => t.locations[0].id === c.location.id)[r.int(c.location.id === 167 ? 3 : 11)];
+    const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+    const local = teams.filter((t) => t.locations[0].id === c.location.id);
+    let team;
+    let unassigned;
+    if (sp) {
+      // Usual cleaner most of the time; sometimes someone covers; a few future visits not yet assigned.
+      const roll = r.next();
+      unassigned = !sp.teamId || (daysAhead > 0 && daysAhead <= 56 && roll < 0.06);
+      const cover = roll >= 0.06 && roll < 0.14;
+      const others = local.filter((t) => t.id !== sp.teamId && /^\((1|2)\)/.test(t.title) && !mockAvailability(t.id)[weekday].dayoff);
+      team = (cover && others.length ? others[r.int(others.length)] : teams.find((t) => t.id === sp.teamId)) || local[0];
+    } else {
+      unassigned = r.next() < 0.08;
+      team = local[r.int(local.length)] || local[0];
+    }
     const hours = Math.round((duration / 60) * 100) / 100;
     const past = start.getTime() + duration * 60_000 < now();
-    const late = r.next() < 0.1 ? 25 : 0;
+    const late = r.next() < 0.08 ? 50 : 0;
     const checkin = new Date(start.getTime() + (5 + r.int(20) + late) * 60_000);
-    const checkout = new Date(checkin.getTime() + duration * 60_000 * (0.85 + r.next() * 0.3));
+    const checkout = new Date(checkin.getTime() + duration * 60_000 * (0.85 + r.next() * 0.4));
+    // About half of visits have the cleaner tapping 'en route' (as in real data), with a drive distance.
+    const tapsEnroute = r.next() < 0.5;
+    const driveKm = Math.round((2 + r.next() * 22) * 10) / 10;
     const tracking = !unassigned && (past || checkin.getTime() < now())
-      ? [{ id: id * 10, booking_id: id, team: { id: team.id, title: team.title, image: null }, state: 'draft', enroute_started_at: null, enroute_finished_at: null, checkin_at: iso(checkin), checkin_latitude: c.latitude, checkin_longitude: c.longitude, checkout_at: past ? iso(checkout) : null, distance: null, active: true }]
+      ? [{ id: id * 10, booking_id: id, team: { id: team.id, title: team.title, image: null }, state: 'draft', enroute_started_at: tapsEnroute ? iso(new Date(checkin.getTime() - (10 + Math.round(driveKm * 2)) * 60_000)) : null, enroute_finished_at: tapsEnroute ? iso(checkin) : null, checkin_at: iso(checkin), checkin_latitude: c.latitude, checkin_longitude: c.longitude, checkout_at: past ? iso(checkout) : null, distance: tapsEnroute ? driveKm : null, distance_unit: 'km', active: true }]
       : [];
     const rated = past && r.next() < 0.15;
     const rating = r.next() < 0.78 ? 2 : r.next() < 0.5 ? 1 : 0;
@@ -293,7 +442,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       digest: `mock${id}`,
       location: { id: c.location.id, name: c.location.name, active: true, default: c.location.id === 1, postcodes: [] },
       location_id: c.location.id,
-      user: { id: c.id, name: `${c.first_name} ${c.last_name}`, email: c.email, first_name: c.first_name, last_name: c.last_name, is_new_customer: c.is_new_customer },
+      user: { id: c.id, name: `${c.first_name} ${c.last_name}`, email: c.email, first_name: c.first_name, last_name: c.last_name, is_new_customer: c.is_new_customer, tags_info: c.tags_info || [] },
       service_date: iso(start),
       arrival_window: 60,
       address: { full_address: `${c.address}, ${c.city}, ON ${c.zip}`, street: c.address, city: c.city, state: 'ON', zip: c.zip, latitude: c.latitude, longitude: c.longitude },
@@ -409,6 +558,9 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const customerId = Number(q.get('customers')) || null;
     let out = list;
     if (customerId) out = out.filter((b) => b.user.id === customerId);
+    // ?teams=<id>[,<id>]: only bookings assigned to those cleaners (as Launch27 does).
+    const teamIds = (q.get('teams') || '').split(',').map(Number).filter(Boolean);
+    if (teamIds.length) out = out.filter((b) => b.teams.some((t) => teamIds.includes(t.id)));
     if (filter === 'cancelled') out = out.filter((b) => !b.active);
     else out = out.filter((b) => b.active);
     if (filter === 'unassigned') out = out.filter((b) => !b.teams.length);
@@ -465,7 +617,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     // Teams
     if (path === '/v1/staff/teams') return [200, page(teams, q)];
     if (path === '/v1/staff/teams/count') return [200, { count: teams.length }];
-    if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) return [200, [0, 1, 2, 3, 4, 5, 6].map((d) => ({ id: d, date: null, weekday: d, dayoff: d === 0, start_time: d === 0 ? null : '08:00', end_time: d === 0 ? null : '17:00' }))];
+    if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) return [200, mockAvailability(m[1])];
     if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)$/))) return (t => (t ? [200, t] : [404, { error: 'Not found' }]))(teams.find((t) => t.id === Number(m[1])));
 
     // Customers

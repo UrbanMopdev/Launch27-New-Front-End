@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { FormEvent, useEffect, useMemo, useState, type ReactNode, useRef } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { inbox } from '../inbox/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -252,6 +252,19 @@ export function BookingFormPage() {
     }
   }, [presetCustomer.data, loaded]);
 
+  // Opened from the scheduling planner's "Book this slot": date, time and cleaner come in the link.
+  const slotApplied = useRef(false);
+  useEffect(() => {
+    if (!loaded || slotApplied.current) return;
+    const date = params.get('date');
+    const time = params.get('time');
+    const team = Number(params.get('team'));
+    const future = editing && params.get('future') === '1'; // rescheduling a series: this and future visits
+    if (!date && !time && !team) return;
+    slotApplied.current = true;
+    setForm((f) => ({ ...f, ...(date ? { date } : {}), ...(time ? { time } : {}), ...(team ? { teams: [team] } : {}), ...(future ? { is_mass_update: true } : {}) }));
+  }, [loaded, params, editing]);
+
   const locations = useLocations();
   useEffect(() => {
     if (!form.location_id && locations.data?.length) set({ location_id: (locations.data.find((l) => l.default) || locations.data[0]).id });
@@ -271,6 +284,17 @@ export function BookingFormPage() {
   useEffect(() => {
     if (!form.frequency_id && frequencies.data?.length) set({ frequency_id: frequencies.data[0].id });
   }, [frequencies.data, form.frequency_id]);
+  // ...and the rhythm (weekly / bi / monthly / one) picks the matching Launch27 frequency.
+  const freqApplied = useRef(false);
+  useEffect(() => {
+    const kind = params.get('freq');
+    if (!kind || freqApplied.current || !loaded || !frequencies.data?.length) return;
+    const re = { weekly: /^(?!.*(bi|tri)).*weekly/i, bi: /bi\s*-?\s*weekly/i, monthly: /month/i, one: /one\s*-?\s*time/i }[kind as 'weekly' | 'bi' | 'monthly' | 'one'];
+    const match = re && frequencies.data.find((f) => re.test(f.name) && !/prepaid/i.test(f.name));
+    freqApplied.current = true;
+    if (match) setForm((f) => ({ ...f, frequency_id: match.id }));
+  }, [loaded, params, frequencies.data]);
+
 
   const fields = useQuery({
     queryKey: ['booking-form-fields'],
@@ -553,6 +577,9 @@ export function BookingFormPage() {
           </Step>
 
           <Step n={3} title="When" done={!!form.date}>
+            <p className="small muted bf-slot-link">
+              Not sure when? <Link to={editing ? `/schedule?${new URLSearchParams({ tab: 'find', booking: String(id), next: `${routerLocation.pathname}${routerLocation.search}`, ...(form.customerId ? { customer: String(form.customerId) } : {}) }).toString()}` : `/schedule?tab=find${form.customerId ? `&customer=${form.customerId}` : ''}`}>Find the best slot</Link>: asks if they want their usual cleaner, free on every repeat date.
+            </p>
             <Segmented label="How often" value={form.frequency_id ?? 0} options={(frequencies.data || []).map((f) => ({ value: f.id, label: f.name }))} onChange={(v) => set({ frequency_id: v })} />
             <div className="bf-when">
               <label>
