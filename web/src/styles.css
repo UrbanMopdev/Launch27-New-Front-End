@@ -1446,6 +1446,9 @@ i.sch-heat { width: 14px; height: 14px; min-width: 0; border-radius: 3px; displa
 .sch-find-form { display: flex; flex-direction: column; gap: 12px; border-radius: var(--radius-lg); }
 .sch-find-form h2 { margin: 0; }
 .sch-find-form input, .sch-find-form select { padding: 8px 10px; }
+.sch-who-ask { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border: 1px solid #f2d29b; background: #fff8eb; border-radius: var(--radius-md, 10px); }
+.sch-who-ask .seg-traits-label { flex-basis: 100%; font-weight: 600; color: #7a4a0e; }
+.sch-any-instead { align-self: flex-start; width: auto; }
 .sch-find-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
 .sch-picked { font-size: 14px; color: var(--text); font-weight: 600; }
 .sch-results { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }

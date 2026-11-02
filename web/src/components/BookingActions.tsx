@@ -40,6 +40,11 @@ export function BookingActions({ booking, onDone, editLink }: { booking: Booking
   return (
     <div className="actions">
       {actions.edit && (
+        <Link to={rescheduleLink(booking, editLink)} className="button secondary">
+          Reschedule
+        </Link>
+      )}
+      {actions.edit && (
         <Link to={editLink || `/bookings/${booking.id}/edit`} className="button">
           Edit
         </Link>
@@ -89,4 +94,17 @@ export function BookingActions({ booking, onDone, editLink }: { booking: Booking
       )}
     </div>
   );
+}
+
+// Reschedule = Find a slot for this client, with this booking's length and rhythm, and the
+// question "usual cleaner only, or any cleaner?". "Move to this slot" returns to this booking's
+// edit form (keeping any conversation link) with the new date, time and cleaner filled in.
+function rescheduleLink(b: Booking, editLink?: string) {
+  const name = b.frequency?.name || '';
+  const kind = /one\s*-?\s*time/i.test(name) ? 'one' : /bi\s*-?\s*weekly/i.test(name) ? 'bi' : /month/i.test(name) ? 'monthly' : /weekly/i.test(name) ? 'weekly' : 'one';
+  const q = new URLSearchParams({ tab: 'find', booking: String(b.id), freq: kind, next: editLink || `/bookings/${b.id}/edit` });
+  if (b.user?.id) q.set('customer', String(b.user.id));
+  if (b.duration) q.set('hours', String(Math.round((b.duration / 60) * 2) / 2));
+  if (b.service_date) q.set('current', b.service_date);
+  return `/schedule?${q.toString()}`;
 }

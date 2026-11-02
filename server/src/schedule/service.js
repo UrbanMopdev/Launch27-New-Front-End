@@ -681,7 +681,9 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   }
 
   // Best slots for a new or rescheduled booking.
-  async function findSlots({ customer_id, lat, lng, duration = 180, kind = 'one', from, days = 14, weekdays = null, earliest = 0, latest = 24 * 60, limit = 12 } = {}) {
+  // cleaner: 'any' (default) or 'same' = only the client's usual cleaner (asked when a client
+  // reschedules). With 'same' and nothing free, any_count says how many slots other cleaners have.
+  async function findSlots({ customer_id, lat, lng, duration = 180, kind = 'one', from, days = 14, weekdays = null, earliest = 0, latest = 24 * 60, limit = 12, cleaner = 'any', booking_id = null } = {}) {
     const s = await need();
     const ctx = ctxFor(s);
     const cu = customer_id ? s.customers.get(Number(customer_id)) : null;
@@ -694,19 +696,28 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const start = from && from >= s.today ? from : addDays(s.today, 1);
     const dur = Math.max(30, Math.min(Number(duration) || 180, 12 * 60));
     const horizon = addDays(s.today, AHEAD_DAYS);
+    const main = cu?.main ? s.byId.get(cu.main.id) || null : null;
+    const wantSame = cleaner === 'same';
+    const sameApplies = wantSame && !!main;
+    const pool = sameApplies ? [main] : s.cleaners;
+    // Rescheduling: the booking being moved (and its projected repeats) doesn't block its own new time.
+    const moving = booking_id ? String(booking_id) : null;
+    const ignore = moving ? new Set(s.future.filter((v) => v.key === moving || v.key.startsWith(`f${moving}-`)).map((v) => v.key)) : null;
+    const busyAt = (id, d) => { const b = busyFor(s)(id, d); return ignore ? b.filter((v) => !ignore.has(v.key)) : b; };
+    const rankCtx = ignore ? { ...ctx, busyFor: busyAt } : ctx;
     const found = [];
     for (let i = 0; i < Math.min(Number(days) || 14, 28); i++) {
       const d = addDays(start, i);
       if (weekdays?.length && !weekdays.includes(weekday(d))) continue;
-      for (const c of s.cleaners) {
+      for (const c of pool) {
         if (!c.assignable) continue;
         const w = windowFor(c, d);
         if (!w) continue;
-        const gaps = openGaps(w, busyFor(s)(c.id, d), dur);
+        const gaps = openGaps(w, busyAt(c.id, d), dur);
         let picked = null;
         for (const [a, b] of gaps) {
           for (let t = Math.max(a, earliest); t + dur <= Math.min(b, latest); t += 30) {
-            const f = fitsDay({ window: w, busy: busyFor(s)(c.id, d), start: t, duration: dur, place, transit: c.rules.transit });
+            const f = fitsDay({ window: w, busy: busyAt(c.id, d), start: t, duration: dur, place, transit: c.rules.transit });
             if (f.ok) {
               picked = t;
               break;
@@ -717,7 +728,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
         if (picked == null) continue;
         const dates = seriesDates(k, d, horizon);
         const job = { dates, start: picked, duration: dur, place, kind: k, prefs: cu?.prefs, mainCleanerId: cu?.main?.id, history: cu?.history, firstDate: d };
-        const [rank] = rankCleaners(job, [c], ctx, { limit: 1 });
+        const [rank] = rankCleaners(job, [c], rankCtx, { limit: 1, ignoreKeys: ignore });
         if (!rank || rank.fits < dates.length) continue; // recurring: must be free every time
         found.push({ date: d, day: DAYNAME[weekday(d)], start: picked, time: clock(picked), end: clock(picked + dur), cycle: cycleWeek(d), weeks: cycleWeeks(k, d), repeats: dates.length, cleaner: { id: c.id, name: c.name, color: c.color, is_new: c.isNew }, score: rank.score - i * 0.004, reasons: rank.reasons, travel: rank.travel });
       }
@@ -732,7 +743,22 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       slots.push(f);
       if (slots.length >= limit) break;
     }
-    return { place_known: place.lat != null, kind: k, frequency: FREQ_LABEL[k], duration: dur, customer: cu ? { id: cu.id, name: cu.name, main: cu.main ? s.byId.get(cu.main.id)?.name || null : null } : null, slots };
+    let anyCount = null;
+    if (sameApplies && !slots.length) {
+      const other = await findSlots({ customer_id, lat, lng, duration, kind, from, days, weekdays, earliest, latest, limit, cleaner: 'any', booking_id });
+      anyCount = other.slots.length;
+    }
+    return {
+      place_known: place.lat != null,
+      kind: k,
+      frequency: FREQ_LABEL[k],
+      duration: dur,
+      customer: cu ? { id: cu.id, name: cu.name, main: main?.name || null } : null,
+      cleaner: sameApplies ? 'same' : 'any',
+      no_usual: wantSame && !main,
+      any_count: anyCount,
+      slots,
+    };
   }
 
   // Assign a cleaner in Launch27 (signed-in user's login). Projected visits of a series can't
