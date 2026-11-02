@@ -26,6 +26,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
     section: 'Operations',
     items: [
       { to: '/dispatch', label: 'Dispatch board', icon: 'truck' },
+      { to: '/schedule', label: 'Scheduling planner', icon: 'repeat' },
       { to: '/routes', label: 'Routes & travel', icon: 'route' },
       { to: '/bookings', label: 'Bookings', icon: 'calendar' },
       { to: '/time-tracking', label: 'Time tracking', icon: 'clock' },

@@ -10,6 +10,8 @@ import { BookingDetailPage } from './pages/BookingDetail';
 import { BookingFormPage } from './pages/BookingForm';
 import { CustomersPage } from './pages/Customers';
 import { SegmentPage } from './pages/SegmentPage';
+import { SchedulingPage } from './pages/Scheduling';
+import { CleanerPlanPage } from './pages/CleanerPlan';
 import { CustomerInsightsPage } from './pages/CustomerTrends';
 import { CustomerProfilePage } from './pages/CustomerProfile';
 import { TeamsPage } from './pages/Teams';
@@ -66,6 +68,8 @@ export function App() {
         <Route path="bookings/:id" element={<BookingDetailPage />} />
         <Route path="bookings/:id/edit" element={<BookingFormPage />} />
         <Route path="customers" element={<CustomersPage />} />
+        <Route path="schedule" element={<SchedulingPage />} />
+        <Route path="schedule/cleaner/:id" element={<CleanerPlanPage />} />
         <Route path="customers/trends" element={<Navigate to="/reports/customers" replace />} />
         <Route path="reports/customers" element={<CustomerInsightsPage />} />
         <Route path="customers/segments/:segment" element={<SegmentPage />} />

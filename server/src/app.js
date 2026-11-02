@@ -15,7 +15,7 @@ const FORWARD_HEADERS = ['accept', 'content-type'];
 
 export function createApp(
   config,
-  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null } = {},
+  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null, schedule = null } = {},
 ) {
   const app = express();
   // Behind Railway's (or any) HTTPS proxy: trust X-Forwarded-* so secure cookies work.
@@ -150,6 +150,7 @@ export function createApp(
     const buf = Buffer.from(await upstream.arrayBuffer());
     res.send(buf);
     // A booking made, changed or cancelled here: recalculate that customer's segment now.
+    if (schedule && upstream.ok && req.method !== 'GET' && req.path.startsWith('/v1/staff/bookings')) schedule.soon(session.bearer);
     if (segments && upstream.ok && req.method !== 'GET' && req.path.startsWith('/v1/staff/bookings')) {
       refreshAfterWrite(session.bearer, req.path, buf).catch((err) => log.warn('segment refresh after booking change failed', { error: err.message }));
     }
@@ -189,7 +190,7 @@ export function createApp(
   // The support workspace (conversations, contacts, routing). Needs a database.
   if (db) {
     const l27 = createL27Client({ baseUrl: config.l27BaseUrl, fetchImpl });
-    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments }));
+    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule }));
   }
 
   // Last-resort error handler: log it (without personal data), answer generically.

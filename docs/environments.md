@@ -112,6 +112,20 @@ its own `SESSION_SECRET`; never copy one between environments.
 - Dev and QA run the same sync against their own synthetic Launch27 (QA: the anonymized
   copy when one is loaded), so the numbers there are not real.
 
+## Scheduling planner: how fresh it is
+
+- Re-reads Launch27 every 15 minutes (cleaners, their availability, the past 13 weeks and
+  next 8 weeks of visits), and a minute after any booking change made in this app.
+- Comparing each read with the previous one fills "Changes to handle" (moved, cancelled,
+  cleaner changed, availability changed) plus problems in the next 14 days (no cleaner,
+  outside hours, double-booked, cleaner on hold, usual cleaner free to take it back).
+- Assigning writes to Launch27 with the signed-in person's own login. Projected visits of a
+  recurring series follow the series in Launch27 and cannot be assigned one by one.
+- Cleaner title codes decide who is suggested: (1) active and (2) new hire yes; (3), (X),
+  "ON HOLD" and no code never.
+- Production needs `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` for the automatic refresh (the
+  same read-only login as segments); otherwise only "Refresh now" works.
+
 ## Local development
 
 ```bash

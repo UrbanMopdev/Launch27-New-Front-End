@@ -25,7 +25,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -804,6 +804,45 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       } catch (err) {
         res.status(400).json({ error: err.message });
       }
+    }));
+  }
+
+  // ---------- scheduling planner ----------
+  if (schedule) {
+    const sched = (fn) => wrap(async (req, res) => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    r.get('/schedule/status', sched(async (req, res) => res.json(await schedule.status())));
+    r.get('/schedule/overview', sched(async (req, res) => res.json(await schedule.overview())));
+    r.get('/schedule/cleaners', sched(async (req, res) => res.json(await schedule.cleaners())));
+    r.get('/schedule/plan/:id', sched(async (req, res) => res.json(await schedule.plan(req.params.id))));
+    r.get('/schedule/gap', sched(async (req, res) => res.json(await schedule.gapOptions(req.query.cleaner, String(req.query.date), Number(req.query.start), Number(req.query.end)))));
+    r.get('/schedule/unassigned', sched(async (req, res) => res.json(await schedule.unassigned())));
+    r.get('/schedule/continuity', sched(async (req, res) => res.json(await schedule.continuity())));
+    r.get('/schedule/changes', sched(async (req, res) => res.json(await schedule.changes())));
+    r.post('/schedule/changes/:id/resolve', sched(async (req, res) => {
+      await schedule.resolveChange(Number(req.params.id), req.body?.resolution, req.user.id);
+      res.status(204).end();
+    }));
+    r.post('/schedule/find-slots', sched(async (req, res) => res.json(await schedule.findSlots(req.body || {}))));
+    r.post('/schedule/assign', sched(async (req, res) => {
+      const out = await schedule.assign(req.body || {}, req.bearer);
+      await svc.audit(db, req.user.id, 'schedule.assign', 'cleaner', req.body?.cleaner_id, { visits: (req.body?.visit_keys || []).length });
+      res.json(out);
+    }));
+    r.put('/schedule/unavailable', sched(async (req, res) => {
+      const out = await schedule.markUnavailable(req.body?.cleaner_id, req.body?.day, { note: req.body?.note, userId: req.user.id, on: req.body?.unavailable !== false });
+      await svc.audit(db, req.user.id, 'schedule.unavailable', 'cleaner', req.body?.cleaner_id, { day: req.body?.day, on: req.body?.unavailable !== false });
+      res.json(out);
+    }));
+    r.post('/schedule/refresh', sched(async (req, res) => {
+      schedule.start({ bearer: req.bearer, trigger: 'manual' });
+      res.status(202).json({ running: true });
     }));
   }
 

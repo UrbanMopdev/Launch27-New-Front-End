@@ -65,6 +65,36 @@ export function torontoToUtc(local) {
 const dayIndex = (date) => Math.round((Date.parse(`${date}T00:00:00Z`) - DAY0) / 86_400_000);
 const dateOf = (index) => new Date(DAY0 + index * 86_400_000).toISOString().slice(0, 10);
 
+// Status codes in the title follow UrbanMop's convention: (1) active, (2) new hire,
+// (3) not ready, (X) off schedule, "ON HOLD" in front = not taking bookings; (F)/(M), (FT)/(PT).
+const TEAM_CODES = ['(1)(F)', '(1)(M)', '(1)(F)(FT)', '(1)(F)', '(2)(F)', '(1)(M)(PT)', '(1)(F)', '(2)(M)', '(1)(F)(PT)', '(3)(F)', '(1)(M)', 'ON HOLD(1)(F)', '(X)(1)(M)', '(1)(F)'];
+const TEAM_TAGS = [
+  ['Own Equipment', 'Vehicle', 'Female', 'Best for homemaking/recurring clients'],
+  ['Own Equipment', 'Vehicle', 'Male', 'Can take last minute bookings'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Speaks French'],
+  ['Own Equipment', 'Public transit', 'Female'],
+  ['Own Equipment', 'Vehicle', 'Female'],
+  ['Own Equipment', 'Vehicle', 'Male', 'Maximum of 45 mins travel time to a booking'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Deep cleaning cleaner', 'Move in/out cleaner'],
+  ['Own Equipment', 'Vehicle', 'Male', 'No 2-HOUR Booking'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Afraid of dogs'],
+  ['Own Equipment', 'Vehicle', 'Female'],
+  ['Own Equipment', 'Vehicle', 'Male'],
+  ['Own Equipment', 'Vehicle', 'Female'],
+  ['Own Equipment', 'Vehicle', 'Male'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Do not assign new booking without cleaner\'s confirmation via call or text'],
+];
+// Weekly hours per cleaner (weekday 0 = Sunday): varied so the planner has gaps to show.
+export function mockAvailability(teamId) {
+  const i = Number(teamId) - 9000;
+  const pattern = [
+    [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4], [2, 3, 4, 5, 6], [1, 3, 5], [1, 2, 3, 4, 5],
+    [1, 2, 3, 4, 5], [2, 4, 6], [1, 2, 3], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [3, 4, 5, 6],
+  ][((i % 14) + 14) % 14];
+  const [start, end] = [['08:00', '17:00'], ['09:00', '16:00'], ['08:00', '15:00'], ['10:00', '17:00']][((i % 4) + 4) % 4];
+  return [0, 1, 2, 3, 4, 5, 6].map((d) => ({ id: Number(teamId) * 10 + d, date: null, weekday: d, dayoff: !pattern.includes(d), start_time: pattern.includes(d) ? start : null, end_time: pattern.includes(d) ? end : null }));
+}
+
 function buildTeams() {
   const r = rng(42);
   return Array.from({ length: 14 }, (_, i) => {
@@ -72,7 +102,7 @@ function buildTeams() {
     const last = LAST[(i * 7) % LAST.length];
     return {
       id: 9000 + i,
-      title: `${first} ${last}`,
+      title: `${TEAM_CODES[i]}${first} ${last}`,
       first_name: first,
       last_name: last,
       email: `cleaner${i + 1}@example.com`,
@@ -92,7 +122,7 @@ function buildTeams() {
       active: true,
       confirmed: true,
       share: [20, 21, 22, 22, 22, 23, 24][i % 7],
-      tags_info: [],
+      tags_info: TEAM_TAGS[i].map((name, k) => ({ id: 700 + i * 10 + k, name })),
       locations: [i < 11 ? LOCATIONS[0] : LOCATIONS[1]].map(({ id, name }) => ({ id, name, active: true, default: id === 1 })),
     };
   });
@@ -275,7 +305,18 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const tax = Math.round(revenue * 0.13 * 100) / 100;
     const duration = svc.duration + (baths - 1) * 30 + extras.length * 60;
     const unassigned = r.next() < 0.08;
-    const team = teams.filter((t) => t.locations[0].id === c.location.id)[r.int(c.location.id === 167 ? 3 : 11)];
+    const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+    const local = teams.filter((t) => t.locations[0].id === c.location.id);
+    // Prefer a cleaner who works then (by their hours); otherwise anyone local.
+    const working = local.filter((t) => {
+      const row = mockAvailability(t.id).find((a) => a.weekday === weekday);
+      if (!row || row.dayoff) return false;
+      const [sh] = row.start_time.split(':').map(Number);
+      const [eh] = row.end_time.split(':').map(Number);
+      return hour >= sh && hour + (svc.duration || 180) / 60 <= eh + 1;
+    });
+    const pool = working.length ? working : local;
+    const team = pool[r.int(pool.length)] || local[0];
     const hours = Math.round((duration / 60) * 100) / 100;
     const past = start.getTime() + duration * 60_000 < now();
     const late = r.next() < 0.1 ? 25 : 0;
@@ -465,7 +506,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     // Teams
     if (path === '/v1/staff/teams') return [200, page(teams, q)];
     if (path === '/v1/staff/teams/count') return [200, { count: teams.length }];
-    if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) return [200, [0, 1, 2, 3, 4, 5, 6].map((d) => ({ id: d, date: null, weekday: d, dayoff: d === 0, start_time: d === 0 ? null : '08:00', end_time: d === 0 ? null : '17:00' }))];
+    if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) return [200, mockAvailability(m[1])];
     if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)$/))) return (t => (t ? [200, t] : [404, { error: 'Not found' }]))(teams.find((t) => t.id === Number(m[1])));
 
     // Customers
