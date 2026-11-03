@@ -293,6 +293,38 @@ describe('schedule: sync, plan, assign, changes', () => {
     await assert.rejects(() => live.reset(), /only for sample/);
   });
 
+  test('without a sync login (production today), it refreshes with the viewer\'s own login while the planner is open', async () => {
+    const w = world();
+    const db = await openDb();
+    const config = { ...loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' }), l27Mode: 'live', l27SyncEmail: null, l27SyncPassword: null };
+    const seen = [];
+    const fetchImpl = (url, init = {}) => {
+      seen.push(init.headers?.authorization || '');
+      return w.fetchImpl(url, init);
+    };
+    let clock = NOW;
+    const s = createSchedule({ db, config, fetchImpl, log: quiet, now: () => clock });
+    const settle = async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      while (s.isRunning()) await new Promise((r) => setTimeout(r, 20));
+    };
+    await s.maybeRun();
+    await settle();
+    assert.equal((await s.status()).taken_at, null, 'no login, nobody watching: nothing runs');
+    await s.maybeRun({ bearer: 'viewer-token' });
+    await settle();
+    const first = await s.status();
+    assert.ok(first.taken_at, 'a viewer starts the first full load');
+    assert.ok(seen.length && seen.every((h) => h === 'Bearer viewer-token'), "uses the viewer's login");
+    await s.maybeRun({ bearer: 'viewer-token' });
+    await settle();
+    assert.equal((await s.status()).taken_at, first.taken_at, 'not again within 3 minutes');
+    clock += 4 * 60_000;
+    await s.maybeRun({ bearer: 'viewer-token' });
+    await settle();
+    assert.notEqual((await s.status()).taken_at, first.taken_at, 'quick refresh after 3 minutes');
+  });
+
   test('quick refresh: next 14 days every few minutes; moved further out reads as moved, not cancelled', async () => {
     const w = world();
     const db = await openDb();

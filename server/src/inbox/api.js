@@ -823,8 +823,16 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
         throw err;
       }
     });
-    r.get('/schedule/status', sched(async (req, res) => res.json(await schedule.status())));
-    r.get('/schedule/overview', sched(async (req, res) => res.json(await schedule.overview())));
+    // Someone has the planner open: refresh on the usual schedule with their own (read-only) login.
+    const keepFresh = (req) => schedule.maybeRun({ bearer: req.bearer }).catch((err) => log.warn?.('schedule refresh on view failed', { error: err.message }));
+    r.get('/schedule/status', sched(async (req, res) => {
+      keepFresh(req);
+      res.json(await schedule.status());
+    }));
+    r.get('/schedule/overview', sched(async (req, res) => {
+      keepFresh(req);
+      res.json(await schedule.overview());
+    }));
     r.get('/schedule/cleaners', sched(async (req, res) => res.json(await schedule.cleaners())));
     r.get('/schedule/plan/:id', sched(async (req, res) => res.json(await schedule.plan(req.params.id))));
     r.get('/schedule/cleaner/:id/profile', sched(async (req, res) => res.json(await schedule.cleanerProfile(req.params.id))));
