@@ -104,6 +104,7 @@ export function mockAvailability(teamId) {
 // visits they actually have in it (Toronto time). Days worked at least twice count when
 // they have plenty of visits; cleaners with none get a plain weekday 9 to 5.
 const TORONTO = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', weekday: 'short', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' });
+const TORONTO_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit' });
 const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 function hoursFromVisits(bookings) {
   const byTeam = new Map(); // id -> weekday -> { n, start, end } in minutes
@@ -307,10 +308,10 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       snapByDay = new Map();
       snapById = new Map();
       for (const b of s.bookings) {
-        const d = String(b.service_date || '').slice(0, 10);
+        const d = b.service_date ? TORONTO_DAY.format(new Date(b.service_date)) : '';
         if (!snapByDay.has(d)) snapByDay.set(d, []);
         snapByDay.get(d).push(b);
-        snapById.set(b.id, b);
+        if (b.id) snapById.set(b.id, b);
       }
       snapHours = hoursFromVisits(s.bookings);
     } else {
@@ -655,8 +656,10 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       return [200, snap ? snap.custom_fields : CATALOG.custom_fields];
 
     // Teams
-    if (path === '/v1/staff/teams') return [200, page(teams, q)];
-    if (path === '/v1/staff/teams/count') return [200, { count: teams.length }];
+    // ?filter=active as Launch27 does: the QA copy holds every cleaner ever, most no longer active.
+    const teamList = () => (q.get('filter') === 'active' ? teams.filter((t) => t.active !== false) : teams);
+    if (path === '/v1/staff/teams') return [200, page(teamList(), q)];
+    if (path === '/v1/staff/teams/count') return [200, { count: teamList().length }];
     if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) return [200, snap ? copyAvailability(m[1], snapHours) : mockAvailability(m[1])];
     if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)$/))) return (t => (t ? [200, t] : [404, { error: 'Not found' }]))(teams.find((t) => t.id === Number(m[1])));
 

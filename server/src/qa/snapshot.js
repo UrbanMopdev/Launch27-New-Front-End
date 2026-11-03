@@ -25,8 +25,11 @@ export async function buildSnapshot(get, { now = Date.now(), daysBack = 60, days
   // Ratings only come back when asked for; merge them onto the bookings.
   const rated = await all(get, '/v1/staff/bookings', { from, to, options: 'with_feedback' });
   const feedback = new Map(rated.filter((b) => b.feedback).map((b) => [b.id, b.feedback]));
+  // Forecast visits (future recurring ones Launch27 hasn't created yet) have no id: key them by
+  // the booking they repeat plus their date, or they'd all overwrite each other.
+  const keyOf = (b) => (b.id ? `b${b.id}` : `f${b.forecasted_from_booking?.id ?? 'x'}-${String(b.service_date).slice(0, 10)}`);
   const byId = new Map();
-  for (const b of [...active, ...cancelled]) byId.set(b.id, { ...b, feedback: b.feedback || feedback.get(b.id) || null });
+  for (const b of [...active, ...cancelled]) byId.set(keyOf(b), { ...b, feedback: b.feedback || (b.id ? feedback.get(b.id) : null) || null });
   const bookings = [...byId.values()];
 
   log('pulling customers and cleaners');

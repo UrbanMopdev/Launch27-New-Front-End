@@ -54,8 +54,66 @@ function tagLabel(t: string) {
   return { text: t, warn: false };
 }
 
-function NotInPlanner({ name }: { name: string }) {
-  return <div className="card muted">{name} isn't in the planner's active list (on hold, off schedule or not ready), so there's no schedule to show.</div>;
+// Status from the Launch27 title, for cleaners the planner doesn't carry (left, on hold, off schedule).
+function titleStatus(title: string, active: boolean | undefined) {
+  if (active === false) return 'No longer active';
+  if (/on\s*hold/i.test(title)) return 'On hold';
+  if (/\(\s*x\s*\)/i.test(title)) return 'Off schedule';
+  if (/\(\s*3\s*\)/.test(title)) return 'Not ready';
+  return 'Not assignable';
+}
+
+// Full page for a cleaner outside the planner: who they are, how to reach them, their history.
+function InactiveProfile({ tid, contact, onText, onEmail, editContact, report }: { tid: number; contact?: Contact; onText?: () => void; onEmail?: () => void; editContact?: ReactNode; report?: Awaited<ReturnType<typeof reportsApi.cleaner>> }) {
+  const [editing, setEditing] = useState(false);
+  const team = useQuery({ queryKey: ['l27', 'team', tid], queryFn: () => l27<{ id: number; title?: string; first_name?: string; last_name?: string; phone?: string; email?: string; active?: boolean; bg_color?: string }>(`/v1/staff/teams/${tid}`), retry: false, staleTime: 10 * 60_000 });
+  const t = team.data;
+  const name = report?.cleaner.name || [t?.first_name, t?.last_name].filter(Boolean).join(' ') || contact?.name || 'This cleaner';
+  const initials = name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('');
+  const phone = contact?.identities.find((i) => i.kind === 'phone')?.value || t?.phone || null;
+  const email = contact?.identities.find((i) => i.kind === 'email')?.value || t?.email;
+  const r = report;
+  return (
+    <div className="cp">
+      <section className="card cp-hero">
+        <div className="cp-hero-top">
+          <div className="cp-who">
+            <span className="cp-avatar" style={{ background: t?.bg_color || '#94A3B8' }} aria-hidden="true">{initials}</span>
+            <div className="cp-who-main">
+              <div className="cp-title">
+                <h1>{name}</h1>
+                <span className="cp-status off">{titleStatus(t?.title || '', t?.active)}</span>
+              </div>
+              <span className="muted small">{[phone && displayIdentity(phone), email, r?.cleaner.first_seen ? `worked with us since at least ${monthYear(r.cleaner.first_seen)}` : null].filter(Boolean).join(' · ')}</span>
+            </div>
+          </div>
+          <div className="cp-actions">
+            {onText && <button onClick={onText}>Text</button>}
+            <CallButton phone={phone} />
+            {onEmail && <button className="secondary" onClick={onEmail}>Email</button>}
+            {r && <Link className="button secondary-link" to={`/reports/cleaners/${tid}`}>Report</Link>}
+            {editContact && <button className="secondary" onClick={() => setEditing(!editing)} aria-expanded={editing}>Edit contact</button>}
+          </div>
+        </div>
+        {editing && editContact && <div className="cp-edit">{editContact}</div>}
+        <p className="small muted cp-note">Not in the planner's active list, so there's no schedule to show. Make them (1) or (2) in Launch27 to plan with them.</p>
+        {r && (
+          <div className="cp-sum">
+            <div><span className="eyebrow">Cleans</span><b>{r.stats.visits}</b><span className="small">last 13 weeks</span></div>
+            <div><span className="eyebrow">On time</span><b>{pct(r.stats.on_time)}</b><span className="small">last 13 weeks</span></div>
+            <div><span className="eyebrow">Ratings</span><b>{r.stats.happy != null ? `${pct(r.stats.happy)} happy` : '—'}</b><span className="small">{`${r.stats.rated} rated · ${r.stats.unhappy} unhappy`}</span></div>
+            <div><span className="eyebrow">Regular clients</span><b>{r.clients.length}</b><span className="small">who may need a new cleaner</span></div>
+          </div>
+        )}
+      </section>
+      {contact && (
+        <section className="card cp-card">
+          <div className="cp-card-head"><h2>Messages with {name.split(' ')[0]}</h2></div>
+          <ConversationHistory contact={contact} />
+        </section>
+      )}
+    </div>
+  );
 }
 
 // ---------- full page ----------
@@ -64,7 +122,7 @@ export function CleanerProfile({ tid, contact, onText, onEmail, editContact }: {
   const [editing, setEditing] = useState(false);
   const p = profile.data;
   const r = report.data;
-  if (profile.isError) return <NotInPlanner name={contact?.name || 'This cleaner'} />;
+  if (profile.isError) return <InactiveProfile tid={tid} contact={contact} onText={onText} onEmail={onEmail} editContact={editContact} report={r} />;
   if (!p) return <p className="muted">Loading…</p>;
   const c = p.cleaner;
   const initials = c.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('');
