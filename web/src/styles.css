@@ -1574,6 +1574,7 @@ i.rep-cell { width: 14px; height: 14px; }
 .cp-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .cp-actions > button, .cp-actions > .button { min-height: 40px; display: inline-flex; align-items: center; gap: 6px; }
 .cp-edit { border-top: 1px solid var(--border); padding-top: 14px; }
+.cp-note { margin: 0; }
 .cp-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); border-top: 1px solid #eef1f4; padding-top: 14px; }
 .cp-sum > div { display: flex; flex-direction: column; gap: 2px; padding: 0 16px; border-left: 1px solid #eef1f4; }
 .cp-sum > div:first-child { padding-left: 0; border-left: 0; }

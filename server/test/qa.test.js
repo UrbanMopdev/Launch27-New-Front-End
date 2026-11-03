@@ -157,6 +157,32 @@ describe('QA copy: build, receive, serve', () => {
     }
   });
 
+  test('future recurring visits Launch27 only forecasts (no id) all make it into the copy, with their cleaner', async () => {
+    const forecast = (date) => ({ ...realBooking, id: null, forecasted_from_booking: { id: realBooking.id }, service_date: `${date}T14:00:00Z` });
+    const get = async (path, q = {}) => {
+      if (path === '/v1/staff/bookings') return q.offset || q.filter || q.options ? [] : [realBooking, forecast('2026-11-17'), forecast('2026-12-01'), forecast('2026-12-15')];
+      if (path === '/v1/staff/customers') return q.offset ? [] : [realCustomer];
+      if (path === '/v1/staff/teams') return q.offset ? [] : [realTeam];
+      return [];
+    };
+    const copy = await buildSnapshot(get, { now: Date.parse('2026-11-01T12:00:00Z') });
+    const f = copy.bookings.filter((b) => !b.id);
+    assert.equal(f.length, 3, 'one per forecast date, not collapsed into one');
+    assert.ok(f.every((b) => b.forecasted_from_booking.id === realBooking.id && b.teams.length === realBooking.teams.length));
+    const mock = createMockLaunch27({ password: 'demo', snapshot: () => copy });
+    const call = async (p) => (await mock(`https://mock${p}`, { headers: { authorization: 'Bearer mock-bearer' } })).json();
+    assert.equal((await call('/v1/staff/bookings?from=2026-11-15&to=2026-12-20')).length, 3);
+  });
+
+  test('QA serves "active only" cleaner lists like Launch27 (the copy holds former cleaners too)', async () => {
+    const copy = { teams: [{ id: 1, title: '(1) A B', active: true }, { id: 2, title: 'C D', active: false }, { id: 3, title: '(2) E F' }], customers: [], bookings: [], services: {}, locations: [] };
+    const mock = createMockLaunch27({ password: 'demo', snapshot: () => copy });
+    const call = async (p) => (await mock(`https://mock${p}`, { headers: { authorization: 'Bearer mock-bearer' } })).json();
+    assert.deepEqual((await call('/v1/staff/teams?filter=active')).map((t) => t.id), [1, 3]);
+    assert.equal((await call('/v1/staff/teams/count?filter=active')).count, 2);
+    assert.equal((await call('/v1/staff/teams')).length, 3);
+  });
+
   test('production never receives a copy; QA never sends one', () => {
     const prod = loadConfig({ APP_ENV: 'production', QA_SNAPSHOT_TOKEN: 'x'.repeat(40), QA_SNAPSHOT_URL: 'https://qa.example.com' });
     assert.equal(prod.qaSnapshotReceive, false);

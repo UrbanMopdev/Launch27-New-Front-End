@@ -169,6 +169,8 @@ export function createAnonymizer(salt = randomBytes(16).toString('hex'), people 
     const di = b.discount_info || {};
     return {
       id: b.id,
+      // Launch27's forecast of future recurring visits: no id, just the booking it repeats.
+      forecasted_from_booking: b.forecasted_from_booking ? { id: b.forecasted_from_booking.id } : undefined,
       active: b.active,
       completed: b.completed,
       booking_status: b.booking_status,
