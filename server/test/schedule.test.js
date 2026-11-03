@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCleaner, customerPrefs, cycleWeek, cycleWeeks, frequencyKind, fitsDay, rankCleaners, workingWindow, openGaps, mainCleaner, seriesDates } from '../src/schedule/rules.js';
 import { createSchedule } from '../src/schedule/service.js';
+import { createWriteLog } from '../src/writes.js';
 import { openDb } from '../src/db/index.js';
 import { loadConfig } from '../src/config.js';
 
@@ -160,7 +161,8 @@ describe('schedule: sync, plan, assign, changes', () => {
     const db = await openDb();
     const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
     let clock = NOW;
-    const s = createSchedule({ db, config, fetchImpl: w.fetchImpl, log: quiet, now: () => clock });
+    const writes = createWriteLog({ db });
+    const s = createSchedule({ db, config, fetchImpl: w.fetchImpl, log: quiet, now: () => clock, writes });
     await s.sync();
 
     const ov = await s.overview();
@@ -222,9 +224,14 @@ describe('schedule: sync, plan, assign, changes', () => {
     }
 
     // Assign the series to Ann: one Launch27 call per real booking, change resolved.
-    const res = await s.assign({ visit_keys: un.series[0].visits.map((v) => v.key), cleaner_id: 1 }, 'user-bearer');
+    const res = await s.assign({ visit_keys: un.series[0].visits.map((v) => v.key), cleaner_id: 1 }, 'user-bearer', 'planner@example.com');
     assert.equal(res.assigned, 2);
     assert.deepEqual(w.posts[0], { booking_ids: [w.bookings[4].id], teams: [{ id: 1, hours: 3, share: 22 }] });
+    // The planner's assignment is in the write log, with who did it and what was sent.
+    const logged = (await writes.list()).rows.filter((r) => r.source === 'planner assign' && r.outcome === 'done');
+    assert.equal(logged.length, w.posts.length);
+    assert.equal(logged.at(-1).user_email, 'planner@example.com');
+    assert.equal(logged.at(-1).booking_id, w.bookings[4].id);
     assert.ok((await s.changes()).items.every((i) => i.kind !== 'unassigned'));
     await assert.rejects(() => s.assign({ visit_keys: ['x'], cleaner_id: 3 }, 'b'), /on hold/);
 

@@ -1629,3 +1629,17 @@ i.rep-cell { width: 14px; height: 14px; }
 }
 .cpp .cp-line > span:first-child { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cpp .cp-line .cp-st { white-space: normal; text-align: right; max-width: 58%; }
+
+/* Launch27 changes (write log) */
+.wl-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.wl-on { background: #fde7e7; color: #9b1c1c; }
+.wl-off, .wl-done { background: #e3f4ea; color: #146c3c; }
+.wl-refused { background: #fff1d6; color: #8a5300; }
+.wl-blocked { background: var(--surface-2, #eef1f5); color: var(--muted, #5b6472); }
+.wl-table td { vertical-align: top; }
+.wl-json { max-height: 320px; overflow: auto; font-size: 12px; background: var(--surface-2, #f5f7fa); padding: 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wl-on { background: #4a1d1d; color: #ffc9c9; }
+  :root:not([data-theme="light"]) .wl-off, :root:not([data-theme="light"]) .wl-done { background: #173a27; color: #b5ecc9; }
+  :root:not([data-theme="light"]) .wl-refused { background: #3d2e10; color: #ffd98a; }
+}

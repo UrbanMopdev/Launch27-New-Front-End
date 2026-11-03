@@ -58,7 +58,7 @@ export function slimVisit(b) {
 }
 
 // dataTag (dev/QA): names the data underneath (sample version or QA copy) so a switch is noticed.
-export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {}, warn() {}, error() {} }, now = () => Date.now(), dataTag = () => SAMPLE_VERSION }) {
+export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {}, warn() {}, error() {} }, now = () => Date.now(), dataTag = () => SAMPLE_VERSION, writes = null }) {
   let snap = null; // latest snapshot (in memory)
   let unavailable = new Map(); // cleanerId -> Set(dates)
   let running = null;
@@ -770,9 +770,13 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
 
   // Assign a cleaner in Launch27 (signed-in user's login). Projected visits of a series can't
   // be assigned one by one in Launch27; they are reported back.
-  async function assign({ visit_keys = [], cleaner_id, recommended = false }, bearer) {
+  async function assign({ visit_keys = [], cleaner_id, recommended = false }, bearer, email = null) {
     const s = await need();
-    if (!config.allowWrites) throw Object.assign(new Error('Writes to Launch27 are turned off here'), { status: 403 });
+    const logWrite = (entry) => (writes ? writes.record({ email, source: 'planner assign', method: 'POST', path: '/v1/staff/bookings/assign/teams', ...entry }) : Promise.resolve());
+    if (!config.allowWrites) {
+      await logWrite({ outcome: 'blocked', status: 403, body: { visit_keys, cleaner_id } });
+      throw Object.assign(new Error('Writes to Launch27 are turned off here'), { status: 403 });
+    }
     const c = s.byId.get(Number(cleaner_id));
     if (!c) throw Object.assign(new Error('Unknown cleaner'), { status: 404 });
     if (!c.assignable) throw Object.assign(new Error(`${c.name} is ${STATUS_LABEL[c.status].toLowerCase()} and can't take bookings`), { status: 400 });
@@ -780,12 +784,20 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const real = visits.filter((v) => v.id);
     const projected = visits.filter((v) => !v.id);
     for (const v of real) {
-      const res = await fetchImpl(`${config.l27BaseUrl}/v1/staff/bookings/assign/teams`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({ booking_ids: [v.id], teams: [{ id: c.id, hours: Math.round((v.duration / 60) * 100) / 100, share: c.share || 0 }] }),
-        signal: AbortSignal.timeout(30_000),
-      });
+      const payload = { booking_ids: [v.id], teams: [{ id: c.id, hours: Math.round((v.duration / 60) * 100) / 100, share: c.share || 0 }] };
+      let res;
+      try {
+        res = await fetchImpl(`${config.l27BaseUrl}/v1/staff/bookings/assign/teams`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (err) {
+        await logWrite({ outcome: 'failed', body: payload, error: err.message });
+        throw err;
+      }
+      await logWrite({ outcome: res.ok ? 'done' : 'refused', status: res.status, body: payload, error: res.ok ? null : `Launch27 answered ${res.status}` });
       if (!res.ok) throw Object.assign(new Error(`Launch27 refused the assignment for ${v.customer} on ${nice(v.date)} (${res.status})`), { status: 502 });
       // Reflect it right away; the next sync confirms.
       for (const old of v.team_ids) {
