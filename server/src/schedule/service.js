@@ -58,7 +58,7 @@ export function slimVisit(b) {
 }
 
 // dataTag (dev/QA): names the data underneath (sample version or QA copy) so a switch is noticed.
-export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {}, warn() {}, error() {} }, now = () => Date.now(), dataTag = () => SAMPLE_VERSION }) {
+export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {}, warn() {}, error() {} }, now = () => Date.now(), dataTag = () => SAMPLE_VERSION, writes = null }) {
   let snap = null; // latest snapshot (in memory)
   let unavailable = new Map(); // cleanerId -> Set(dates)
   let running = null;
@@ -404,21 +404,25 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     if (lastRun === undefined) lastRun = (await db.query('SELECT * FROM schedule_runs ORDER BY id DESC LIMIT 1')).rows[0] || null;
     return lastRun;
   }
-  async function maybeRun() {
+  // Called by the background worker, and (with the viewer's own Launch27 login) whenever
+  // someone has the planner open, so it stays fresh even without a dedicated sync login.
+  // Only reads from Launch27.
+  async function maybeRun({ bearer = null } = {}) {
     if (running) return;
     const last = await latestRun();
     const t = now();
     if (last?.status === 'failed' && t - new Date(last.started_at).getTime() < 10 * 60_000) return;
-    if (config.l27Mode !== 'mock' && !(config.l27SyncEmail && config.l27SyncPassword)) {
-      if (!warnedNoCreds) log.warn('schedule: no automatic refresh until L27_SYNC_EMAIL and L27_SYNC_PASSWORD are set (use "Refresh now")');
+    if (!bearer && config.l27Mode !== 'mock' && !(config.l27SyncEmail && config.l27SyncPassword)) {
+      if (!warnedNoCreds) log.warn('schedule: no background refresh until L27_SYNC_EMAIL and L27_SYNC_PASSWORD are set; it refreshes while someone has the planner open');
       warnedNoCreds = true;
       return;
     }
     const s = await load();
     const fullAge = s ? t - new Date(s.full_at || s.taken_at).getTime() : Infinity;
     const anyAge = s ? t - new Date(s.taken_at).getTime() : Infinity;
-    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today()) start({ trigger: s ? 'auto' : 'boot', kind: 'full' });
-    else if (anyAge >= NEAR_EVERY_MS) start({ trigger: 'auto', kind: 'near' });
+    const trigger = bearer ? 'viewer' : s ? 'auto' : 'boot';
+    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today()) start({ bearer: bearer || undefined, trigger, kind: 'full' });
+    else if (anyAge >= NEAR_EVERY_MS) start({ bearer: bearer || undefined, trigger, kind: 'near' });
   }
 
   // ---------- reads ----------
@@ -770,9 +774,13 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
 
   // Assign a cleaner in Launch27 (signed-in user's login). Projected visits of a series can't
   // be assigned one by one in Launch27; they are reported back.
-  async function assign({ visit_keys = [], cleaner_id, recommended = false }, bearer) {
+  async function assign({ visit_keys = [], cleaner_id, recommended = false }, bearer, email = null) {
     const s = await need();
-    if (!config.allowWrites) throw Object.assign(new Error('Writes to Launch27 are turned off here'), { status: 403 });
+    const logWrite = (entry) => (writes ? writes.record({ email, source: 'planner assign', method: 'POST', path: '/v1/staff/bookings/assign/teams', ...entry }) : Promise.resolve());
+    if (!config.allowWrites) {
+      await logWrite({ outcome: 'blocked', status: 403, body: { visit_keys, cleaner_id } });
+      throw Object.assign(new Error('Writes to Launch27 are turned off here'), { status: 403 });
+    }
     const c = s.byId.get(Number(cleaner_id));
     if (!c) throw Object.assign(new Error('Unknown cleaner'), { status: 404 });
     if (!c.assignable) throw Object.assign(new Error(`${c.name} is ${STATUS_LABEL[c.status].toLowerCase()} and can't take bookings`), { status: 400 });
@@ -780,12 +788,20 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const real = visits.filter((v) => v.id);
     const projected = visits.filter((v) => !v.id);
     for (const v of real) {
-      const res = await fetchImpl(`${config.l27BaseUrl}/v1/staff/bookings/assign/teams`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({ booking_ids: [v.id], teams: [{ id: c.id, hours: Math.round((v.duration / 60) * 100) / 100, share: c.share || 0 }] }),
-        signal: AbortSignal.timeout(30_000),
-      });
+      const payload = { booking_ids: [v.id], teams: [{ id: c.id, hours: Math.round((v.duration / 60) * 100) / 100, share: c.share || 0 }] };
+      let res;
+      try {
+        res = await fetchImpl(`${config.l27BaseUrl}/v1/staff/bookings/assign/teams`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (err) {
+        await logWrite({ outcome: 'failed', body: payload, error: err.message });
+        throw err;
+      }
+      await logWrite({ outcome: res.ok ? 'done' : 'refused', status: res.status, body: payload, error: res.ok ? null : `Launch27 answered ${res.status}` });
       if (!res.ok) throw Object.assign(new Error(`Launch27 refused the assignment for ${v.customer} on ${nice(v.date)} (${res.status})`), { status: 502 });
       // Reflect it right away; the next sync confirms.
       for (const old of v.team_ids) {

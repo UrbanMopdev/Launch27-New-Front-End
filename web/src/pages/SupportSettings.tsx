@@ -1,16 +1,16 @@
 // Support settings: one place for everything that decides where conversations go and
 // who answers them. Grouped by what people are trying to do, with plain-language help.
-import { useCallback, useState } from 'react';
+import { Fragment, useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { inbox, type HistoryEntry, type SettingsEditors, type SlaPolicy, type User, type WorkspaceSettings } from '../inbox/api';
+import { inbox, type HistoryEntry, type L27Write, type SettingsEditors, type SlaPolicy, type User, type WorkspaceSettings } from '../inbox/api';
 import { ago, useInboxMe, useMeta } from '../inbox/util';
 import { DurationInput, Switch } from '../inbox/settingsUi';
 import { formatMinutes } from '../lib/routingRules';
 import { RulesEditor } from './RoutingRules';
 import { AgentsSettings, HoursSettings, PoliciesSettings, QaCopySettings, QueuesSettings, StatusesSettings, TeamsSettings } from './WorkforceSettings';
 
-type Tab = 'rules' | 'queues' | 'sla' | 'hours' | 'policies' | 'agents' | 'teams' | 'statuses' | 'canned' | 'history' | 'qa';
+type Tab = 'rules' | 'queues' | 'sla' | 'hours' | 'policies' | 'agents' | 'teams' | 'statuses' | 'canned' | 'history' | 'writes' | 'qa';
 
 const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }[] }[] = [
   {
@@ -39,6 +39,7 @@ const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }
     title: 'Activity',
     items: [
       { id: 'history', label: 'Change history', desc: 'Who changed what, and when' },
+      { id: 'writes', label: 'Launch27 changes', desc: 'Every change sent to Launch27 from this app' },
       { id: 'qa', label: 'QA data', desc: 'Copy of real data for QA (emails and phones masked)' },
     ],
   },
@@ -116,6 +117,7 @@ export function InboxSettingsPage() {
           {tab === 'statuses' && <StatusesSettings canEdit={canEdit} />}
           {tab === 'canned' && <CannedEditor canEdit={canEdit} />}
           {tab === 'history' && <HistoryPanel />}
+          {tab === 'writes' && (isAdmin ? <WritesLog /> : <div className="muted">Only admins can see the list of changes sent to Launch27.</div>)}
           {tab === 'qa' && <QaCopySettings canEdit={isAdmin} />}
         </div>
       </div>
@@ -345,5 +347,75 @@ function HistoryPanel() {
       })}
       {!history.data?.length && <p className="muted small pad">No changes yet.</p>}
     </section>
+  );
+}
+
+// ---------- Launch27 changes ----------
+
+const OUTCOME: Record<L27Write['outcome'], { label: string; cls: string }> = {
+  done: { label: 'Changed in Launch27', cls: 'wl-done' },
+  refused: { label: 'Launch27 refused', cls: 'wl-refused' },
+  blocked: { label: 'Blocked (writes off)', cls: 'wl-blocked' },
+  failed: { label: 'No answer', cls: 'wl-refused' },
+};
+
+function describeWrite(w: L27Write) {
+  const p = w.path.split('?')[0];
+  if (w.source === 'planner assign') return 'Assigned a cleaner (planner)';
+  if (/assign\/teams/.test(p)) return 'Assigned cleaners';
+  if (/\/cancel/.test(p)) return 'Cancelled a booking';
+  if (/\/reschedule|\/move/.test(p)) return 'Moved a booking';
+  if (/\/charge|\/payments?/.test(p)) return 'Charged or recorded a payment';
+  if (/^\/v1\/staff\/bookings\/?$/.test(p) && w.method === 'POST') return 'Created a booking';
+  if (/\/bookings\/\d+/.test(p) && ['PUT', 'PATCH'].includes(w.method)) return 'Edited a booking';
+  if (/\/bookings\/\d+/.test(p) && w.method === 'DELETE') return 'Deleted a booking';
+  if (/\/customers/.test(p)) return w.method === 'POST' ? 'Created or changed a customer' : 'Changed a customer';
+  if (/\/teams/.test(p)) return 'Changed a cleaner';
+  return `${w.method} ${p}`;
+}
+
+function WritesLog() {
+  const q = useQuery({ queryKey: ['inbox', 'l27-writes'], queryFn: () => inbox.l27Writes(), refetchInterval: 30_000 });
+  const [open, setOpen] = useState<number | null>(null);
+  if (q.isLoading) return <div className="muted">Loading…</div>;
+  if (q.isError || !q.data) return <div className="muted">Couldn't load the list.</div>;
+  const { rows, counts, allow_writes } = q.data;
+  return (
+    <>
+      <div className="ws-intro">
+        <p className="small">
+          <span className={allow_writes ? 'wl-pill wl-on' : 'wl-pill wl-off'}>{allow_writes ? 'Writes are ON here' : 'Writes are OFF here'}</span>{' '}
+          {allow_writes ? 'Changes made in this app go to the real Launch27, and each one is listed below.' : 'Nothing can change Launch27 from this app. Attempts are still listed below.'}
+        </p>
+        <p className="muted small">Every booking, cleaner or customer change this app sends to Launch27, from any screen, with who did it and what Launch27 answered. {counts.total} in total · {counts.day} in the last 24 hours · {counts.done} went through.</p>
+      </div>
+      {rows.length === 0 ? (
+        <div className="muted">No changes have been sent to Launch27 from this app.</div>
+      ) : (
+        <table className="table wl-table">
+          <thead><tr><th>When</th><th>Who</th><th>What</th><th>Booking</th><th>Result</th><th /></tr></thead>
+          <tbody>
+            {rows.map((w) => (
+              <Fragment key={w.id}>
+                <tr>
+                  <td title={new Date(w.at).toLocaleString('en-CA', { timeZone: 'America/Toronto' })}>{ago(w.at)}</td>
+                  <td>{w.user_email || '—'}</td>
+                  <td>{describeWrite(w)}<div className="muted small">{w.method} {w.path.split('?')[0]}</div></td>
+                  <td>{w.booking_id ? <a href={`/bookings/${w.booking_id}`}>#{w.booking_id}</a> : '—'}</td>
+                  <td><span className={`wl-pill ${OUTCOME[w.outcome].cls}`}>{OUTCOME[w.outcome].label}</span>{w.status ? <span className="muted small"> {w.status}</span> : null}</td>
+                  <td><button type="button" className="link" onClick={() => setOpen(open === w.id ? null : w.id)}>{open === w.id ? 'Hide' : 'Details'}</button></td>
+                </tr>
+                {open === w.id && (
+                  <tr className="wl-detail"><td colSpan={6}>
+                    {w.error && <p className="small"><b>Launch27 said:</b> {w.error}</p>}
+                    <pre className="wl-json">{JSON.stringify(w.request, null, 2) || '(no body)'}</pre>
+                  </td></tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   );
 }

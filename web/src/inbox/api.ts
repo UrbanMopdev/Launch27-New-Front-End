@@ -100,6 +100,21 @@ export interface QaCopySummary {
   customers: number;
   cleaners: number;
 }
+export interface L27Write {
+  id: number;
+  at: string;
+  user_email: string | null;
+  source: string;
+  method: string;
+  path: string;
+  booking_id: number | null;
+  outcome: 'done' | 'refused' | 'blocked' | 'failed';
+  status: number | null;
+  request: unknown;
+  error: string | null;
+}
+export interface L27Writes { rows: L27Write[]; counts: { total: number; day: number; done: number }; allow_writes: boolean }
+
 export interface QaCopyStatus {
   env: string;
   can_send: boolean;
@@ -322,6 +337,7 @@ export const inbox = {
   saveTeams: (teams: Team[]) => call<void>('PUT', '/admin/teams', { teams }),
   createQueue: (name: string, description?: string) => call<QueueSettings>('POST', '/admin/queues', { name, description }),
   updateQueue: (id: number, patch: Partial<QueueSettings>) => call<QueueSettings>('PATCH', `/admin/queues/${id}`, patch),
+  l27Writes: (before?: number) => call<L27Writes>('GET', `/admin/l27-writes?limit=100${before ? `&before=${before}` : ''}`),
   qaCopy: () => call<QaCopyStatus>('GET', '/admin/qa-copy'),
   sendQaCopy: () => call<{ job: QaCopyStatus['job'] }>('POST', '/admin/qa-copy'),
   clearQaCopy: () => call<void>('DELETE', '/admin/qa-copy'),
