@@ -656,6 +656,38 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   }));
 
   // ---------- admin: every change sent to Launch27 ----------
+  // ---------- brands (Residential / Commercial) ----------
+  // Everyone reads the setup (their screens filter by it); admins change it.
+  r.get('/brands', wrap(async (req, res) => {
+    const brands = (await db.query('SELECT slug, name, color, signature FROM brands ORDER BY position')).rows;
+    const overrides = Object.fromEntries((await db.query('SELECT location_id, brand FROM brand_locations')).rows.map((x) => [String(x.location_id), x.brand]));
+    const people = (await db.query("SELECT id, email, name, role, brand FROM users WHERE active IS NOT FALSE ORDER BY lower(coalesce(name, email))")).rows;
+    res.json({ brands, overrides, me: { id: req.user.id, brand: req.user.brand || null }, people: people.map((p) => ({ id: p.id, email: p.email, name: p.name, role: p.role, brand: p.brand || null })) });
+  }));
+  const brandSlug = async (v) => {
+    if (v === null || v === undefined || v === '') return null;
+    const b = await one(db, 'SELECT slug FROM brands WHERE slug = $1', [String(v)]);
+    if (!b) throw Object.assign(new Error('Unknown brand'), { status: 400 });
+    return b.slug;
+  };
+  r.put('/brands/locations/:id', needRole('admin'), wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Bad location id' });
+    let brand;
+    try { brand = await brandSlug(req.body?.brand); } catch (err) { return res.status(err.status || 400).json({ error: err.message }); }
+    await db.query('INSERT INTO brand_locations (location_id, location_name, brand, set_by) VALUES ($1, $2, $3, $4) ON CONFLICT (location_id) DO UPDATE SET location_name = EXCLUDED.location_name, brand = EXCLUDED.brand, set_by = EXCLUDED.set_by, set_at = now()', [id, req.body?.name ? String(req.body.name).slice(0, 200) : null, brand, req.user.id]);
+    await svc.audit(db, req.user.id, 'brand.location', 'location', id, { brand, name: req.body?.name || null });
+    res.json({ location_id: id, brand });
+  }));
+  r.put('/brands/people/:id', needRole('admin'), wrap(async (req, res) => {
+    let brand;
+    try { brand = await brandSlug(req.body?.brand); } catch (err) { return res.status(err.status || 400).json({ error: err.message }); }
+    const u = await one(db, 'UPDATE users SET brand = $2 WHERE id = $1 RETURNING id, brand', [Number(req.params.id), brand]);
+    if (!u) return res.status(404).json({ error: 'No such person' });
+    await svc.audit(db, req.user.id, 'brand.person', 'user', u.id, { brand });
+    res.json({ id: u.id, brand: u.brand || null });
+  }));
+
   r.get('/admin/l27-writes', needRole('admin'), wrap(async (req, res) => {
     if (!writes) return res.json({ rows: [], counts: { total: 0, day: 0, done: 0 }, allow_writes: config.allowWrites });
     res.json({ ...(await writes.list({ limit: req.query.limit, before: req.query.before })), allow_writes: config.allowWrites });

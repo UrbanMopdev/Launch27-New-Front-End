@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { BrandSwitcher } from '../brands/ui';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { auth } from '../api';
@@ -149,6 +150,8 @@ export function Layout({ email }: { email: string }) {
             <kbd>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
           </button>
         </div>
+
+        <BrandSwitcher />
 
         <nav>
           {NAV.map((group) => {
