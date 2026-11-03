@@ -267,6 +267,25 @@ describe('schedule: sync, plan, assign, changes', () => {
     assert.ok(!items.some((i) => i.title === 'Old noise'), 'old open items are cleared');
   });
 
+  test('a QA copy arriving is noticed, and reset clears the planner for a clean rebuild', async () => {
+    const w = world();
+    const db = await openDb();
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    let tag = 2;
+    const s = createSchedule({ db, config, fetchImpl: w.fetchImpl, log: quiet, now: () => NOW, dataTag: () => tag });
+    await s.sync();
+    assert.equal(await s.dataChanged(), false);
+    tag = 'qa:2026-11-03T01:57:09Z';
+    assert.equal(await s.dataChanged(), true, 'sample-stamped snapshot vs a QA copy');
+    await s.reset();
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM schedule_snapshots')).rows[0].n, 0);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM schedule_changes WHERE resolved_at IS NULL')).rows[0].n, 0);
+    await s.sync();
+    assert.equal(await s.dataChanged(), false, 'stamped with the copy after the rebuild');
+    const live = createSchedule({ db, config: loadConfig({ APP_ENV: 'production', NODE_ENV: 'production', L27_MODE: 'live' }), fetchImpl: w.fetchImpl, log: quiet });
+    await assert.rejects(() => live.reset(), /only for sample/);
+  });
+
   test('quick refresh: next 14 days every few minutes; moved further out reads as moved, not cancelled', async () => {
     const w = world();
     const db = await openDb();
@@ -314,5 +333,25 @@ describe('schedule: sync, plan, assign, changes', () => {
     await s.maybeRun();
     assert.match(warnings[0], /L27_SYNC_EMAIL/);
     await assert.rejects(() => s.overview(), /not been loaded yet/);
+  });
+});
+
+describe('QA copy: cleaner hours come from their visits', () => {
+  test('working days and hours inferred in Toronto time; no visits means a weekday 9 to 5', async () => {
+    const { copyAvailability } = await import('../src/mock/launch27.js');
+    const { createMockLaunch27 } = await import('../src/mock/launch27.js');
+    const visit = (id, date, hourUtc, dur, team) => ({ id, active: true, service_date: `${date}T${String(hourUtc).padStart(2, '0')}:00:00Z`, duration: dur, teams: [{ id: team }] });
+    const bookings = [
+      visit(1, '2026-11-02', 13, 180, 77), visit(2, '2026-11-09', 18, 120, 77), // Mondays 8am and 1pm Toronto
+      visit(3, '2026-11-04', 14, 240, 77), visit(4, '2026-11-11', 14, 240, 77), // Wednesdays 9am
+      visit(5, '2026-11-06', 14, 180, 77), visit(6, '2026-11-07', 14, 180, 77), // a Friday and a Saturday, once each
+    ];
+    const f = createMockLaunch27({ snapshot: () => ({ teams: [{ id: 77, title: '(1) A B' }, { id: 78, title: '(1) C D' }], customers: [], bookings, services: {}, locations: [] }) });
+    const get = async (id) => (await f(`https://x.launch27.com/v1/staff/teams/${id}/availability`, { headers: { authorization: 'Bearer mock-bearer' } })).json();
+    const a = await get(77);
+    assert.deepEqual(a.filter((d) => !d.dayoff).map((d) => [d.weekday, d.start_time, d.end_time]), [[1, '08:00', '15:00'], [3, '09:00', '13:00']]);
+    const b = await get(78);
+    assert.deepEqual(b.filter((d) => !d.dayoff).map((d) => d.weekday), [1, 2, 3, 4, 5]);
+    assert.equal(typeof copyAvailability, 'function');
   });
 });

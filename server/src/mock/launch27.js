@@ -100,6 +100,44 @@ export function mockAvailability(teamId) {
   return [0, 1, 2, 3, 4, 5, 6].map((d) => ({ id: Number(teamId) * 10 + d, date: null, weekday: d, dayoff: !pattern.includes(d), start_time: pattern.includes(d) ? start : null, end_time: pattern.includes(d) ? end : null }));
 }
 
+// The QA copy has no availability: infer each cleaner's working days and hours from the
+// visits they actually have in it (Toronto time). Days worked at least twice count when
+// they have plenty of visits; cleaners with none get a plain weekday 9 to 5.
+const TORONTO = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', weekday: 'short', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' });
+const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+function hoursFromVisits(bookings) {
+  const byTeam = new Map(); // id -> weekday -> { n, start, end } in minutes
+  for (const b of bookings) {
+    if (b.active === false || !b.service_date) continue;
+    const parts = Object.fromEntries(TORONTO.formatToParts(new Date(b.service_date)).map((x) => [x.type, x.value]));
+    const wd = WD[parts.weekday];
+    const start = Number(parts.hour) * 60 + Number(parts.minute);
+    const end = start + (Number(b.duration) || Number(b.blocked_duration) || 180);
+    for (const t of b.teams || []) {
+      const days = byTeam.get(t.id) || byTeam.set(t.id, new Map()).get(t.id);
+      const d = days.get(wd) || { n: 0, start: Infinity, end: 0 };
+      d.n += 1;
+      d.start = Math.min(d.start, start);
+      d.end = Math.max(d.end, end);
+      days.set(wd, d);
+    }
+  }
+  return byTeam;
+}
+export function copyAvailability(teamId, hoursByTeam) {
+  const days = hoursByTeam.get(Number(teamId));
+  const total = days ? [...days.values()].reduce((a, d) => a + d.n, 0) : 0;
+  const min = total >= 6 ? 2 : 1;
+  const hhmm = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+  return [0, 1, 2, 3, 4, 5, 6].map((wd) => {
+    const d = days?.get(wd);
+    const works = days ? !!d && d.n >= min : wd >= 1 && wd <= 5;
+    const start = d ? Math.max(6 * 60, Math.floor(d.start / 60) * 60) : 9 * 60;
+    const end = d ? Math.min(21 * 60, Math.max(start + 4 * 60, Math.ceil(d.end / 60) * 60)) : 17 * 60;
+    return { id: Number(teamId) * 10 + wd, date: null, weekday: wd, dayoff: !works, start_time: works ? hhmm(start) : null, end_time: works ? hhmm(end) : null };
+  });
+}
+
 function buildTeams() {
   const r = rng(42);
   return Array.from({ length: 14 }, (_, i) => {
@@ -258,6 +296,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
   let snap = null;
   let snapByDay = new Map();
   let snapById = new Map();
+  let snapHours = new Map();
   function syncSnapshot() {
     const s = snapshot();
     if (s === snap) return;
@@ -273,6 +312,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
         snapByDay.get(d).push(b);
         snapById.set(b.id, b);
       }
+      snapHours = hoursFromVisits(s.bookings);
     } else {
       teams = genTeams;
       customers = genCustomers;
@@ -617,7 +657,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     // Teams
     if (path === '/v1/staff/teams') return [200, page(teams, q)];
     if (path === '/v1/staff/teams/count') return [200, { count: teams.length }];
-    if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) return [200, mockAvailability(m[1])];
+    if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) return [200, snap ? copyAvailability(m[1], snapHours) : mockAvailability(m[1])];
     if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)$/))) return (t => (t ? [200, t] : [404, { error: 'Not found' }]))(teams.find((t) => t.id === Number(m[1])));
 
     // Customers
