@@ -25,7 +25,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -655,6 +655,12 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json(row);
   }));
 
+  // ---------- admin: every change sent to Launch27 ----------
+  r.get('/admin/l27-writes', needRole('admin'), wrap(async (req, res) => {
+    if (!writes) return res.json({ rows: [], counts: { total: 0, day: 0, done: 0 }, allow_writes: config.allowWrites });
+    res.json({ ...(await writes.list({ limit: req.query.limit, before: req.query.before })), allow_writes: config.allowWrites });
+  }));
+
   // ---------- admin: QA copy of real data (contact details masked) ----------
 
   r.get('/admin/qa-copy', needRole('admin'), wrap(async (req, res) => {
@@ -832,7 +838,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     }));
     r.post('/schedule/find-slots', sched(async (req, res) => res.json(await schedule.findSlots(req.body || {}))));
     r.post('/schedule/assign', sched(async (req, res) => {
-      const out = await schedule.assign(req.body || {}, req.bearer);
+      const out = await schedule.assign(req.body || {}, req.bearer, req.user.email);
       await svc.audit(db, req.user.id, 'schedule.assign', 'cleaner', req.body?.cleaner_id, { visits: (req.body?.visit_keys || []).length });
       res.json(out);
     }));
