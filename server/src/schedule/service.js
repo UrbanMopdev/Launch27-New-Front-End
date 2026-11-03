@@ -404,21 +404,25 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     if (lastRun === undefined) lastRun = (await db.query('SELECT * FROM schedule_runs ORDER BY id DESC LIMIT 1')).rows[0] || null;
     return lastRun;
   }
-  async function maybeRun() {
+  // Called by the background worker, and (with the viewer's own Launch27 login) whenever
+  // someone has the planner open, so it stays fresh even without a dedicated sync login.
+  // Only reads from Launch27.
+  async function maybeRun({ bearer = null } = {}) {
     if (running) return;
     const last = await latestRun();
     const t = now();
     if (last?.status === 'failed' && t - new Date(last.started_at).getTime() < 10 * 60_000) return;
-    if (config.l27Mode !== 'mock' && !(config.l27SyncEmail && config.l27SyncPassword)) {
-      if (!warnedNoCreds) log.warn('schedule: no automatic refresh until L27_SYNC_EMAIL and L27_SYNC_PASSWORD are set (use "Refresh now")');
+    if (!bearer && config.l27Mode !== 'mock' && !(config.l27SyncEmail && config.l27SyncPassword)) {
+      if (!warnedNoCreds) log.warn('schedule: no background refresh until L27_SYNC_EMAIL and L27_SYNC_PASSWORD are set; it refreshes while someone has the planner open');
       warnedNoCreds = true;
       return;
     }
     const s = await load();
     const fullAge = s ? t - new Date(s.full_at || s.taken_at).getTime() : Infinity;
     const anyAge = s ? t - new Date(s.taken_at).getTime() : Infinity;
-    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today()) start({ trigger: s ? 'auto' : 'boot', kind: 'full' });
-    else if (anyAge >= NEAR_EVERY_MS) start({ trigger: 'auto', kind: 'near' });
+    const trigger = bearer ? 'viewer' : s ? 'auto' : 'boot';
+    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today()) start({ bearer: bearer || undefined, trigger, kind: 'full' });
+    else if (anyAge >= NEAR_EVERY_MS) start({ bearer: bearer || undefined, trigger, kind: 'near' });
   }
 
   // ---------- reads ----------
