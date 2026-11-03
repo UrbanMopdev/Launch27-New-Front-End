@@ -192,3 +192,29 @@ describe('QA copy: build, receive, serve', () => {
     assert.equal(qa.qaSnapshotUrl, null);
   });
 });
+
+describe('QA copy without forecasts: future recurring visits are rebuilt', () => {
+  test('repeats each live series on its rhythm with its cleaner, never doubles a date, skips stopped series', async () => {
+    const { forecastMissing } = await import('../src/mock/launch27.js');
+    const b = (id, user, date, freq, team) => ({ id, user: { id: user }, frequency: { name: freq }, service_date: `${date}T14:00:00Z`, active: true, teams: [{ id: team }] });
+    const copy = {
+      created_at: '2026-11-03T12:00:00Z',
+      window: { from: '2026-09-04', to: '2026-12-31' },
+      bookings: [
+        b(1, 10, '2026-11-02', 'Biweekly - 10% off', 7), // biweekly Monday with cleaner 7
+        b(2, 10, '2026-11-30', 'Biweekly - 10% off', 7), // already in the copy: must not be doubled
+        b(3, 11, '2026-11-04', 'Monthly', 8),
+        b(4, 12, '2026-09-07', 'Weekly', 9), // stopped in September
+        b(5, 13, '2026-11-05', 'One time', 9),
+      ],
+    };
+    const f = forecastMissing(copy);
+    const dates = (u) => f.filter((x) => x.user.id === u).map((x) => x.service_date.slice(0, 10));
+    assert.deepEqual(dates(10), ['2026-12-14', '2026-12-28'], 'from the latest visit, every 2 weeks');
+    assert.deepEqual(dates(11), ['2026-12-02', '2026-12-30']);
+    assert.deepEqual(dates(12), []);
+    assert.deepEqual(dates(13), []);
+    assert.ok(f.every((x) => x.id === null && x.forecasted_from_booking.id && x.teams.length === 1 && !x.completed));
+    assert.equal(f.find((x) => x.user.id === 10).teams[0].id, 7, 'keeps the cleaner');
+  });
+});
