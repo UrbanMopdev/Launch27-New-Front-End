@@ -37,7 +37,7 @@ if (qaStore) await qaStore.load();
 const fetchImpl = config.l27Mode === 'mock' ? createMockLaunch27({ password: config.mockPassword, snapshot: () => qaStore?.current() || null }) : fetch;
 const qaSender = createQaSender({ config, fetchImpl, log });
 const segments = createSegments({ db, config, fetchImpl, log });
-const schedule = createSchedule({ db, config, fetchImpl, log, dataTag: () => (qaStore?.summary()?.created_at ? `qa:${qaStore.summary().created_at}` : SAMPLE_VERSION) });
+const schedule = createSchedule({ db, config, fetchImpl, log, dataTag: () => (qaStore?.summary()?.created_at ? `qa:${qaStore.summary().created_at}:forecasts1` : SAMPLE_VERSION) });
 const reports = createReports({ db, config, fetchImpl, schedule, log });
 const jobs = { consecutiveFailures: 0, lastSuccessAt: null, lastError: null };
 onQaChange = (why) => {
