@@ -328,7 +328,7 @@ function filterQuotes(list, q) {
   });
 }
 
-// snapshot: optional () => anonymized copy of real data (QA). When it returns a copy,
+// snapshot: optional () => copy of real data with contact details masked (QA). When it returns a copy,
 // that data is served instead of the generated synthetic data.
 export function createMockLaunch27({ password = 'demo', now = () => Date.now(), snapshot = () => null } = {}) {
   const genTeams = buildTeams();

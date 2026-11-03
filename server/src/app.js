@@ -172,7 +172,7 @@ export function createApp(
     if (cid) await segments.refreshCustomer(bearer, cid);
   }
 
-  // QA only: receive an anonymized copy of production data from production.
+  // QA only: receive the copy of production data (contact details masked) from production.
   if (config.qaSnapshotReceive && qa.store) {
     app.put('/qa/snapshot', express.json({ limit: '300mb' }), async (req, res) => {
       const auth = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');

@@ -1,104 +1,58 @@
-// Turns a pull of real Launch27 data into a QA copy with no personal information.
+// Turns a pull of real Launch27 data into the QA copy.
 //
 // Approach: allow-list. Each object is rebuilt field by field; anything not listed is
-// dropped, so a new personal field Launch27 adds later can never leak through.
+// dropped, so a new field Launch27 adds later can never come through unnoticed.
 //
-// Replaced: customer and cleaner names, emails, phones, street addresses, exact
-// coordinates (shifted by a few hundred metres), every free-text field (notes, comments,
-// booking-question "Other" text, adjustment and cancellation reasons, rating comments),
-// card last 4 digits, payment processor ids, staff names.
-// Kept: dates/times, services, rooms, extras, frequencies, prices, discounts,
-// adjustments, tips, totals, ratings, cleaner assignments, check-in/out times,
-// booking/customer/cleaner ids, locations, city, first 3 characters of the postal code.
+// What is masked (decided Nov 3, 2026: the team knows its clients and cleaners, so QA
+// mirrors them except for the ways to contact them):
+// - emails -> customer<id>@example.com / cleaner<id>@example.com
+// - phone numbers -> fake (613) 555 numbers
+// - any email or phone typed inside notes, tags, comments or reasons
+// - card numbers (brand and expiry only) and payment processor ids
+// Kept as in production: names, company names, addresses, postal codes, map locations,
+// notes, tags, comments, staff names, and everything about bookings (dates, services,
+// prices, frequencies, cleaners, check-in/out, ratings).
 
 import { createHmac, randomBytes } from 'node:crypto';
 
-const FIRST = ['Avery', 'Jordan', 'Taylor', 'Morgan', 'Riley', 'Casey', 'Quinn', 'Jamie', 'Drew', 'Reese', 'Skyler', 'Rowan', 'Emerson', 'Hayden', 'Parker', 'Sage', 'Logan', 'Blake', 'Cameron', 'Dakota', 'Alex', 'Robin', 'Jesse', 'Kendall', 'Shawn', 'Remy', 'Ari', 'Noor', 'Kai', 'Lee'];
-const LAST = ['Tremblay', 'Martin', 'Roy', 'Gagnon', 'Lee', 'Wilson', 'Johnson', 'MacDonald', 'Taylor', 'Campbell', 'Anderson', 'Smith', 'Brown', 'Leblanc', 'Clark', 'Young', 'Wright', 'Scott', 'Morin', 'Fortin', 'Singh', 'Nguyen', 'Chen', 'Patel', 'Cote', 'Bouchard', 'Ahmed', 'Kim', 'Lopez', 'Moreau'];
-const STREETS = ['Maple Ave', 'Cedar St', 'Birch Cres', 'Elm Dr', 'Willow Way', 'Oak St', 'Pine Rd', 'Spruce Ct', 'Aspen Pl', 'Linden Ave', 'Poplar St', 'Juniper Dr'];
-
 export const NOTE = 'Note removed for QA';
-
-// True for values the anonymizer itself produces (fake names and streets). A real
-// person who happens to share a fake name is not a leak.
-const FAKE_NAMES = new Set(FIRST.flatMap((f) => LAST.map((l) => `${f} ${l}`.toLowerCase())));
-const FAKE_STREET = new RegExp(`^\\d+ (${STREETS.join('|')})$`, 'i');
-export function isGeneratedValue(s) {
-  const v = String(s).trim().toLowerCase();
-  return FAKE_NAMES.has(v) || FAKE_STREET.test(v) || v === NOTE.toLowerCase();
-}
+export const EMAIL_MASK = '[email removed]';
+export const PHONE_MASK = '[phone removed]';
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
-const PHONE_RE = /\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
 
-// First and last names of everyone in the data (lower case, 3+ letters), used to spot
-// tags that name a person ("Prefers Marc", "Do not assign …").
-export function personTokens({ customers = [], teams = [] }) {
-  const out = new Set();
-  for (const p of [...customers, ...teams]) {
-    for (const part of [p.first_name, p.last_name, ...(String(p.title || '').split(/\s+/))]) {
-      for (const w of String(part || '').toLowerCase().split(/[^a-zà-ÿ'-]+/)) if (w.length >= 3) out.add(w);
-    }
-  }
-  return out;
+// Masks emails and phone numbers inside free text; everything else in the text stays.
+const EMAIL_ALL = new RegExp(EMAIL_RE.source, 'g');
+const PHONE_ALL = /(\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
+export function maskContacts(v) {
+  if (v === null || v === undefined) return v ?? null;
+  return String(v).replace(EMAIL_ALL, EMAIL_MASK).replace(PHONE_ALL, PHONE_MASK);
 }
 
-// Tags are typed by staff, so treat them like notes: keep a tag only when it holds no
-// name, email or phone; otherwise replace it with a neutral label of the same kind.
-export function cleanTag(name, people = new Set()) {
-  const text = String(name || '');
-  const words = text.toLowerCase().split(/[^a-zà-ÿ'-]+/).filter(Boolean);
-  const personal = EMAIL_RE.test(text) || PHONE_RE.test(text) || words.some((w) => people.has(w));
-  if (!personal) return text;
-  if (/(not|never|don'?t|avoid).{0,20}(assign|send|book)|do not/i.test(text)) return 'Do not assign a specific cleaner';
-  if (/prefer|request|favou?rite|only/i.test(text)) return 'Prefers a specific cleaner';
-  return 'Tag removed for QA';
-}
-
-export function createAnonymizer(salt = randomBytes(16).toString('hex'), people = new Set()) {
-  const tags = (list) => (list || []).map((t) => ({ id: t.id, name: cleanTag(t.name, people), color: t.color, type: t.type }));
+export function createAnonymizer(salt = randomBytes(16).toString('hex')) {
+  const tags = (list) => (list || []).map((t) => ({ id: t.id, name: maskContacts(t.name), color: t.color, type: t.type }));
   const h = (kind, id) => createHmac('sha256', salt).update(`${kind}:${id}`).digest();
-  const pick = (arr, buf, i) => arr[buf[i] % arr.length];
-  const person = (kind, id) => {
-    const b = h(kind, id);
-    return { first: pick(FIRST, b, 0), last: pick(LAST, b, 1) };
-  };
   const phone = (kind, id) => {
     const b = h(`${kind}-phone`, id);
     return `(613) 555-${String(1000 + (b.readUInt16BE(2) % 9000)).padStart(4, '0')}`;
   };
-  const street = (kind, id) => {
-    const b = h(`${kind}-street`, id);
-    return `${10 + (b.readUInt16BE(4) % 980)} ${pick(STREETS, b, 6)}`;
-  };
-  // Shift a coordinate by roughly 200–600 m in a stable direction.
-  const jitter = (kind, id, lat, lng) => {
-    if (lat === null || lat === undefined || lng === null || lng === undefined) return { latitude: null, longitude: null };
-    const b = h(`${kind}-geo`, id);
-    const dist = 0.002 + (b[8] / 255) * 0.004;
-    const ang = (b[9] / 255) * Math.PI * 2;
-    return { latitude: Number(lat) + Math.sin(ang) * dist, longitude: Number(lng) + Math.cos(ang) * dist * 1.4 };
-  };
-  const fsa = (zip) => (zip ? `${String(zip).replace(/\s/g, '').slice(0, 3).toUpperCase()} 0A0` : null);
-  const text = (v) => (v && String(v).trim() ? NOTE : v ?? null);
 
   function customer(c) {
-    const p = person('customer', c.id);
-    const geo = jitter('customer', c.id, c.latitude, c.longitude);
     return {
       id: c.id,
-      first_name: p.first,
-      last_name: p.last,
-      company_name: c.company_name ? `${p.last} Property Co.` : null,
+      first_name: c.first_name ?? null,
+      last_name: c.last_name ?? null,
+      company_name: c.company_name ?? null,
       email: `customer${c.id}@example.com`,
       has_generated_email: false,
       phone: phone('customer', c.id),
-      address: street('customer', c.id),
+      address: maskContacts(c.address),
       city: c.city ?? null,
       state: c.state ?? null,
-      zip: fsa(c.zip),
-      ...geo,
-      notes: text(c.notes),
+      zip: c.zip ?? null,
+      latitude: c.latitude ?? null,
+      longitude: c.longitude ?? null,
+      notes: maskContacts(c.notes),
       active: c.active,
       confirmed: c.confirmed,
       is_new_customer: c.is_new_customer,
@@ -109,23 +63,20 @@ export function createAnonymizer(salt = randomBytes(16).toString('hex'), people 
   }
 
   function team(t) {
-    const p = person('team', t.id);
-    const geo = jitter('team', t.id, t.latitude, t.longitude);
-    // Titles often carry a prefix like "(PT) " or "ON HOLD": keep it, replace the name.
-    const prefix = String(t.title || '').match(/^(\s*(\([^)]*\)|ON HOLD)\s*)+/i)?.[0] || '';
     return {
       id: t.id,
-      title: `${prefix}${p.first} ${p.last}`,
-      first_name: p.first,
-      last_name: p.last,
+      title: maskContacts(t.title),
+      first_name: t.first_name ?? null,
+      last_name: t.last_name ?? null,
       email: `cleaner${t.id}@example.com`,
       phone: phone('team', t.id),
-      address: street('team', t.id),
+      address: maskContacts(t.address),
       city: t.city ?? null,
       state: t.state ?? null,
-      zip: fsa(t.zip),
-      ...geo,
-      notes: text(t.notes),
+      zip: t.zip ?? null,
+      latitude: t.latitude ?? null,
+      longitude: t.longitude ?? null,
+      notes: maskContacts(t.notes),
       active: t.active,
       confirmed: t.confirmed,
       bg_color: t.bg_color,
@@ -139,10 +90,7 @@ export function createAnonymizer(salt = randomBytes(16).toString('hex'), people 
     };
   }
 
-  const teamName = (id) => {
-    const p = person('team', id);
-    return `${p.first} ${p.last}`;
-  };
+
   const card = (pm) => (pm ? { code: pm.code, text: pm.brand ? `${pm.brand} - 0000` : pm.code === 'stripe' ? 'card - 0000' : pm.text && /\d{4}/.test(pm.text) ? pm.text.replace(/\d{4}/g, '0000') : pm.text, brand: pm.brand } : null);
 
   function charge(ch) {
@@ -151,10 +99,7 @@ export function createAnonymizer(salt = randomBytes(16).toString('hex'), people 
 
   function booking(b) {
     const u = b.user || {};
-    const p = u.id ? person('customer', u.id) : { first: 'Guest', last: 'Customer' };
     const addr = b.address || {};
-    const geo = jitter('customer', u.id ?? b.id, addr.latitude, addr.longitude);
-    const st = u.id ? street('customer', u.id) : street('booking', b.id);
     const services = (b.services || []).map((s) => ({
       id: s.id,
       name: s.name,
@@ -179,31 +124,30 @@ export function createAnonymizer(salt = randomBytes(16).toString('hex'), people 
       duration: b.duration,
       blocked_duration: b.blocked_duration,
       created_at: b.created_at,
-      created_by: b.created_by ? { id: b.created_by.id, name: 'Office staff' } : null,
+      created_by: b.created_by ? { id: b.created_by.id, name: b.created_by.name ?? null } : null,
       location: b.location ? { id: b.location.id, name: b.location.name } : null,
       frequency: b.frequency ? { id: b.frequency.id, interval: b.frequency.interval, name: b.frequency.name } : null,
       first_recurring: b.first_recurring,
-      user: u.id ? { id: u.id, name: `${p.first} ${p.last}`, first_name: p.first, last_name: p.last, email: `customer${u.id}@example.com`, is_new_customer: u.is_new_customer } : null,
+      user: u.id ? { id: u.id, name: u.name ?? null, first_name: u.first_name ?? null, last_name: u.last_name ?? null, company_name: u.company_name ?? null, email: `customer${u.id}@example.com`, is_new_customer: u.is_new_customer, tags_info: tags(u.tags_info) } : null,
       phone: u.id ? phone('customer', u.id) : null,
-      address: { full_address: `${st}, ${addr.city || ''}${addr.state ? `, ${addr.state}` : ''} ${fsa(addr.zip) || ''}`.trim(), street: st, city: addr.city ?? null, state: addr.state ?? null, zip: fsa(addr.zip), ...geo },
+      address: { full_address: maskContacts(addr.full_address), street: maskContacts(addr.street), city: addr.city ?? null, state: addr.state ?? null, zip: addr.zip ?? null, latitude: addr.latitude ?? null, longitude: addr.longitude ?? null },
       services,
       summary: b.summary,
-      discount_info: { frequency_amount: di.frequency_amount, discount_amount: di.discount_amount, discount_code: di.discount_code ? 'QACODE' : undefined, giftcard_amount: di.giftcard_amount },
-      price_adjustment_comment: text(b.price_adjustment_comment),
+      discount_info: { frequency_amount: di.frequency_amount, discount_amount: di.discount_amount, discount_code: di.discount_code ?? undefined, giftcard_amount: di.giftcard_amount },
+      price_adjustment_comment: maskContacts(b.price_adjustment_comment),
       payment_method_info: card(b.payment_method_info),
-      custom_fields: (b.custom_fields || []).map((f) => ({ id: f.id, title: f.title, type: f.type, values: (f.values || []).map((v) => ({ id: v.id, label: v.label, name: v.name, other: v.other ? NOTE : '' })) })),
-      staff_notes: text(b.staff_notes),
-      customer_notes: text(b.customer_notes),
-      teams: (b.teams || []).map((t) => ({ id: t.id, title: teamName(t.id), share: t.share, hours: t.hours, earned: t.earned, bg_color: t.bg_color, fg_color: t.fg_color })),
+      custom_fields: (b.custom_fields || []).map((f) => ({ id: f.id, title: f.title, type: f.type, values: (f.values || []).map((v) => ({ id: v.id, label: v.label, name: v.name, other: maskContacts(v.other || '') })) })),
+      staff_notes: maskContacts(b.staff_notes),
+      customer_notes: maskContacts(b.customer_notes),
+      teams: (b.teams || []).map((t) => ({ id: t.id, title: maskContacts(t.title), share: t.share, hours: t.hours, earned: t.earned, bg_color: t.bg_color, fg_color: t.fg_color })),
       team_requested_id: b.team_requested_id ?? null,
       team_with_key_id: b.team_with_key_id ?? null,
       time_tracking: (b.time_tracking || []).map((x) => {
-        const g = jitter('checkin', `${b.id}-${x.id}`, x.checkin_latitude, x.checkin_longitude);
-        return { id: x.id, team: x.team ? { id: x.team.id, title: teamName(x.team.id) } : null, state: x.state, enroute_started_at: x.enroute_started_at, enroute_finished_at: x.enroute_finished_at, checkin_at: x.checkin_at, checkout_at: x.checkout_at, checkin_latitude: g.latitude, checkin_longitude: g.longitude, distance: x.distance };
+        return { id: x.id, team: x.team ? { id: x.team.id, title: maskContacts(x.team.title) } : null, state: x.state, enroute_started_at: x.enroute_started_at, enroute_finished_at: x.enroute_finished_at, checkin_at: x.checkin_at, checkout_at: x.checkout_at, checkin_latitude: x.checkin_latitude ?? null, checkin_longitude: x.checkin_longitude ?? null, distance: x.distance };
       }),
       charges: b.charges ? { charged: (b.charges.charged || []).map(charge), onhold: (b.charges.onhold || []).map(charge), refunded: (b.charges.refunded || []).map(charge), marked_paid: (b.charges.marked_paid || []).map(charge), outstanding: b.charges.outstanding } : undefined,
-      feedback: b.feedback ? { rating: b.feedback.rating, stars: b.feedback.stars, rated_at: b.feedback.rated_at, comment: b.feedback.comment ? NOTE : null } : null,
-      cancellation: b.cancellation ? { fee: b.cancellation.fee, date: b.cancellation.date, reason: text(b.cancellation.reason), cancelled_by: { name: 'Office staff' } } : undefined,
+      feedback: b.feedback ? { rating: b.feedback.rating, stars: b.feedback.stars, rated_at: b.feedback.rated_at, comment: maskContacts(b.feedback.comment) } : null,
+      cancellation: b.cancellation ? { fee: b.cancellation.fee, date: b.cancellation.date, reason: maskContacts(b.cancellation.reason), cancelled_by: { name: b.cancellation.cancelled_by?.name ?? null } } : undefined,
       actions: b.actions,
       tip_recurring: b.tip_recurring,
       price_adjustment_recurring: b.price_adjustment_recurring,
@@ -218,41 +162,27 @@ export function createAnonymizer(salt = randomBytes(16).toString('hex'), people 
 }
 
 // Strings from the real data that must never appear in the copy.
+// The real emails and phone numbers in a pull: none of them may appear in the copy. (Names,
+// addresses and notes are meant to come through, so they are not checked.)
 export function sensitiveStrings({ customers = [], teams = [], bookings = [] }) {
   const out = new Set();
-  const add = (v, min = 4) => {
-    const s = String(v ?? '').trim();
-    if (s.length >= min) out.add(s.toLowerCase());
+  const addEmail = (v) => {
+    const s = String(v ?? '').trim().toLowerCase();
+    if (s.includes('@') && !s.endsWith('@example.com')) out.add(s);
   };
   const addPhone = (v) => {
     const d = String(v ?? '').replace(/\D/g, '');
     // The fake numbers use the 555 exchange, so a real 555 number would match by chance.
     if (d.length >= 7 && !d.slice(-7).startsWith('555')) out.add(d.slice(-7));
   };
-  for (const c of customers) {
-    add(c.email, 6);
-    add(c.address, 6);
-    addPhone(c.phone);
-    if (c.first_name && c.last_name) add(`${c.first_name} ${c.last_name}`, 6);
-    add(c.notes, 12);
-  }
-  for (const t of teams) {
-    add(t.email, 6);
-    add(t.address, 6);
-    addPhone(t.phone);
-    if (t.first_name && t.last_name) add(`${t.first_name} ${t.last_name}`, 6);
+  for (const p of [...customers, ...teams]) {
+    addEmail(p.email);
+    addPhone(p.phone);
   }
   for (const b of bookings) {
-    add(b.user?.email, 6);
-    add(b.user?.name, 6);
-    add(b.address?.street, 6);
+    addEmail(b.user?.email);
     addPhone(b.phone);
-    add(b.staff_notes, 12);
-    add(b.customer_notes, 12);
-    add(b.feedback?.comment, 12);
-    add(b.price_adjustment_comment, 12);
   }
-  for (const v of [...out]) if (isGeneratedValue(v)) out.delete(v);
   return out;
 }
 
@@ -313,7 +243,7 @@ export function assertAnonymous(copy, originals = null) {
   if (hits) problems.push(`${hits} real value(s) from Launch27 still present`);
   if (problems.length) {
     const where = fieldList(paths);
-    throw new Error(`QA copy is not anonymous: ${problems.join('; ')}${where.length ? `. Fields: ${where.join(', ')}` : ''}`);
+    throw new Error(`QA copy still has contact details: ${problems.join('; ')}${where.length ? `. Fields: ${where.join(', ')}` : ''}`);
   }
   return true;
 }
