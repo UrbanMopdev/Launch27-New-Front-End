@@ -84,10 +84,10 @@ export function createSegments({ db, config, fetchImpl = fetch, log = { info() {
   async function upsertRows(q, rows) {
     for (let i = 0; i < rows.length; i += CHUNK) {
       await q.query(
-        `INSERT INTO customer_segments (customer_id, name, email, phone, city, segment, traits, since, ever_plan, plan, last_clean, next_clean, last_prepaid, first_plan, spend_12m, cleans_12m, computed_at)
-         SELECT x.customer_id, x.name, x.email, x.phone, x.city, x.segment, ARRAY(SELECT jsonb_array_elements_text(x.traits)), x.since, x.ever_plan, x.plan, x.last_clean, x.next_clean, x.last_prepaid, x.first_plan, x.spend_12m, x.cleans_12m, now()
-         FROM jsonb_to_recordset($1::jsonb) AS x(customer_id bigint, name text, email text, phone text, city text, segment text, traits jsonb, since date, ever_plan boolean, plan text, last_clean date, next_clean date, last_prepaid date, first_plan date, spend_12m numeric, cleans_12m integer)
-         ON CONFLICT (customer_id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, phone = EXCLUDED.phone, city = EXCLUDED.city, segment = EXCLUDED.segment, traits = EXCLUDED.traits,
+        `INSERT INTO customer_segments (customer_id, name, email, phone, city, segment, traits, since, ever_plan, plan, last_clean, next_clean, last_prepaid, first_plan, spend_12m, cleans_12m, location_ids, computed_at)
+         SELECT x.customer_id, x.name, x.email, x.phone, x.city, x.segment, ARRAY(SELECT jsonb_array_elements_text(x.traits)), x.since, x.ever_plan, x.plan, x.last_clean, x.next_clean, x.last_prepaid, x.first_plan, x.spend_12m, x.cleans_12m, ARRAY(SELECT jsonb_array_elements_text(coalesce(x.location_ids, '[]'::jsonb))::bigint), now()
+         FROM jsonb_to_recordset($1::jsonb) AS x(customer_id bigint, name text, email text, phone text, city text, segment text, traits jsonb, since date, ever_plan boolean, plan text, last_clean date, next_clean date, last_prepaid date, first_plan date, spend_12m numeric, cleans_12m integer, location_ids jsonb)
+         ON CONFLICT (customer_id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, phone = EXCLUDED.phone, city = EXCLUDED.city, segment = EXCLUDED.segment, traits = EXCLUDED.traits, location_ids = EXCLUDED.location_ids,
            since = EXCLUDED.since, ever_plan = EXCLUDED.ever_plan, plan = EXCLUDED.plan, last_clean = EXCLUDED.last_clean, next_clean = EXCLUDED.next_clean, last_prepaid = EXCLUDED.last_prepaid,
            first_plan = EXCLUDED.first_plan, spend_12m = EXCLUDED.spend_12m, cleans_12m = EXCLUDED.cleans_12m, computed_at = now()`,
         [JSON.stringify(rows.slice(i, i + CHUNK))],
@@ -173,7 +173,7 @@ export function createSegments({ db, config, fetchImpl = fetch, log = { info() {
         const list = groups.get(cid) || [];
         const prevRow = stored.get(cid);
         const r = classify(list, today, { settings, everPlan: !!prevRow?.ever_plan, cancelled: cancels.get(cid) || 0 });
-        if (!list.length && prevRow) Object.assign(r, { name: prevRow.name, email: prevRow.email, phone: prevRow.phone, city: prevRow.city, first_plan: prevRow.first_plan, last_clean: dateStr(prevRow.last_clean) });
+        if (!list.length && prevRow) Object.assign(r, { name: prevRow.name, email: prevRow.email, phone: prevRow.phone, city: prevRow.city, first_plan: prevRow.first_plan, last_clean: dateStr(prevRow.last_clean), location_ids: (prevRow.location_ids || []).map(Number) });
         const before = prevRow?.segment || baseline.get(cid) || 'new';
         const unchanged = before === r.segment;
         const since = unchanged ? (dateStr(prevRow?.since) || sinceMap.get(cid) || today) : today;
@@ -234,7 +234,7 @@ export function createSegments({ db, config, fetchImpl = fetch, log = { info() {
     const prev = (await db.query('SELECT * FROM customer_segments WHERE customer_id = $1', [cid])).rows[0];
     const slim = list.map(slimBooking).filter((b) => b.customer_id == null || Number(b.customer_id) === cid);
     const r = classify(slim, today, { settings, everPlan: !!prev?.ever_plan, cancelled: Number(cancelled?.count) || 0 });
-    if (!slim.length && prev) Object.assign(r, { name: prev.name, email: prev.email, phone: prev.phone, city: prev.city });
+    if (!slim.length && prev) Object.assign(r, { name: prev.name, email: prev.email, phone: prev.phone, city: prev.city, location_ids: (prev.location_ids || []).map(Number) });
     const before = prev?.segment || 'new';
     const since = before === r.segment && prev?.since ? dateStr(prev.since) : today;
     await db.tx(async (q) => {
@@ -255,13 +255,18 @@ export function createSegments({ db, config, fetchImpl = fetch, log = { info() {
     return null;
   }
 
-  async function summary({ bearer } = {}) {
-    const counts = (await db.query('SELECT segment, count(*)::int AS n, coalesce(sum(spend_12m),0)::float AS revenue FROM customer_segments GROUP BY segment')).rows;
-    const traits = (await db.query('SELECT t AS trait, count(*)::int AS n FROM customer_segments, unnest(traits) AS t GROUP BY t')).rows;
+  // locations: Launch27 location ids of one brand (from the brand switcher); null = everyone.
+  const locIds = (locations) => (Array.isArray(locations) && locations.length ? locations.map(Number).filter(Number.isFinite) : null);
+  async function summary({ bearer, locations = null } = {}) {
+    const ids = locIds(locations);
+    const lw = ids ? 'WHERE location_ids && $1::bigint[]' : '';
+    const lp = ids ? [ids] : [];
+    const counts = (await db.query(`SELECT segment, count(*)::int AS n, coalesce(sum(spend_12m),0)::float AS revenue FROM customer_segments ${lw} GROUP BY segment`, lp)).rows;
+    const traits = (await db.query(`SELECT t AS trait, count(*)::int AS n FROM customer_segments, unnest(traits) AS t ${lw} GROUP BY t`, lp)).rows;
     const total = counts.reduce((s, r) => s + r.n, 0);
     const revenue = counts.reduce((s, r) => s + r.revenue, 0);
     let launch27Customers = null;
-    if (bearer) launch27Customers = await get(bearer, '/v1/staff/customers/count', {}).then((r) => Number(r?.count) || null).catch(() => null);
+    if (bearer && !ids) launch27Customers = await get(bearer, '/v1/staff/customers/count', {}).then((r) => Number(r?.count) || null).catch(() => null);
     const ok = await lastSuccess();
     const last = await latestRun();
     return {
@@ -280,11 +285,16 @@ export function createSegments({ db, config, fetchImpl = fetch, log = { info() {
     };
   }
 
-  async function customers({ segment, traits = [], q, limit = 50, offset = 0 } = {}) {
+  async function customers({ segment, traits = [], q, limit = 50, offset = 0, locations = null } = {}) {
     const settings = await getSettings();
     const today = torontoDate(now());
     const params = [];
     const where = [];
+    const ids = locIds(locations);
+    if (ids) {
+      params.push(ids);
+      where.push(`s.location_ids && $${params.length}::bigint[]`);
+    }
     if (segment) {
       params.push(segment);
       where.push(`s.segment = $${params.length}`);
@@ -321,7 +331,7 @@ export function createSegments({ db, config, fetchImpl = fetch, log = { info() {
 
   const d = dateStr;
   function present(r, today, settings) {
-    const row = { customer_id: Number(r.customer_id), name: r.name, email: r.email, phone: r.phone, city: r.city, segment: r.segment, traits: r.traits || [], since: d(r.since), plan: r.plan, last_clean: d(r.last_clean), next_clean: d(r.next_clean), last_prepaid: d(r.last_prepaid), spend_12m: Number(r.spend_12m) || 0, cleans_12m: r.cleans_12m };
+    const row = { customer_id: Number(r.customer_id), location_ids: (r.location_ids || []).map(Number), name: r.name, email: r.email, phone: r.phone, city: r.city, segment: r.segment, traits: r.traits || [], since: d(r.since), plan: r.plan, last_clean: d(r.last_clean), next_clean: d(r.next_clean), last_prepaid: d(r.last_prepaid), spend_12m: Number(r.spend_12m) || 0, cleans_12m: r.cleans_12m };
     const s = suggestion(row, today, settings);
     return {
       ...row,

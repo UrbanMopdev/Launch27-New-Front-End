@@ -811,10 +811,12 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
         throw err;
       }
     });
-    r.get('/segments/summary', segErr(async (req, res) => res.json(await segments.summary({ bearer: req.bearer }))));
+    // ?locations=1,2,3: one brand's Launch27 locations (the brand switcher).
+    const locs = (req) => (req.query.locations ? String(req.query.locations).split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0) : null);
+    r.get('/segments/summary', segErr(async (req, res) => res.json(await segments.summary({ bearer: req.bearer, locations: locs(req) }))));
     r.get('/segments/customers', segErr(async (req, res) => {
       const traits = String(req.query.traits || '').split(',').map((t) => t.trim()).filter(Boolean);
-      res.json(await segments.customers({ segment: req.query.segment || null, traits, q: req.query.q || null, limit: req.query.limit, offset: req.query.offset }));
+      res.json(await segments.customers({ segment: req.query.segment || null, traits, q: req.query.q || null, limit: req.query.limit, offset: req.query.offset, locations: locs(req) }));
     }));
     r.get('/segments/customer/:id', segErr(async (req, res) => {
       const row = await segments.customer(Number(req.params.id));
