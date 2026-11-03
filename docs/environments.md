@@ -56,29 +56,33 @@ Dev and QA never contain real customer data:
   15 sample support conversations from synthetic customers and cleaners into an empty
   inbox at startup, once per database (`server/src/sample/inbox.js`); more can be sent from the Channel
   simulator. `SAMPLE_DATA` is ignored in production.
-- **QA can show an anonymized copy of real data** (approved Nov 1, 2026). Production
-  builds it (Support settings → QA data → "Send a fresh copy to QA"), using the admin's
-  own Launch27 login: the last 60 and next 60 days of bookings with all customers and
-  cleaners. Before anything leaves production, `server/src/qa/anonymize.js` rebuilds
-  every record from an allow-list, so unknown fields are dropped:
-  - replaced: customer and cleaner names, emails, phones, street addresses; coordinates
-    shifted a few hundred metres; postal code cut to its first 3 characters; every
-    free-text field (notes, comments, booking-question "Other" text, adjustment and
-    cancellation reasons, rating comments) → "Note removed for QA"; card last 4 → 0000;
-    payment processor ids and discount code names removed; staff names → "Office staff"
-  - kept: dates and times, services, rooms, extras, frequencies, prices, discounts,
-    adjustments, tips, totals, ratings, cleaner assignments, check-in/out times, ids,
-    locations, city
+- **QA can show a copy of real data with contact details masked** (approved Nov 1, 2026;
+  changed Nov 3, 2026 to keep names, addresses, notes and tags, because the team knows its
+  clients and cleaners and tests with them). Production builds it (Support settings → QA
+  data → "Send a fresh copy to QA"), using the admin's own Launch27 login: the last 60
+  and next 60 days of bookings (including Launch27's forecast of future recurring visits)
+  with all customers and cleaners. Before anything leaves production,
+  `server/src/qa/anonymize.js` rebuilds every record from an allow-list, so unknown
+  fields are dropped:
+  - masked: emails → `customer<id>@example.com` / `cleaner<id>@example.com`; phone
+    numbers → fake (613) 555 numbers; any email or phone typed inside notes, tags,
+    comments, booking answers or reasons → "[email removed]" / "[phone removed]"; card
+    last 4 → 0000; payment processor ids removed
+  - kept as in production: names, company names, addresses, postal codes, map locations,
+    notes, tags, comments, staff names, discount codes, and all booking details (dates,
+    services, prices, frequencies, cleaner assignments, check-in/out, ratings)
   - checked twice: production refuses to send, and QA refuses to store, a copy with any
-    non-example.com email, non-555 phone, payment id, or any real name, email, phone,
-    street or note from the source (the error names the field, never the value)
+    non-example.com email, non-555 phone or payment id, or any real email or phone from
+    the source (the error names the field, never the value)
+  - **QA now holds real names and home addresses: limit who can sign in to QA to the
+    people who use production**, and treat QA's database like production's.
   - QA never holds Launch27 credentials; edits in QA stay in QA. QA keeps the last two
     copies; "Go back to sample data" deletes them.
   - Setup: the same random `QA_SNAPSHOT_TOKEN` (32+ chars) in production and staging,
     and `QA_SNAPSHOT_URL` (the QA site's address) in production only.
-- **Never** restore a production backup into dev or staging. There is no approved
-  anonymization process; if one is needed later, it must be designed, reviewed and
-  documented here first.
+- **Never** restore a production backup into dev or staging: it would carry real emails
+  and phone numbers (and QA must never be able to text or email anyone real). The QA
+  copy above is the only approved way to get production data into QA.
 - Dev/QA services have no variable that references the production database, and Railway
   private networking doesn't cross environments.
 
@@ -109,7 +113,7 @@ its own `SESSION_SECRET`; never copy one between environments.
   rebuilds the past 12 months (month ends) from booking history, marked as estimated.
 - Right away for one customer when a booking is made, changed or cancelled through this app.
 - On demand: admins click "Update now" on the Customers page (uses their own login).
-- Dev and QA run the same sync against their own synthetic Launch27 (QA: the anonymized
+- Dev and QA run the same sync against their own synthetic Launch27 (QA: the
   copy when one is loaded), so the numbers there are not real.
 
 ## Scheduling planner: how fresh it is

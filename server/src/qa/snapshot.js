@@ -1,6 +1,7 @@
-// Builds the anonymized QA copy from live Launch27 (run in production only).
+// Builds the QA copy from live Launch27 (run in production only): real names, addresses
+// and notes; emails, phone numbers and card numbers masked.
 // get(path, query) fetches from Launch27 with the signed-in admin's token.
-import { assertAnonymous, createAnonymizer, personTokens, sensitiveStrings } from './anonymize.js';
+import { assertAnonymous, createAnonymizer, sensitiveStrings } from './anonymize.js';
 
 const DAY = 86_400_000;
 const iso = (t) => new Date(t).toISOString().slice(0, 10);
@@ -58,8 +59,8 @@ export async function buildSnapshot(get, { now = Date.now(), daysBack = 60, days
     }
   }
 
-  log('anonymizing', { bookings: bookings.length, customers: customers.length, teams: teams.length });
-  const a = createAnonymizer(undefined, personTokens({ customers, teams }));
+  log('masking contact details', { bookings: bookings.length, customers: customers.length, teams: teams.length });
+  const a = createAnonymizer();
   const copy = {
     version: 1,
     created_at: new Date(now).toISOString(),
@@ -78,14 +79,8 @@ export async function buildSnapshot(get, { now = Date.now(), daysBack = 60, days
   // Configuration can also hold text typed by staff; scrub any help text.
   for (const f of copy.custom_fields) delete f.help_text;
   const originals = sensitiveStrings({ customers, teams, bookings });
-  // Cities and location names are kept on purpose; some records hold a city in the street
-  // field, which would otherwise look like a leak.
-  const places = [...copy.customers, ...copy.teams].map((x) => x.city).concat(copy.bookings.map((b) => b.address?.city), copy.locations.map((l) => l.name));
-  for (const p of places) if (p) originals.delete(String(p).trim().toLowerCase());
-  // Kept tags already passed the no-names / no-contact-details rule (cleanTag), so a note
-  // typed with exactly the same words ("Prefers female cleaner") is generic, not a leak.
-  for (const x of [...copy.customers, ...copy.teams]) for (const t of x.tags_info || []) originals.delete(String(t.name).trim().toLowerCase());
   if (!check) return { copy, originals, raw: { customers, teams, bookings } }; // tests and diagnostics only
+  // Nothing leaves production with a real email or phone number in it.
   assertAnonymous(copy, originals);
   return copy;
 }

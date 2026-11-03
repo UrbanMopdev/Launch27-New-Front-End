@@ -655,7 +655,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json(row);
   }));
 
-  // ---------- admin: anonymized QA copy of real data ----------
+  // ---------- admin: QA copy of real data (contact details masked) ----------
 
   r.get('/admin/qa-copy', needRole('admin'), wrap(async (req, res) => {
     res.json({
