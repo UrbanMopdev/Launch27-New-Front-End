@@ -1643,3 +1643,31 @@ i.rep-cell { width: 14px; height: 14px; }
   :root:not([data-theme="light"]) .wl-off, :root:not([data-theme="light"]) .wl-done { background: #173a27; color: #b5ecc9; }
   :root:not([data-theme="light"]) .wl-refused { background: #3d2e10; color: #ffd98a; }
 }
+
+/* Brands: switcher (sidebar) and labels */
+.brand-switch { display: flex; gap: 2px; margin: 4px 10px 10px; padding: 2px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+.brand-seg { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; padding: 4px 6px; letter-spacing: -0.01em; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.brand-seg.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
+.brand-seg .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brand-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.brand-dot.residential { background: #0b7a75; }
+.brand-dot.commercial { background: #3846a3; }
+.nav-collapsed .brand-switch { flex-direction: column; margin: 4px 8px 10px; }
+.nav-collapsed .brand-seg .label { display: none; }
+.nav-collapsed .brand-seg:last-child .label { display: inline; font-size: 11px; }
+.brand-pill { display: inline-block; font-size: 12px; font-weight: 600; line-height: 1.6; padding: 0 8px; border-radius: 999px; white-space: nowrap; vertical-align: middle; }
+.brand-pill.residential { background: #e3f3f1; color: #075c58; }
+.brand-pill.commercial { background: #e8eaf8; color: #2b3785; }
+.brand-pill.shared { background: #fff1d6; color: #7a4a00; }
+.brand-pill.none { background: #fdecec; color: #8f1d1d; }
+.brand-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 13.5px; color: var(--text-2); }
+.brands-loc { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border, #e3e7ec); }
+.brands-loc .name { flex: 1 1 220px; font-weight: 600; }
+.brands-warn { background: #fff6e5; border: 1px solid #f2d9a6; color: #5c4200; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand-pill.residential { background: #0f3b39; color: #a8e6df; }
+  :root:not([data-theme="light"]) .brand-pill.commercial { background: #24295a; color: #c9cff7; }
+  :root:not([data-theme="light"]) .brand-pill.shared { background: #3d2e10; color: #ffd98a; }
+  :root:not([data-theme="light"]) .brand-pill.none { background: #4a1d1d; color: #ffc9c9; }
+  :root:not([data-theme="light"]) .brands-warn { background: #3d2e10; border-color: #6b5220; color: #ffe2a8; }
+}

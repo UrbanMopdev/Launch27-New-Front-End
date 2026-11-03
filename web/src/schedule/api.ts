@@ -7,6 +7,7 @@ export type CleanerStatus = 'active' | 'new' | 'not_ready' | 'off_schedule' | 'o
 
 export interface Cleaner {
   id: number;
+  location_ids?: number[];
   name: string;
   status: CleanerStatus;
   status_label: string;
@@ -25,6 +26,7 @@ export interface Cleaner {
 export interface Visit {
   key: string;
   id: number | null;
+  location_id?: number | null;
   date: string;
   start: number;
   duration: number;
@@ -142,7 +144,7 @@ export interface Change {
   detail: Record<string, unknown> & { why?: string; hours?: string; with?: string[]; from_label?: string; to_label?: string; when_label?: string; duration?: number; from_names?: string[]; to_names?: string[]; main?: string; booked?: string[]; affected_visits?: Visit[] };
   created_at: string;
   visit: (Visit & { end: string; services: string[] }) | null;
-  cleaner: { id: number; name: string; status: string; hours: string | null; working: boolean } | null;
+  cleaner: { id: number; location_ids?: number[]; name: string; status: string; hours: string | null; working: boolean } | null;
   client: ClientInfo | null;
   suggestions: Candidate[];
   series: { count: number; when: string; first: string; last: string; visit_keys: string[]; projected: number } | null;

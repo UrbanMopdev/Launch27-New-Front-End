@@ -275,6 +275,28 @@ describe('/api end to end', () => {
     await db.close();
   });
 
+  test('brands: everyone reads the setup; admins map locations and people; bad brands are refused', async () => {
+    const first = await api('/api/brands');
+    assert.equal(first.status, 200);
+    assert.deepEqual(first.body.brands.map((b) => b.slug), ['residential', 'commercial']);
+    assert.deepEqual(first.body.overrides, {});
+    assert.equal((await api('/api/brands/locations/42', { brand: 'commercial', name: 'Kingston' }, 'PUT')).status, 200);
+    assert.equal((await api('/api/brands/locations/43', { brand: null, name: 'Test' }, 'PUT')).status, 200);
+    assert.equal((await api('/api/brands/locations/44', { brand: 'luxury' }, 'PUT')).status, 400);
+    const me = first.body.me.id;
+    assert.equal((await api(`/api/brands/people/${me}`, { brand: 'residential' }, 'PUT')).status, 200);
+    const after = (await api('/api/brands')).body;
+    assert.deepEqual(after.overrides, { 42: 'commercial', 43: null });
+    assert.equal(after.me.brand, 'residential');
+    await api(`/api/brands/people/${me}`, { brand: null }, 'PUT');
+    // A non-admin can read but not change.
+    const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'agent2@urbanmop.ca', password: 'x' }) });
+    const agent = login.headers.get('set-cookie').split(';')[0];
+    const as = (path, body, method) => fetch(`${base}${path}`, { method, headers: { cookie: agent, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    assert.equal((await as('/api/brands', null, 'GET')).status, 200);
+    assert.equal((await as('/api/brands/locations/42', { brand: 'residential' }, 'PUT')).status, 403);
+  });
+
   test('requires login', async () => {
     assert.equal((await fetch(`${base}/api/me`)).status, 401);
   });

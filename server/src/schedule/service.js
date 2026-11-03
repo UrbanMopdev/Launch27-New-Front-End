@@ -36,6 +36,7 @@ export function slimVisit(b) {
     key,
     id: b.id || null,
     series_id: b.forecasted_from_booking?.id || null,
+    location_id: Number(b.location?.id ?? b.location_id) || null,
     date,
     start,
     duration,
@@ -431,7 +432,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     if (!s) throw Object.assign(new Error('The schedule has not been loaded yet. It loads automatically within a few minutes, or click "Refresh now".'), { status: 409 });
     return s;
   }
-  const cleanerOut = (c) => ({ id: c.id, lat: c.lat, lng: c.lng, name: c.name, status: c.status, status_label: STATUS_LABEL[c.status], assignable: c.assignable, is_new: c.isNew, gender: c.gender, hours_type: c.hoursType, color: c.color, area: c.area, phone: c.phone, weekly_hours: c.weekly_hours, tags: c.tags, rules: c.rules });
+  const cleanerOut = (c) => ({ id: c.id, location_ids: c.location_ids || [], lat: c.lat, lng: c.lng, name: c.name, status: c.status, status_label: STATUS_LABEL[c.status], assignable: c.assignable, is_new: c.isNew, gender: c.gender, hours_type: c.hoursType, color: c.color, area: c.area, phone: c.phone, weekly_hours: c.weekly_hours, tags: c.tags, rules: c.rules });
 
   async function status() {
     const last = await latestRun();
@@ -477,7 +478,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   }
 
   const visitOut = (s, v) => ({
-    key: v.key, id: v.id, date: v.date, start: v.start, duration: v.duration, time: clock(v.start), customer_id: v.customer_id, customer: v.customer,
+    key: v.key, id: v.id, location_id: v.location_id ?? null, date: v.date, start: v.start, duration: v.duration, time: clock(v.start), customer_id: v.customer_id, customer: v.customer,
     area: v.area, freq: FREQ_LABEL[v.kind], kind: v.kind, prepaid: v.prepaid, weeks: v.weeks, projected: !v.id,
     cleaners: v.team_ids.map((id) => ({ id, name: s.byId.get(id)?.name || 'Unknown' })),
   });
@@ -665,7 +666,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       const c = r.cleaner_id != null ? s.byId.get(Number(r.cleaner_id)) : null;
       const day = v?.date || dateStr(r.due);
       const w = c && day ? windowFor(c, day) : null;
-      const cleaner = c ? { id: c.id, name: c.name, status: STATUS_LABEL[c.status], hours: w ? `${clock(w[0])}–${clock(w[1])}` : null, working: !!w } : null;
+      const cleaner = c ? { id: c.id, location_ids: c.location_ids || [], name: c.name, status: STATUS_LABEL[c.status], hours: w ? `${clock(w[0])}–${clock(w[1])}` : null, working: !!w } : null;
       const detail = { ...(r.detail || {}) };
       if (r.kind === 'availability' && Array.isArray(detail.affected)) detail.affected_visits = detail.affected.map((k) => s.visits.find((x) => x.key === k)).filter(Boolean).map((x) => visitOut(s, x));
       if (r.kind === 'moved' && detail.from) detail.from_label = `${nice(detail.from.date)} at ${clock(detail.from.start)}`;

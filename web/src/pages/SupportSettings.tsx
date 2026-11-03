@@ -8,9 +8,10 @@ import { ago, useInboxMe, useMeta } from '../inbox/util';
 import { DurationInput, Switch } from '../inbox/settingsUi';
 import { formatMinutes } from '../lib/routingRules';
 import { RulesEditor } from './RoutingRules';
+import { BrandsSettings } from '../brands/BrandsSettings';
 import { AgentsSettings, HoursSettings, PoliciesSettings, QaCopySettings, QueuesSettings, StatusesSettings, TeamsSettings } from './WorkforceSettings';
 
-type Tab = 'rules' | 'queues' | 'sla' | 'hours' | 'policies' | 'agents' | 'teams' | 'statuses' | 'canned' | 'history' | 'writes' | 'qa';
+type Tab = 'rules' | 'queues' | 'sla' | 'hours' | 'policies' | 'agents' | 'teams' | 'statuses' | 'canned' | 'history' | 'writes' | 'qa' | 'brands';
 
 const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }[] }[] = [
   {
@@ -34,6 +35,10 @@ const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }
   {
     title: 'Replies',
     items: [{ id: 'canned', label: 'Saved replies', desc: 'Shortcuts for common answers' }],
+  },
+  {
+    title: 'Company',
+    items: [{ id: 'brands', label: 'Brands', desc: 'Residential and Commercial: locations and people' }],
   },
   {
     title: 'Activity',
@@ -117,6 +122,7 @@ export function InboxSettingsPage() {
           {tab === 'statuses' && <StatusesSettings canEdit={canEdit} />}
           {tab === 'canned' && <CannedEditor canEdit={canEdit} />}
           {tab === 'history' && <HistoryPanel />}
+          {tab === 'brands' && <BrandsSettings canEdit={isAdmin} />}
           {tab === 'writes' && (isAdmin ? <WritesLog /> : <div className="muted">Only admins can see the list of changes sent to Launch27.</div>)}
           {tab === 'qa' && <QaCopySettings canEdit={isAdmin} />}
         </div>
