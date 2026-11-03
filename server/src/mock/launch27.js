@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { priceBooking, r2 } from './pricing.js';
+import { FREQ_DAYS, frequencyKind } from '../schedule/rules.js';
 // Synthetic, in-process stand-in for the Launch27 API (L27_MODE=mock).
 //
 // Development and QA run against this instead of the real tenant: Launch27 holds real
@@ -125,6 +126,46 @@ function hoursFromVisits(bookings) {
   }
   return byTeam;
 }
+// Copies made before forecasts were kept hold only the bookings Launch27 has created, so future
+// recurring visits thin out after a few weeks. Rebuild them the way Launch27 forecasts: each
+// recurring client's latest visit repeats on its rhythm (same weekday, time and cleaner) up to the
+// end of the copy. Dates where that client already has a visit are left alone, so a copy that
+// does carry forecasts gets nothing extra.
+export function forecastMissing(copy) {
+  const end = String(copy.window?.to || '').slice(0, 10);
+  const made = Date.parse(copy.created_at || '') || Date.now();
+  if (!end) return [];
+  const day = (iso) => TORONTO_DAY.format(new Date(iso));
+  const taken = new Set();
+  const series = new Map(); // customer + frequency + weekday + time -> latest visit
+  for (const b of copy.bookings || []) {
+    if (!b.service_date || !b.user?.id) continue;
+    taken.add(`${b.user.id}|${day(b.service_date)}`);
+    if (b.active === false || b.cancellation) continue;
+    const step = FREQ_DAYS[frequencyKind(b.frequency?.name)];
+    if (!step) continue;
+    const parts = Object.fromEntries(TORONTO.formatToParts(new Date(b.service_date)).map((x) => [x.type, x.value]));
+    const k = `${b.user.id}|${b.frequency?.name}|${parts.weekday}|${parts.hour}:${parts.minute}`;
+    const cur = series.get(k);
+    if (!cur || b.service_date > cur.service_date) series.set(k, b);
+  }
+  const out = [];
+  for (const b of series.values()) {
+    const step = FREQ_DAYS[frequencyKind(b.frequency?.name)];
+    // A series whose last visit is more than two gaps before the copy was made has stopped.
+    if (Date.parse(b.service_date) < made - 2 * step * 86_400_000) continue;
+    for (let n = 1; n < 60; n++) {
+      const at = new Date(Date.parse(b.service_date) + n * step * 86_400_000);
+      const d = day(at.toISOString());
+      if (d > end) break;
+      if (taken.has(`${b.user.id}|${d}`)) continue;
+      taken.add(`${b.user.id}|${d}`);
+      out.push({ ...b, id: null, forecasted_from_booking: { id: b.forecasted_from_booking?.id || b.id }, service_date: at.toISOString().replace('.000Z', 'Z'), completed: false, time_tracking: [], feedback: null, charges: undefined, cancellation: undefined, created_at: b.created_at });
+    }
+  }
+  return out;
+}
+
 export function copyAvailability(teamId, hoursByTeam) {
   const days = hoursByTeam.get(Number(teamId));
   const total = days ? [...days.values()].reduce((a, d) => a + d.n, 0) : 0;
@@ -307,7 +348,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       customers = s.customers.map((c) => ({ ...c }));
       snapByDay = new Map();
       snapById = new Map();
-      for (const b of s.bookings) {
+      for (const b of [...s.bookings, ...forecastMissing(s)]) {
         const d = b.service_date ? TORONTO_DAY.format(new Date(b.service_date)) : '';
         if (!snapByDay.has(d)) snapByDay.set(d, []);
         snapByDay.get(d).push(b);
