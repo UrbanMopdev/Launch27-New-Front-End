@@ -408,5 +408,14 @@ export function createSegments({ db, config, fetchImpl = fetch, log = { info() {
     };
   }
 
-  return { sync, start, maybeRun, refreshCustomer, summary, customers, customer, logOutcome, segmentStats, trends, getSettings, saveSettings, isRunning: () => !!running, OUTCOMES };
+  // QA/dev only: a new QA copy (or back to sample data) means a different set of customers;
+  // drop the old history so the next run rebuilds it from the new bookings.
+  async function reset() {
+    if (config.l27Mode !== 'mock') throw new Error('reset is only for sample/QA data');
+    if (running) await running;
+    await db.tx(async (q) => {
+      for (const t of ['segment_outcomes', 'segment_changes', 'segment_daily', 'customer_segments']) await q.query(`DELETE FROM ${t}`);
+    });
+  }
+  return { reset, sync, start, maybeRun, refreshCustomer, summary, customers, customer, logOutcome, segmentStats, trends, getSettings, saveSettings, isRunning: () => !!running, OUTCOMES };
 }
