@@ -57,7 +57,8 @@ export function slimVisit(b) {
   };
 }
 
-export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {}, warn() {}, error() {} }, now = () => Date.now() }) {
+// dataTag (dev/QA): names the data underneath (sample version or QA copy) so a switch is noticed.
+export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {}, warn() {}, error() {} }, now = () => Date.now(), dataTag = () => SAMPLE_VERSION }) {
   let snap = null; // latest snapshot (in memory)
   let unavailable = new Map(); // cleanerId -> Set(dates)
   let running = null;
@@ -358,7 +359,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       const t = today();
       const loaded = await load();
       // Sample data (dev/QA only) was regenerated: start over rather than diffing against it.
-      const sample = config.l27Mode === 'mock' ? SAMPLE_VERSION : undefined;
+      const sample = config.l27Mode === 'mock' ? dataTag() : undefined;
       const restart = config.l27Mode === 'mock' && loaded && loaded.sample !== sample;
       const prev = restart ? null : loaded;
       const doNear = kind === 'near' && prev && prev.today === t;
@@ -883,6 +884,24 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return { cleaners: s.cleaners.map(cleanerOut).sort((a, b) => Number(b.assignable) - Number(a.assignable) || a.name.localeCompare(b.name)) };
   }
 
-  return { cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
+  // QA/dev only: the data underneath changed completely (a new QA copy, or back to sample
+  // data). Forget the stored snapshot and open items so nothing is compared across the switch.
+  // True when the stored snapshot was taken from different data than what is served now.
+  async function dataChanged() {
+    if (config.l27Mode !== 'mock') return false;
+    const loaded = await load();
+    return !!loaded && loaded.sample !== dataTag();
+  }
+  async function reset() {
+    if (config.l27Mode !== 'mock') throw new Error('reset is only for sample/QA data');
+    if (running) await running;
+    await db.tx(async (q) => {
+      await q.query('DELETE FROM schedule_snapshots');
+      await q.query("UPDATE schedule_changes SET resolved_at = now(), resolution = 'gone' WHERE resolved_at IS NULL");
+      await q.query('DELETE FROM schedule_unavailable');
+    });
+    snap = null;
+  }
+  return { reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
 }
 

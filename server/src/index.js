@@ -6,7 +6,7 @@ import { createApp } from './app.js';
 import { openDb } from './db/index.js';
 import { createLogger } from './log.js';
 import { createQaSender, createQaStore } from './qa/service.js';
-import { createMockLaunch27 } from './mock/launch27.js';
+import { createMockLaunch27, SAMPLE_VERSION } from './mock/launch27.js';
 import { SessionStore } from './sessions.js';
 import { seed } from './inbox/seed.js';
 import { loadSampleInbox } from './sample/inbox.js';
@@ -30,14 +30,26 @@ await seed(db);
 const sessions = new SessionStore({ db, secret: config.sessionSecret, log });
 // QA can serve an anonymized copy of production data (sent by production); otherwise the
 // synthetic Launch27 generates data.
-const qaStore = config.l27Mode === 'mock' && !config.production ? createQaStore({ db, log }) : null;
+// A new QA copy (or clearing it) swaps the data underneath: rebuild planner, segments and reports from it.
+let onQaChange = () => {};
+const qaStore = config.l27Mode === 'mock' && !config.production ? createQaStore({ db, log, onChange: (why) => onQaChange(why) }) : null;
 if (qaStore) await qaStore.load();
 const fetchImpl = config.l27Mode === 'mock' ? createMockLaunch27({ password: config.mockPassword, snapshot: () => qaStore?.current() || null }) : fetch;
 const qaSender = createQaSender({ config, fetchImpl, log });
 const segments = createSegments({ db, config, fetchImpl, log });
-const schedule = createSchedule({ db, config, fetchImpl, log });
+const schedule = createSchedule({ db, config, fetchImpl, log, dataTag: () => (qaStore?.summary()?.created_at ? `qa:${qaStore.summary().created_at}` : SAMPLE_VERSION) });
 const reports = createReports({ db, config, fetchImpl, schedule, log });
 const jobs = { consecutiveFailures: 0, lastSuccessAt: null, lastError: null };
+onQaChange = (why) => {
+  (async () => {
+    log.info('rebuilding planner, segments and reports for the new data', { why });
+    await schedule.reset();
+    await segments.reset();
+    await Promise.all([schedule.start({ trigger: 'qa-copy', kind: 'full' }), segments.start({ trigger: 'qa-copy' }), reports.start()]);
+  })().catch((err) => log.error('rebuild after QA copy failed', { error: err.message }));
+};
+// Started on different data than last time (new QA copy arrived while down, or sample data changed).
+if (await schedule.dataChanged()) onQaChange('data changed since last start');
 const app = createApp(config, { db, sessions, fetchImpl, log, jobs, qa: { store: qaStore, sender: qaSender }, segments, schedule, reports });
 if (config.sampleData && config.l27Mode === 'mock') {
   await loadSampleInbox(db, { fetchImpl, baseUrl: config.l27BaseUrl, log: (level, msg, fields) => log[level](msg, fields) }).catch((err) => log.error('sample inbox failed', { error: err.message }));

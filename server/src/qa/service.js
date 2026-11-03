@@ -4,7 +4,7 @@ import { assertAnonymous } from './anonymize.js';
 import { buildSnapshot, summarize } from './snapshot.js';
 
 // QA side: keeps the latest copy in Postgres and in memory for the synthetic Launch27.
-export function createQaStore({ db, log }) {
+export function createQaStore({ db, log, onChange = () => {} }) {
   let current = null;
   let currentSummary = null;
   return {
@@ -30,12 +30,14 @@ export function createQaStore({ db, log }) {
       current = copy;
       currentSummary = summary;
       log.info('received an anonymized QA copy', summary);
+      onChange('copy');
       return summary;
     },
     async clear() {
       await db.query('DELETE FROM qa_snapshots');
       current = null;
       currentSummary = null;
+      onChange('cleared');
     },
   };
 }
