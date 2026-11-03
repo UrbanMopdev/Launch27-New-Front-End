@@ -51,10 +51,16 @@ export function useBrand() {
     const b = cleanerBrands(ids);
     return !b.length || b.includes(view);
   }, [view, cleanerBrands]);
+  // The viewed brand's Launch27 location ids, for server-side filters (null = both brands).
+  const locationIds = useMemo(() => {
+    if (view === 'both') return null;
+    const ids = (locations.data || []).filter((l) => brandForLocation(l.id, l.name, overrides) === view).map((l) => l.id);
+    return ids.length ? ids : [0]; // a brand with no locations matches nothing, not everything
+  }, [view, locations.data, overrides]);
   const brands = data.data?.brands;
   const ready = !!data.data;
   return useMemo(
-    () => ({ view, setView: write, brands: brands || [], brandOf, cleanerBrands, showLocation, showCleaner, info: (slug: BrandSlug | null | undefined) => brands?.find((b) => b.slug === slug) || null, ready }),
-    [view, brands, brandOf, cleanerBrands, showLocation, showCleaner, ready],
+    () => ({ view, setView: write, brands: brands || [], brandOf, cleanerBrands, showLocation, showCleaner, info: (slug: BrandSlug | null | undefined) => brands?.find((b) => b.slug === slug) || null, ready, locationIds }),
+    [view, brands, brandOf, cleanerBrands, showLocation, showCleaner, ready, locationIds],
   );
 }

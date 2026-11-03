@@ -1,3 +1,4 @@
+import { useBrand } from '../brands/useBrand';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -21,9 +22,10 @@ export function SegmentPage() {
   const seg = segment as SegmentId;
   const [page, setPage] = useState(0);
   const me = useInboxMe();
-  const summary = useQuery({ queryKey: ['segments', 'summary'], queryFn: segmentsApi.summary });
+  const brand = useBrand();
+  const summary = useQuery({ queryKey: ['segments', 'summary', brand.locationIds], queryFn: () => segmentsApi.summary(brand.locationIds) });
   const stats = useQuery({ queryKey: ['segments', 'stats', seg], queryFn: () => segmentsApi.stats(seg) });
-  const list = useQuery({ queryKey: ['segments', 'customers', seg, '', '', page], queryFn: () => segmentsApi.customers({ segment: seg, limit: PAGE, offset: page * PAGE }), placeholderData: (prev) => prev });
+  const list = useQuery({ queryKey: ['segments', 'customers', seg, '', '', page, brand.locationIds], queryFn: () => segmentsApi.customers({ segment: seg, limit: PAGE, offset: page * PAGE, locations: brand.locationIds }), placeholderData: (prev) => prev });
   const s = summary.data;
   const st = stats.data;
   const n = st?.customers ?? 0;
