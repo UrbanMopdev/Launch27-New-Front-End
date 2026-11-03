@@ -28,7 +28,7 @@ const db = await openDb({ databaseUrl: config.databaseUrl, pgliteDir: config.pgl
 await seed(db);
 
 const sessions = new SessionStore({ db, secret: config.sessionSecret, log });
-// QA can serve an anonymized copy of production data (sent by production); otherwise the
+// QA can serve a copy of production data (contact details masked) (sent by production); otherwise the
 // synthetic Launch27 generates data.
 // A new QA copy (or clearing it) swaps the data underneath: rebuild planner, segments and reports from it.
 let onQaChange = () => {};

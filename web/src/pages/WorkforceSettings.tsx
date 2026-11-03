@@ -625,7 +625,7 @@ export function QaCopySettings({ canEdit }: { canEdit: boolean }) {
     <section className="card wf-policies">
       <div className="policy-row">
         <div className="grow">
-          <div className="strong">Anonymized copy of real data for QA</div>
+          <div className="strong">Copy of real data for QA (emails and phones masked)</div>
           <div className="muted small">
             Production copies the last 60 and next 60 days of bookings with customers and cleaners, replaces every name, email, phone, street address, note and card number, checks that nothing personal is left, and sends only that copy to QA. Prices, services, extras, times and assignments stay real. QA checks it again before using it, and changes made in QA never reach Launch27.
           </div>
@@ -649,7 +649,7 @@ export function QaCopySettings({ canEdit }: { canEdit: boolean }) {
       {d.receiving && (
         <div className="policy-row">
           <div className="grow">
-            {d.current ? <div><span className="strong">This QA site is showing the anonymized copy:</span> {describe(d.current)}</div> : <div className="muted">No copy yet: this site shows generated sample data. Send one from production (Support settings → QA data).</div>}
+            {d.current ? <div><span className="strong">This QA site is showing the copy of real data:</span> {describe(d.current)}</div> : <div className="muted">No copy yet: this site shows generated sample data. Send one from production (Support settings → QA data).</div>}
           </div>
           {canEdit && d.current && (
             <button type="button" className="secondary" onClick={() => run(async () => { await inbox.clearQaCopy(); queryClient.invalidateQueries(); })}>

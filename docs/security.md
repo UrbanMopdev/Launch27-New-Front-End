@@ -48,9 +48,12 @@ checks them on every deploy.
 
 ## Real data in QA
 
-QA can show an anonymized copy of production data (docs/environments.md → "Data in dev
-and QA"). Personal fields are replaced before the copy leaves production, it is checked
-on both sides, and QA never receives Launch27 credentials. The shared
+QA can show a copy of production data with real names, addresses, notes and tags, and
+with emails, phone numbers and card details masked (docs/environments.md → "Data in dev
+and QA"). Contact details are masked before the copy leaves production, it is checked on
+both sides, QA can never send texts or emails, and QA never receives Launch27
+credentials. Because QA holds real names and home addresses, access to QA must be limited
+like production's. The shared
 `QA_SNAPSHOT_TOKEN` only lets production write a copy into QA; it reads nothing.
 
 ## Customer segments
@@ -62,7 +65,7 @@ inbox, so **database backups must be on before relying on it**. It only reads fr
 In production the nightly run logs in as `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD`: use a
 dedicated Launch27 staff user with the least access Launch27 allows (it needs to list
 bookings and count customers). Dev and QA never use these (they sync from their own
-synthetic Launch27 or the anonymized copy).
+synthetic Launch27 or the QA copy).
 
 ## Logging without personal data
 

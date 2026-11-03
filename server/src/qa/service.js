@@ -12,7 +12,7 @@ export function createQaStore({ db, log, onChange = () => {} }) {
       const row = (await db.query('SELECT data, summary FROM qa_snapshots ORDER BY received_at DESC LIMIT 1')).rows[0];
       current = row?.data || null;
       currentSummary = row?.summary || null;
-      if (current) log.info('serving the anonymized QA copy', currentSummary);
+      if (current) log.info('serving the QA copy', currentSummary);
       return currentSummary;
     },
     current: () => current,
@@ -29,7 +29,7 @@ export function createQaStore({ db, log, onChange = () => {} }) {
       });
       current = copy;
       currentSummary = summary;
-      log.info('received an anonymized QA copy', summary);
+      log.info('received a QA copy', summary);
       onChange('copy');
       return summary;
     },
@@ -79,9 +79,9 @@ export function createQaSender({ config, fetchImpl = fetch, log }) {
           const body = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(`QA refused the copy (${res.status}): ${body.error || 'unknown error'}`);
           job = { state: 'done', started_at: job.started_at, finished_at: new Date().toISOString(), by, summary: body.summary || summarize(copy) };
-          log.info('sent an anonymized copy to QA', job.summary);
+          log.info('sent a copy to QA', job.summary);
         } catch (err) {
-          // Messages never contain personal data (the anonymity check reports field paths only).
+          // Messages never contain personal data (the contact-details check reports field paths only).
           job = { state: 'failed', started_at: job.started_at, finished_at: new Date().toISOString(), by, error: err.message };
           log.error('QA copy failed', { error: err.message });
         }
