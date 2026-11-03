@@ -15,7 +15,7 @@ const FORWARD_HEADERS = ['accept', 'content-type'];
 
 export function createApp(
   config,
-  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null, schedule = null, reports = null } = {},
+  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null, schedule = null, reports = null, writes = null } = {},
 ) {
   const app = express();
   // Behind Railway's (or any) HTTPS proxy: trust X-Forwarded-* so secure cookies work.
@@ -119,7 +119,10 @@ export function createApp(
     const session = sessions.get(req.signedCookies[COOKIE]);
     if (!session) return res.status(401).json({ error: 'Not logged in' });
 
-    if (req.method !== 'GET' && !config.allowWrites) {
+    const isWrite = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+    const logWrite = (entry) => (isWrite && writes ? writes.record({ email: session.email, source: 'app screens', method: req.method, path: req.url, body: req.body, ...entry }) : Promise.resolve());
+    if (isWrite && !config.allowWrites) {
+      await logWrite({ outcome: 'blocked', status: 403 });
       return res.status(403).json({ error: config.production ? 'Writes to Launch27 are turned off (set L27_ALLOW_WRITES=true)' : `Writes to the live Launch27 are blocked in ${config.appEnv}` });
     }
 
@@ -137,6 +140,7 @@ export function createApp(
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       });
     } catch (err) {
+      await logWrite({ outcome: 'failed', error: err.message });
       return res.status(502).json({ error: `Could not reach Launch27: ${err.message}` });
     }
 
@@ -148,6 +152,7 @@ export function createApp(
     const contentType = upstream.headers.get('content-type');
     if (contentType) res.type(contentType);
     const buf = Buffer.from(await upstream.arrayBuffer());
+    if (isWrite) await logWrite({ outcome: upstream.ok ? 'done' : 'refused', status: upstream.status, error: upstream.ok ? null : buf.toString('utf8').slice(0, 500) });
     res.send(buf);
     // A booking made, changed or cancelled here: recalculate that customer's segment now.
     if (schedule && upstream.ok && req.method !== 'GET' && req.path.startsWith('/v1/staff/bookings')) schedule.soon(session.bearer);
@@ -190,7 +195,7 @@ export function createApp(
   // The support workspace (conversations, contacts, routing). Needs a database.
   if (db) {
     const l27 = createL27Client({ baseUrl: config.l27BaseUrl, fetchImpl });
-    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule, reports }));
+    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule, reports, writes }));
   }
 
   // Last-resort error handler: log it (without personal data), answer generically.
