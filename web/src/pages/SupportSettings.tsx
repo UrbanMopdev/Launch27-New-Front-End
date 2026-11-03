@@ -39,7 +39,7 @@ const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }
     title: 'Activity',
     items: [
       { id: 'history', label: 'Change history', desc: 'Who changed what, and when' },
-      { id: 'qa', label: 'QA data', desc: 'Anonymized copy of real data for QA' },
+      { id: 'qa', label: 'QA data', desc: 'Copy of real data for QA (emails and phones masked)' },
     ],
   },
 ];

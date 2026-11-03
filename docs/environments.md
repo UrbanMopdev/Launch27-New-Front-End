@@ -56,29 +56,33 @@ Dev and QA never contain real customer data:
   15 sample support conversations from synthetic customers and cleaners into an empty
   inbox at startup, once per database (`server/src/sample/inbox.js`); more can be sent from the Channel
   simulator. `SAMPLE_DATA` is ignored in production.
-- **QA can show an anonymized copy of real data** (approved Nov 1, 2026). Production
-  builds it (Support settings → QA data → "Send a fresh copy to QA"), using the admin's
-  own Launch27 login: the last 60 and next 60 days of bookings with all customers and
-  cleaners. Before anything leaves production, `server/src/qa/anonymize.js` rebuilds
-  every record from an allow-list, so unknown fields are dropped:
-  - replaced: customer and cleaner names, emails, phones, street addresses; coordinates
-    shifted a few hundred metres; postal code cut to its first 3 characters; every
-    free-text field (notes, comments, booking-question "Other" text, adjustment and
-    cancellation reasons, rating comments) → "Note removed for QA"; card last 4 → 0000;
-    payment processor ids and discount code names removed; staff names → "Office staff"
-  - kept: dates and times, services, rooms, extras, frequencies, prices, discounts,
-    adjustments, tips, totals, ratings, cleaner assignments, check-in/out times, ids,
-    locations, city
+- **QA can show a copy of real data with contact details masked** (approved Nov 1, 2026;
+  changed Nov 3, 2026 to keep names, addresses, notes and tags, because the team knows its
+  clients and cleaners and tests with them). Production builds it (Support settings → QA
+  data → "Send a fresh copy to QA"), using the admin's own Launch27 login: the last 60
+  and next 60 days of bookings (including Launch27's forecast of future recurring visits)
+  with all customers and cleaners. Before anything leaves production,
+  `server/src/qa/anonymize.js` rebuilds every record from an allow-list, so unknown
+  fields are dropped:
+  - masked: emails → `customer<id>@example.com` / `cleaner<id>@example.com`; phone
+    numbers → fake (613) 555 numbers; any email or phone typed inside notes, tags,
+    comments, booking answers or reasons → "[email removed]" / "[phone removed]"; card
+    last 4 → 0000; payment processor ids removed
+  - kept as in production: names, company names, addresses, postal codes, map locations,
+    notes, tags, comments, staff names, discount codes, and all booking details (dates,
+    services, prices, frequencies, cleaner assignments, check-in/out, ratings)
   - checked twice: production refuses to send, and QA refuses to store, a copy with any
-    non-example.com email, non-555 phone, payment id, or any real name, email, phone,
-    street or note from the source (the error names the field, never the value)
+    non-example.com email, non-555 phone or payment id, or any real email or phone from
+    the source (the error names the field, never the value)
+  - **QA now holds real names and home addresses: limit who can sign in to QA to the
+    people who use production**, and treat QA's database like production's.
   - QA never holds Launch27 credentials; edits in QA stay in QA. QA keeps the last two
     copies; "Go back to sample data" deletes them.
   - Setup: the same random `QA_SNAPSHOT_TOKEN` (32+ chars) in production and staging,
     and `QA_SNAPSHOT_URL` (the QA site's address) in production only.
-- **Never** restore a production backup into dev or staging. There is no approved
-  anonymization process; if one is needed later, it must be designed, reviewed and
-  documented here first.
+- **Never** restore a production backup into dev or staging: it would carry real emails
+  and phone numbers (and QA must never be able to text or email anyone real). The QA
+  copy above is the only approved way to get production data into QA.
 - Dev/QA services have no variable that references the production database, and Railway
   private networking doesn't cross environments.
 
@@ -101,6 +105,42 @@ its own `SESSION_SECRET`; never copy one between environments.
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | `${{Postgres.DATABASE_URL}}` | `${{Postgres.DATABASE_URL}}` |
 | `L27_ALLOW_WRITES` | — | — | true when ready |
 | `LOG_LEVEL` | debug | info | info |
+| `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` | — (ignored) | — (ignored) | read-only staff login for the nightly segment update |
+
+## Customer segments: when they update
+
+- Nightly after 3 am Toronto, and once at boot if they have never run. The first run also
+  rebuilds the past 12 months (month ends) from booking history, marked as estimated.
+- Right away for one customer when a booking is made, changed or cancelled through this app.
+- On demand: admins click "Update now" on the Customers page (uses their own login).
+- Dev and QA run the same sync against their own synthetic Launch27 (QA: the
+  copy when one is loaded), so the numbers there are not real.
+
+## Scheduling planner: how fresh it is
+
+- Polls Launch27 (no webhooks): the next 14 days of bookings every 3 minutes, a full
+  refresh hourly (cleaners, their hours and status, the past 13 weeks and next 8 weeks), and
+  a quick refresh 20 seconds after any booking change made in this app. About 6,000
+  read-only calls a day. A booking that leaves the 14-day window is looked up on its own,
+  so a visit moved further out shows as moved, not cancelled.
+- Comparing each read with the previous one fills "Changes to handle" (moved, cancelled,
+  cleaner changed, availability changed) plus problems in the next 14 days (no cleaner,
+  outside hours, double-booked, cleaner on hold, usual cleaner free to take it back).
+- Assigning writes to Launch27 with the signed-in person's own login. Projected visits of a
+  recurring series follow the series in Launch27 and cannot be assigned one by one.
+- Cleaner title codes decide who is suggested: (1) active and (2) new hire yes; (3), (X),
+  "ON HOLD" and no code never.
+- Production needs `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` for the automatic refresh (the
+  same read-only login as segments); otherwise only "Refresh now" works.
+
+## Reports: Scheduling insights and Cleaner reports
+
+- Rebuilt overnight (after 4 am Toronto, and at boot if never built): a read-only pull of the
+  last 12 months of bookings, check-in/out times, ratings and cleaner pay, stored as one
+  snapshot. Forward-looking numbers (hours filled, lopsided weeks, unassigned) come from the
+  scheduling planner. Admins can rebuild with "Refresh now".
+- Cleaner pay is only returned by the API to admins.
+- Production needs the same `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` for the nightly build.
 
 ## Local development
 

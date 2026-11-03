@@ -9,6 +9,12 @@ import { BookingsPage } from './pages/Bookings';
 import { BookingDetailPage } from './pages/BookingDetail';
 import { BookingFormPage } from './pages/BookingForm';
 import { CustomersPage } from './pages/Customers';
+import { SegmentPage } from './pages/SegmentPage';
+import { SchedulingPage } from './pages/Scheduling';
+import { CleanerPlanPage } from './pages/CleanerPlan';
+import { SchedulingInsightsPage } from './pages/SchedulingInsights';
+import { CleanerReportsPage, CleanerReportPage } from './pages/CleanerReports';
+import { CustomerInsightsPage } from './pages/CustomerTrends';
 import { CustomerProfilePage } from './pages/CustomerProfile';
 import { TeamsPage } from './pages/Teams';
 import { ChargesPage } from './pages/Charges';
@@ -21,7 +27,7 @@ import { QuotesPage, TeamPaymentsPage } from './pages/Lists';
 import { QuoteDetailPage } from './pages/QuoteDetail';
 import { ApiCatalogPage } from './pages/ApiCatalog';
 import { InboxPage } from './pages/Inbox';
-import { ContactPage, InboxSettingsPage, SimulatorPage, SupervisorPage } from './pages/SupportPages';
+import { ContactPage, InboxSettingsPage, SimulatorPage, SupervisorPage, CleanerRedirectPage } from './pages/SupportPages';
 
 // The map library is large, so the Routes page loads on demand.
 const RoutesPage = lazy(() => import('./pages/Routes').then((m) => ({ default: m.RoutesPage })));
@@ -64,6 +70,15 @@ export function App() {
         <Route path="bookings/:id" element={<BookingDetailPage />} />
         <Route path="bookings/:id/edit" element={<BookingFormPage />} />
         <Route path="customers" element={<CustomersPage />} />
+        <Route path="schedule" element={<SchedulingPage />} />
+        <Route path="cleaners/:id" element={<CleanerRedirectPage />} />
+        <Route path="schedule/cleaner/:id" element={<CleanerPlanPage />} />
+        <Route path="customers/trends" element={<Navigate to="/reports/customers" replace />} />
+        <Route path="reports/customers" element={<CustomerInsightsPage />} />
+        <Route path="reports/scheduling" element={<SchedulingInsightsPage />} />
+        <Route path="reports/cleaners" element={<CleanerReportsPage />} />
+        <Route path="reports/cleaners/:id" element={<CleanerReportPage />} />
+        <Route path="customers/segments/:segment" element={<SegmentPage />} />
         <Route path="customers/:id" element={<CustomerProfilePage />} />
         <Route path="teams" element={<TeamsPage />} />
         <Route path="time-tracking" element={<TimeTrackingPage />} />

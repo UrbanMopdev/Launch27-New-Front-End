@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { inbox, type Channel, type Contact, type Role } from '../inbox/api';
 import { Customer360 } from '../inbox/Customer360';
 import { Cleaner360 } from '../inbox/Cleaner360';
+import { CleanerProfile } from '../inbox/CleanerProfile';
 import { CHANNEL_ICON, ROLE_LABEL, ago, displayIdentity, useInboxMe, useMeta } from '../inbox/util';
 
 // ---------- Contact profile (full-page 360) ----------
@@ -32,6 +33,33 @@ export function ContactPage() {
     }
   };
 
+  // Cleaners get their own profile; contact details sit behind "Edit contact".
+  if (c.roles.includes('cleaner') && c.l27_team_id) {
+    return (
+      <>
+        <div className="muted small cp-crumb"><Link to="/teams">Teams</Link> / {c.name}</div>
+        {error && <div className="error">{error}</div>}
+        <CleanerProfile
+          tid={c.l27_team_id}
+          contact={c}
+          onText={() => start('sms')}
+          onEmail={() => start('email')}
+          editContact={
+            <div className="cp-edit-inner">
+              <IdentityEditor contact={c} />
+              <div className="small spaced">
+                Roles:{' '}
+                {(['customer', 'cleaner', 'applicant'] as Role[]).map((r) => (
+                  <label key={r} className="check inline"><input type="checkbox" checked={c.roles.includes(r)} onChange={() => toggleRole(r)} /> {ROLE_LABEL[r]}</label>
+                ))}
+              </div>
+            </div>
+          }
+        />
+      </>
+    );
+  }
+
   return (
     <>
       <header className="page-header">
@@ -56,7 +84,7 @@ export function ContactPage() {
               <label key={r} className="check inline"><input type="checkbox" checked={c.roles.includes(r)} onChange={() => toggleRole(r)} /> {ROLE_LABEL[r]}</label>
             ))}
           </div>
-          <LeadFields contact={c} />
+          {c.roles.includes('customer') || !c.roles.length ? <LeadFields contact={c} /> : null}
           <h3>Conversations</h3>
           <div className="mini-list">
             {c.conversations?.map((x) => (
@@ -331,3 +359,14 @@ export function SimulatorPage() {
 }
 
 export { InboxSettingsPage } from './SupportSettings';
+
+// /cleaners/:id (Launch27 cleaner id): open that cleaner's profile.
+export function CleanerRedirectPage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    inbox.fromL27({ team_id: Number(id) }).then((c) => navigate(`/contacts/${c.id}`, { replace: true })).catch((err) => setError((err as Error).message));
+  }, [id, navigate]);
+  return error ? <div className="error">{error}</div> : <p className="muted">Opening profile…</p>;
+}

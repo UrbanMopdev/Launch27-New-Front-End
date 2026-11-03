@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { l27All } from '../api';
 import { useActiveTeams, useLocations } from '../hooks';
@@ -24,7 +24,9 @@ function shiftDay(date: string, days: number) {
 export function RoutesPage() {
   const [date, setDate] = useState(todayISO());
   const [locationId, setLocationId] = useState<number | 'all' | null>(null);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [routeParams] = useSearchParams();
+  // ?team=<id> (from a cleaner's profile) opens with that cleaner's route selected.
+  const [selected, setSelected] = useState<number | null>(Number(routeParams.get('team')) || null);
   const [search, setSearch] = useState('');
   const locations = useLocations();
   useEffect(() => {

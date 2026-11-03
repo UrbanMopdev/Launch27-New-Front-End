@@ -75,11 +75,15 @@ export function loadConfig(env = process.env) {
     ringcentralClientId,
     ringcentralServer,
     workerIntervalMs: Number(env.INBOX_WORKER_INTERVAL_MS || 30_000),
-    // Anonymized QA copy of real data. Production sends (needs the QA URL and the shared
+    // QA copy of real data (contact details masked). Production sends (needs the QA URL and the shared
     // token); QA receives (needs the token). Never both: production can't receive one.
     qaSnapshotToken: env.QA_SNAPSHOT_TOKEN || null,
     qaSnapshotUrl: isProd ? env.QA_SNAPSHOT_URL || null : null,
     qaSnapshotReceive: !isProd && !!env.QA_SNAPSHOT_TOKEN,
+    // Customer segments: the nightly update logs in as this read-only Launch27 staff user
+    // (production only; dev and QA use their synthetic Launch27).
+    l27SyncEmail: l27Mode === 'live' ? env.L27_SYNC_EMAIL || null : null,
+    l27SyncPassword: l27Mode === 'live' ? env.L27_SYNC_PASSWORD || null : null,
     warnings,
   };
 }

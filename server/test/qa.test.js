@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAnonymizer, assertAnonymous, sensitiveStrings, NOTE, cleanTag, personTokens } from '../src/qa/anonymize.js';
+import { createAnonymizer, assertAnonymous, sensitiveStrings, maskContacts, EMAIL_MASK, PHONE_MASK } from '../src/qa/anonymize.js';
 import { buildSnapshot } from '../src/qa/snapshot.js';
 import { createQaStore } from '../src/qa/service.js';
 import { createMockLaunch27 } from '../src/mock/launch27.js';
@@ -28,30 +28,47 @@ const realBooking = {
   feedback: { rating: 2, stars: 5, comment: 'Esperanza was amazing, Margaret' },
 };
 
-describe('QA copy: anonymizer', () => {
+describe('QA copy: real names and addresses, contact details masked', () => {
   const a = createAnonymizer('fixed-salt');
   const c = a.customer(realCustomer);
   const t = a.team(realTeam);
   const b = a.booking(realBooking);
 
-  test('replaces names, contact details, addresses, notes, cards and ids', () => {
-    assert.match(c.email, /@example\.com$/);
-    assert.match(c.phone, /555-/);
-    assert.notEqual(c.address, realCustomer.address);
-    assert.equal(c.zip, 'K1V 0A0', 'keeps the area, not the exact postal code');
-    assert.equal(c.city, 'Ottawa');
-    assert.equal(c.notes, NOTE);
+  test('masks emails, phone numbers, cards and payment processor ids', () => {
+    assert.equal(c.email, 'customer4242@example.com');
+    assert.match(c.phone, /^\(613\) 555-\d{4}$/);
+    assert.equal(t.email, 'cleaner777@example.com');
+    assert.match(t.phone, /555-/);
+    assert.match(b.phone, /555-/);
+    assert.equal(b.user.email, 'customer4242@example.com');
     assert.ok(!('stripe_customer_id' in c));
-    assert.ok(Math.abs(c.latitude - realCustomer.latitude) > 0.001, 'location shifted');
-    assert.match(t.title, /^\(PT\) /, 'keeps the part-time prefix');
-    assert.ok(!t.title.includes('Esperanza'));
     assert.equal(b.payment_method_info.text, 'visa - 0000');
-    assert.equal(b.custom_fields[0].values[0].label, 'Yes - Dog', 'booking answers kept');
-    assert.equal(b.custom_fields[0].values[0].other, NOTE, '"Other" text removed');
-    assert.equal(b.feedback.rating, 2);
-    assert.equal(b.feedback.comment, NOTE);
-    assert.equal(b.created_by.name, 'Office staff');
-    assert.equal(b.discount_info.discount_code, 'QACODE');
+    assert.ok(!JSON.stringify(b).includes('pm_1US'));
+  });
+
+  test('keeps names, addresses, locations, notes, tags and staff names as in production', () => {
+    assert.equal(c.first_name, 'Margaret');
+    assert.equal(c.address, '4417 Riverside Drive');
+    assert.equal(c.zip, 'K1V 3Z4');
+    assert.equal(c.latitude, realCustomer.latitude);
+    assert.equal(c.notes, realCustomer.notes);
+    assert.equal(c.tags_info[0].name, 'VIP');
+    assert.equal(t.title, '(PT) Esperanza Villanueva');
+    assert.equal(b.user.name, 'Margaret Okonkwo-Hughes');
+    assert.equal(b.address.street, '4417 Riverside Drive');
+    assert.equal(b.teams[0].title, '(PT) Esperanza Villanueva');
+    assert.equal(b.staff_notes, 'Margaret prefers Esperanza');
+    assert.equal(b.feedback.comment, 'Esperanza was amazing, Margaret');
+    assert.equal(b.created_by.name, 'Leslie Admin');
+    assert.equal(b.discount_info.discount_code, 'MARGARET10');
+  });
+
+  test('emails and phones typed inside notes, answers and tags are masked; the rest of the text stays', () => {
+    assert.equal(b.custom_fields[0].values[0].other, `Rottweiler named Max, call ${PHONE_MASK} first`);
+    assert.equal(maskContacts('Billing: someone@gmail.com or +1 613 724 8891'), `Billing: ${EMAIL_MASK} or ${PHONE_MASK}`);
+    assert.equal(maskContacts('Gate code 4412, unit 1203'), 'Gate code 4412, unit 1203');
+    const tagged = a.customer({ ...realCustomer, tags_info: [{ id: 1, name: 'Text 6137248891 before' }, { id: 2, name: 'Prefers Esperanza' }] });
+    assert.deepEqual(tagged.tags_info.map((x) => x.name), [`Text ${PHONE_MASK} before`, 'Prefers Esperanza']);
   });
 
   test('keeps everything the screens need: prices, services, extras, times, assignments', () => {
@@ -62,44 +79,17 @@ describe('QA copy: anonymizer', () => {
     assert.equal(b.teams[0].id, 777);
   });
 
-  test('the same person gets the same fake name everywhere', () => {
-    assert.equal(b.user.name, `${c.first_name} ${c.last_name}`);
-    assert.equal(b.teams[0].title, `${t.first_name} ${t.last_name}`);
-    assert.equal(b.time_tracking[0].team.title, b.teams[0].title);
-  });
-
-  test('the full copy passes the anonymity check against the real values', () => {
+  test('the full copy passes the contact-details check against the real values', () => {
     const copy = { customers: [c], teams: [t], bookings: [b] };
     assert.ok(assertAnonymous(copy, sensitiveStrings({ customers: [realCustomer], teams: [realTeam], bookings: [realBooking] })));
   });
 
-  test('the check catches leaks and says where (never the value)', () => {
+  test('the check catches a real email or phone anywhere and says where (never the value)', () => {
     const leaky = { bookings: [{ ...b, staff_notes: 'call margaret.oh@gmail.com' }] };
     assert.throws(() => assertAnonymous(leaky), (e) => /email/.test(e.message) && /bookings\[\]\.staff_notes/.test(e.message) && !e.message.includes('gmail'));
+    assert.throws(() => assertAnonymous({ customers: [{ ...c, phone: '(613) 724-8891' }] }), /phone/);
     const real = sensitiveStrings({ customers: [realCustomer] });
-    assert.throws(() => assertAnonymous({ customers: [{ ...c, address: '4417 Riverside Drive' }] }, real), /real value/);
-  });
-
-  test('short real values must match a whole field; long ones are caught anywhere', () => {
-    const real = new Set(['oak', '4417 riverside drive']);
-    assert.ok(assertAnonymous({ notes: 'Oakwood Avenue' }, real));
-    assert.throws(() => assertAnonymous({ city: 'Toronto, Oak' }, real), /1 real value.*Fields: city \(1\)/);
-    assert.throws(() => assertAnonymous({ notes: 'key under mat at 4417 Riverside Drive' }, real), /Fields: notes \(1\)/);
-  });
-});
-
-describe('QA copy: tags are staff-typed text', () => {
-  test('tags naming a person, or holding an email or phone, are replaced; generic tags stay', () => {
-    const people = personTokens({ customers: [realCustomer], teams: [realTeam] });
-    assert.equal(cleanTag('Prefers Esperanza', people), 'Prefers a specific cleaner');
-    assert.equal(cleanTag('Do not assign Villanueva', people), 'Do not assign a specific cleaner');
-    assert.equal(cleanTag('Esperanza Villanueva', people), 'Tag removed for QA');
-    assert.equal(cleanTag('Billing contact: someone@gmail.com', people), 'Tag removed for QA');
-    assert.equal(cleanTag('Call 613-724-8891 first', people), 'Tag removed for QA');
-    assert.equal(cleanTag('Assign two cleaners', people), 'Assign two cleaners');
-    assert.equal(cleanTag('VIP', people), 'VIP');
-    const a = createAnonymizer('s', people);
-    assert.equal(a.customer({ ...realCustomer, tags_info: [{ id: 1, name: 'Prefers Esperanza' }, { id: 2, name: 'VIP' }] }).tags_info.map((t) => t.name).join('|'), 'Prefers a specific cleaner|VIP');
+    assert.throws(() => assertAnonymous({ customers: [{ ...c, notes: 'reach at 613-724-8891' }] }, real), /phone|real value/);
   });
 });
 
@@ -157,6 +147,32 @@ describe('QA copy: build, receive, serve', () => {
     }
   });
 
+  test('future recurring visits Launch27 only forecasts (no id) all make it into the copy, with their cleaner', async () => {
+    const forecast = (date) => ({ ...realBooking, id: null, forecasted_from_booking: { id: realBooking.id }, service_date: `${date}T14:00:00Z` });
+    const get = async (path, q = {}) => {
+      if (path === '/v1/staff/bookings') return q.offset || q.filter || q.options ? [] : [realBooking, forecast('2026-11-17'), forecast('2026-12-01'), forecast('2026-12-15')];
+      if (path === '/v1/staff/customers') return q.offset ? [] : [realCustomer];
+      if (path === '/v1/staff/teams') return q.offset ? [] : [realTeam];
+      return [];
+    };
+    const copy = await buildSnapshot(get, { now: Date.parse('2026-11-01T12:00:00Z') });
+    const f = copy.bookings.filter((b) => !b.id);
+    assert.equal(f.length, 3, 'one per forecast date, not collapsed into one');
+    assert.ok(f.every((b) => b.forecasted_from_booking.id === realBooking.id && b.teams.length === realBooking.teams.length));
+    const mock = createMockLaunch27({ password: 'demo', snapshot: () => copy });
+    const call = async (p) => (await mock(`https://mock${p}`, { headers: { authorization: 'Bearer mock-bearer' } })).json();
+    assert.equal((await call('/v1/staff/bookings?from=2026-11-15&to=2026-12-20')).length, 3);
+  });
+
+  test('QA serves "active only" cleaner lists like Launch27 (the copy holds former cleaners too)', async () => {
+    const copy = { teams: [{ id: 1, title: '(1) A B', active: true }, { id: 2, title: 'C D', active: false }, { id: 3, title: '(2) E F' }], customers: [], bookings: [], services: {}, locations: [] };
+    const mock = createMockLaunch27({ password: 'demo', snapshot: () => copy });
+    const call = async (p) => (await mock(`https://mock${p}`, { headers: { authorization: 'Bearer mock-bearer' } })).json();
+    assert.deepEqual((await call('/v1/staff/teams?filter=active')).map((t) => t.id), [1, 3]);
+    assert.equal((await call('/v1/staff/teams/count?filter=active')).count, 2);
+    assert.equal((await call('/v1/staff/teams')).length, 3);
+  });
+
   test('production never receives a copy; QA never sends one', () => {
     const prod = loadConfig({ APP_ENV: 'production', QA_SNAPSHOT_TOKEN: 'x'.repeat(40), QA_SNAPSHOT_URL: 'https://qa.example.com' });
     assert.equal(prod.qaSnapshotReceive, false);
@@ -164,5 +180,31 @@ describe('QA copy: build, receive, serve', () => {
     const qa = loadConfig({ APP_ENV: 'staging', QA_SNAPSHOT_TOKEN: 'x'.repeat(40), QA_SNAPSHOT_URL: 'https://somewhere' });
     assert.equal(qa.qaSnapshotReceive, true);
     assert.equal(qa.qaSnapshotUrl, null);
+  });
+});
+
+describe('QA copy without forecasts: future recurring visits are rebuilt', () => {
+  test('repeats each live series on its rhythm with its cleaner, never doubles a date, skips stopped series', async () => {
+    const { forecastMissing } = await import('../src/mock/launch27.js');
+    const b = (id, user, date, freq, team) => ({ id, user: { id: user }, frequency: { name: freq }, service_date: `${date}T14:00:00Z`, active: true, teams: [{ id: team }] });
+    const copy = {
+      created_at: '2026-11-03T12:00:00Z',
+      window: { from: '2026-09-04', to: '2026-12-31' },
+      bookings: [
+        b(1, 10, '2026-11-02', 'Biweekly - 10% off', 7), // biweekly Monday with cleaner 7
+        b(2, 10, '2026-11-30', 'Biweekly - 10% off', 7), // already in the copy: must not be doubled
+        b(3, 11, '2026-11-04', 'Monthly', 8),
+        b(4, 12, '2026-09-07', 'Weekly', 9), // stopped in September
+        b(5, 13, '2026-11-05', 'One time', 9),
+      ],
+    };
+    const f = forecastMissing(copy);
+    const dates = (u) => f.filter((x) => x.user.id === u).map((x) => x.service_date.slice(0, 10));
+    assert.deepEqual(dates(10), ['2026-12-14', '2026-12-28'], 'from the latest visit, every 2 weeks');
+    assert.deepEqual(dates(11), ['2026-12-02', '2026-12-30']);
+    assert.deepEqual(dates(12), []);
+    assert.deepEqual(dates(13), []);
+    assert.ok(f.every((x) => x.id === null && x.forecasted_from_booking.id && x.teams.length === 1 && !x.completed));
+    assert.equal(f.find((x) => x.user.id === 10).teams[0].id, 7, 'keeps the cleaner');
   });
 });

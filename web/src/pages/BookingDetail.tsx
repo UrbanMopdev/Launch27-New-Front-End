@@ -127,9 +127,10 @@ export function BookingDetailPage() {
                 <Stepper booking={b} />
                 {(b.teams?.length ? b.teams : [{ id: undefined, title: undefined }]).map((team, i) => (
                   <div key={team.id ?? i} className="visit-who">
-                    <Avatar name={team.title || '?'} size={40} />
+                    <Avatar name={cleanName(team.title) || '?'} size={40} />
                     <div className="grow">
-                      <strong>{team.title || <span className="warn">No cleaner assigned</span>}</strong>
+                      <div className="eyebrow">{(b.teams?.length || 0) > 1 ? `Cleaner ${i + 1}` : 'Cleaner'}</div>
+                      <strong>{cleanName(team.title) || <span className="warn">No cleaner assigned</span>}</strong>
                       <div className="muted small">
                         Window {windowText}
                         {onSite !== null && <> · on site {hm(onSite)}{booked ? ` (booked ${hm(booked)})` : ''}</>}
@@ -137,7 +138,7 @@ export function BookingDetailPage() {
                     </div>
                     {team.id && i === 0 && (
                       <button type="button" className="secondary" disabled={busy} onClick={() => textPerson('cleaner')}>
-                        <Icon name="sms" /> Text {(team.title || '').split(' ')[0]}
+                        <Icon name="sms" /> Text {cleanName(team.title).split(' ')[0]}
                       </button>
                     )}
                   </div>
@@ -330,4 +331,9 @@ function Line({ label, value, strong }: { label: string; value?: number; strong?
       <span className="mono">{fmtMoney(value)}</span>
     </div>
   );
+}
+
+// Launch27 cleaner titles carry status codes, e.g. "(1)(F)Dakota Smith" or "ON HOLD(2)(F)Nicole T".
+export function cleanName(title?: string | null): string {
+  return String(title || '').replace(/^\s*(on\s*hold\s*)?(\s*\([^)]*\))*\s*/i, '').trim() || String(title || '');
 }

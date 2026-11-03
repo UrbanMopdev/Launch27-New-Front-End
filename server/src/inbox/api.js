@@ -25,7 +25,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {} }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -655,7 +655,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json(row);
   }));
 
-  // ---------- admin: anonymized QA copy of real data ----------
+  // ---------- admin: QA copy of real data (contact details masked) ----------
 
   r.get('/admin/qa-copy', needRole('admin'), wrap(async (req, res) => {
     res.json({
@@ -762,6 +762,112 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     log('error', 'inbox request failed', { path: req.path, error: err.message, stack: err.stack });
     res.status(500).json({ error: 'Something went wrong on the server' });
   });
+
+  // ---------- customer segments ----------
+  if (segments) {
+    const segErr = (fn) => wrap(async (req, res) => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    r.get('/segments/summary', segErr(async (req, res) => res.json(await segments.summary({ bearer: req.bearer }))));
+    r.get('/segments/customers', segErr(async (req, res) => {
+      const traits = String(req.query.traits || '').split(',').map((t) => t.trim()).filter(Boolean);
+      res.json(await segments.customers({ segment: req.query.segment || null, traits, q: req.query.q || null, limit: req.query.limit, offset: req.query.offset }));
+    }));
+    r.get('/segments/customer/:id', segErr(async (req, res) => {
+      const row = await segments.customer(Number(req.params.id));
+      if (!row) return res.status(404).json({ error: 'No segment for this customer yet' });
+      res.json(row);
+    }));
+    r.post('/segments/customer/:id/outcome', segErr(async (req, res) => {
+      await segments.logOutcome(Number(req.params.id), req.body || {}, req.user.id);
+      res.status(204).end();
+    }));
+    r.get('/segments/stats/:segment', segErr(async (req, res) => res.json(await segments.segmentStats(req.params.segment))));
+    r.get('/segments/trends', segErr(async (req, res) => res.json(await segments.trends({ period: req.query.period, from: req.query.from, to: req.query.to }))));
+    // Admins: recalculate now with their own Launch27 login (read-only calls).
+    r.post('/segments/refresh', needRole('admin'), segErr(async (req, res) => {
+      if (segments.isRunning()) return res.status(202).json({ running: true });
+      segments.start({ bearer: req.bearer, trigger: 'manual' });
+      await svc.audit(db, req.user.id, 'segments.refresh', 'workspace', 'segments', {});
+      res.status(202).json({ running: true });
+    }));
+    r.put('/segments/settings', needRole('admin'), segErr(async (req, res) => {
+      try {
+        const value = await segments.saveSettings(req.body || {});
+        await svc.audit(db, req.user.id, 'segments.settings', 'workspace', 'segments', value);
+        res.json(value);
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    }));
+  }
+
+  // ---------- scheduling planner ----------
+  if (schedule) {
+    const sched = (fn) => wrap(async (req, res) => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    r.get('/schedule/status', sched(async (req, res) => res.json(await schedule.status())));
+    r.get('/schedule/overview', sched(async (req, res) => res.json(await schedule.overview())));
+    r.get('/schedule/cleaners', sched(async (req, res) => res.json(await schedule.cleaners())));
+    r.get('/schedule/plan/:id', sched(async (req, res) => res.json(await schedule.plan(req.params.id))));
+    r.get('/schedule/cleaner/:id/profile', sched(async (req, res) => res.json(await schedule.cleanerProfile(req.params.id))));
+    r.get('/schedule/gap', sched(async (req, res) => res.json(await schedule.gapOptions(req.query.cleaner, String(req.query.date), Number(req.query.start), Number(req.query.end)))));
+    r.get('/schedule/unassigned', sched(async (req, res) => res.json(await schedule.unassigned())));
+    r.get('/schedule/continuity', sched(async (req, res) => res.json(await schedule.continuity())));
+    r.get('/schedule/changes', sched(async (req, res) => res.json(await schedule.changes())));
+    r.post('/schedule/changes/:id/resolve', sched(async (req, res) => {
+      await schedule.resolveChange(Number(req.params.id), req.body?.resolution, req.user.id);
+      res.status(204).end();
+    }));
+    r.post('/schedule/find-slots', sched(async (req, res) => res.json(await schedule.findSlots(req.body || {}))));
+    r.post('/schedule/assign', sched(async (req, res) => {
+      const out = await schedule.assign(req.body || {}, req.bearer);
+      await svc.audit(db, req.user.id, 'schedule.assign', 'cleaner', req.body?.cleaner_id, { visits: (req.body?.visit_keys || []).length });
+      res.json(out);
+    }));
+    r.put('/schedule/unavailable', sched(async (req, res) => {
+      const out = await schedule.markUnavailable(req.body?.cleaner_id, req.body?.day, { note: req.body?.note, userId: req.user.id, on: req.body?.unavailable !== false });
+      await svc.audit(db, req.user.id, 'schedule.unavailable', 'cleaner', req.body?.cleaner_id, { day: req.body?.day, on: req.body?.unavailable !== false });
+      res.json(out);
+    }));
+    r.post('/schedule/refresh', sched(async (req, res) => {
+      schedule.start({ bearer: req.bearer, trigger: 'manual' });
+      res.status(202).json({ running: true });
+    }));
+  }
+
+  // ---------- reports: scheduling insights and cleaner reports ----------
+  if (reports) {
+    const rep = (fn) => wrap(async (req, res) => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    const period = (req) => (['4w', '13w', '12m'].includes(req.query.period) ? req.query.period : '13w');
+    const admin = (req) => req.user.role === 'admin';
+    r.get('/reports/status', rep(async (req, res) => res.json(await reports.status())));
+    r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req)))));
+    r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req) }))));
+    r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req) }))));
+    r.post('/reports/refresh', needRole('admin'), rep(async (req, res) => {
+      reports.start({ bearer: req.bearer });
+      res.status(202).json({ running: true });
+    }));
+  }
 
   return r;
 }
