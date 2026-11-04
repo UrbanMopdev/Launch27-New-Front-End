@@ -1,3 +1,5 @@
+import { useBrand } from '../brands/useBrand';
+import { brandLabel } from '../brands/ui';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -8,14 +10,15 @@ const GOAL = 0.85;
 
 export function SchedulingInsightsPage() {
   const [period, setPeriod] = useState<Period>('13w');
-  const q = useQuery({ queryKey: ['reports', 'scheduling', period], queryFn: () => reportsApi.scheduling(period), retry: false, placeholderData: (p) => p });
+  const brand = useBrand();
+  const q = useQuery({ queryKey: ['reports', 'scheduling', period, brand.locationIds], queryFn: () => reportsApi.scheduling(period, brand.locationIds), retry: false, placeholderData: (p) => p });
   const r = q.data;
   return (
     <div className="seg-page">
       <header className="page-header">
         <div className="seg-head">
           <span className="small muted">Reports</span>
-          <h1>Scheduling insights</h1>
+          <h1>Scheduling insights{brand.view !== 'both' && <span className="muted"> · {brandLabel(brand.view)}</span>}</h1>
           <p className="muted">Same cleaner, full weeks, on time, short drives.</p>
           <ReportStatusLine />
         </div>

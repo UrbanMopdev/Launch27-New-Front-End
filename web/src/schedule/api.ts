@@ -183,12 +183,12 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 export const scheduleApi = {
   status: () => call<Status>('GET', '/status'),
-  overview: () => call<Overview>('GET', '/overview'),
+  overview: (locations?: number[] | null) => call<Overview>('GET', `/overview${locations ? `?locations=${locations.join(',')}` : ''}`),
   plan: (id: number) => call<Plan>('GET', `/plan/${id}`),
   cleanerProfile: (id: number) => call<CleanerProfileData>('GET', `/cleaner/${id}/profile`),
   gap: (cleaner: number, date: string, start: number, end: number) => call<GapOptions>('GET', `/gap?cleaner=${cleaner}&date=${date}&start=${start}&end=${end}`),
   unassigned: () => call<{ total_series: number; total_visits: number; series: Series[] }>('GET', '/unassigned'),
-  continuity: () => call<Continuity>('GET', '/continuity'),
+  continuity: (locations?: number[] | null) => call<Continuity>('GET', `/continuity${locations ? `?locations=${locations.join(',')}` : ''}`),
   changes: () => call<{ items: Change[]; today: string }>('GET', '/changes'),
   resolve: (id: number, resolution: 'fixed' | 'dismissed') => call<void>('POST', `/changes/${id}/resolve`, { resolution }),
   findSlots: (q: SlotQuery) => call<{ place_known: boolean; kind: Visit['kind']; frequency: string; duration: number; customer: { id: number; name: string; main: string | null } | null; cleaner: 'same' | 'any'; no_usual: boolean; any_count: number | null; slots: Slot[] }>('POST', '/find-slots', q),

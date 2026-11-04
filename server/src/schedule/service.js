@@ -440,8 +440,14 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return { taken_at: s?.taken_at || null, full_at: s?.full_at || s?.taken_at || null, running: !!running, last_error: last?.status === 'failed' ? last.error : null, refresh_minutes: NEAR_EVERY_MS / 60_000, full_minutes: FULL_EVERY_MS / 60_000 };
   }
 
-  async function overview() {
+  // locations: one brand's Launch27 location ids (brand switcher); null = both brands.
+  const inLocs = (locations) => {
+    const ids = Array.isArray(locations) && locations.length ? new Set(locations.map(Number)) : null;
+    return (v) => !ids || ids.has(Number(v.location_id));
+  };
+  async function overview({ locations = null } = {}) {
     const s = await need();
+    const inLoc = inLocs(locations);
     const weekStart = mondayOf(s.today);
     const weeks = Array.from({ length: 8 }, (_, i) => {
       const from = addDays(weekStart, i * 7);
@@ -457,7 +463,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
         return { booked: Math.round(booked * 10) / 10, capacity: Math.round(capacity * 10) / 10, days_off: off };
       }),
     }));
-    const unassigned = weeks.map((w) => Math.round(s.future.filter((v) => !v.team_ids.length && v.date >= w.from && v.date <= w.to).reduce((h, v) => h + v.duration / 60, 0) * 10) / 10);
+    const unassigned = weeks.map((w) => Math.round(s.future.filter((v) => inLoc(v) && !v.team_ids.length && v.date >= w.from && v.date <= w.to).reduce((h, v) => h + v.duration / 60, 0) * 10) / 10);
     const open = await db.query('SELECT count(*)::int AS n FROM schedule_changes WHERE resolved_at IS NULL');
     return {
       taken_at: s.taken_at,
@@ -585,15 +591,16 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return { taken_at: s.taken_at, total_series: out.length, total_visits: s.future.filter((x) => !x.team_ids.length).length, series: out.slice(0, limit) };
   }
 
-  async function continuity() {
+  async function continuity({ locations = null } = {}) {
     const s = await need();
+    const inLoc = inLocs(locations);
     let clients = 0;
     let always = 0;
     let three = 0;
     let visits = 0;
     let withMain = 0;
     for (const cu of s.customers.values()) {
-      const past = cu.past.filter((v) => v.kind !== 'one' && v.team_ids.length);
+      const past = cu.past.filter((v) => inLoc(v) && v.kind !== 'one' && v.team_ids.length);
       if (past.length < 3) continue;
       clients++;
       const counts = new Map();
@@ -608,7 +615,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const until = addDays(s.today, 28);
     const upcoming = [];
     for (const v of s.future) {
-      if (v.date > until || v.kind === 'one') continue;
+      if (v.date > until || v.kind === 'one' || !inLoc(v)) continue;
       const cu = s.customers.get(v.customer_id);
       if (!cu?.main || v.team_ids.includes(cu.main.id)) continue;
       const main = s.byId.get(cu.main.id);
@@ -616,7 +623,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       const f = main.assignable ? fitsDay({ window: windowFor(main, v.date), busy: busyFor(s)(main.id, v.date), start: v.start, duration: v.duration, place: v, transit: main.rules.transit, ignoreKeys: new Set([v.key]) }) : { ok: false, reason: STATUS_LABEL[main.status].toLowerCase() };
       upcoming.push({ visit: visitOut(s, v), main: { id: main.id, name: main.name }, history: cu.main.visits, main_free: f.ok, why: f.ok ? 'Usual cleaner is free' : `Usual cleaner: ${f.reason}` });
     }
-    const noMain = [...s.customers.values()].filter((cu) => cu.recurring && cu.future.length && !cu.main).length;
+    const noMain = [...s.customers.values()].filter((cu) => cu.recurring && cu.future.some(inLoc) && !cu.main).length;
     return { taken_at: s.taken_at, clients, always, three_plus: three, visit_share: visits ? withMain / visits : null, upcoming_count: upcoming.length, upcoming: upcoming.slice(0, 100), without_main: noMain };
   }
 

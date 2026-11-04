@@ -1,3 +1,4 @@
+import { useBrand } from '../brands/useBrand';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -179,7 +180,12 @@ export function ChargesPage() {
   const [shown, setShown] = useState(PAGE);
   const [reviewOnly, setReviewOnly] = useState(false);
 
-  const locations = useLocations();
+  const brand = useBrand();
+  const allLocations = useLocations();
+  const locations = useMemo(() => ({ data: (allLocations.data || []).filter((l) => brand.showLocation(l.id, l.name)) }), [allLocations.data, brand]);
+  useEffect(() => {
+    if (locationId !== 'all' && !locations.data.some((l) => l.id === locationId)) setLocationId('all');
+  }, [locationId, locations.data]);
   const locationName = (id: number) => locations.data?.find((l) => l.id === id)?.name || `Location ${id}`;
 
   const charges = useQuery({
@@ -187,7 +193,7 @@ export function ChargesPage() {
     queryFn: () => l27All<ChargeRow>('/v1/staff/charges', { filter: status, from, to }),
   });
 
-  const inLocation = useMemo(() => (charges.data || []).filter((r) => locationId === 'all' || r.location_id === locationId), [charges.data, locationId]);
+  const inLocation = useMemo(() => (charges.data || []).filter((r) => brand.showLocation(r.location_id) && (locationId === 'all' || r.location_id === locationId)), [charges.data, locationId, brand]);
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = q ? inLocation.filter((r) => [r.id, r.user?.name, r.user?.email, r.payment_method_info?.text].join(' ').toLowerCase().includes(q)) : inLocation;
