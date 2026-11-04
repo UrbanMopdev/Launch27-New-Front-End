@@ -36,6 +36,8 @@ interface Props<T> {
   // Adds date inputs sent as from/to ("range") or a single `date` ("day").
   dates?: 'range' | 'day';
   defaultFrom?: string;
+  // Shown rows only (e.g. the brand switcher); paging still follows Launch27.
+  rowFilter?: (row: T) => boolean;
 }
 
 // Generic Launch27 list page: tabs, search, paging, table.
@@ -53,6 +55,7 @@ export function ResourceList<T extends { id?: number | string }>({
   actions,
   dates,
   defaultFrom,
+  rowFilter,
 }: Props<T>) {
   const [from, setFrom] = useState(defaultFrom || todayISO());
   const [to, setTo] = useState(todayISO());
@@ -82,6 +85,7 @@ export function ResourceList<T extends { id?: number | string }>({
     enabled: hasCount && tab?.hasCount !== false,
   });
 
+  const shown = rows.data && rowFilter ? rows.data.filter(rowFilter) : rows.data;
   const total = hasCount && tab?.hasCount !== false ? count.data?.count : undefined;
   const lastPage = total !== undefined ? Math.max(0, Math.ceil(total / pageSize) - 1) : (rows.data?.length || 0) < pageSize ? page : page + 1;
 
@@ -131,14 +135,14 @@ export function ResourceList<T extends { id?: number | string }>({
                 </td>
               </tr>
             )}
-            {rows.data?.length === 0 && (
+            {shown?.length === 0 && (
               <tr>
                 <td colSpan={columns.length} className="muted">
                   Nothing here.
                 </td>
               </tr>
             )}
-            {rows.data?.map((row) => (
+            {shown?.map((row) => (
               <tr key={rowKey(row)} onClick={onRowClick ? () => onRowClick(row) : undefined} className={onRowClick ? '' : 'static'}>
                 {columns.map((c) => (
                   <td key={c.header} className={c.className} data-label={c.header}>

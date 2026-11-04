@@ -89,8 +89,8 @@ async function call<T>(method: string, path: string): Promise<T> {
 
 export const reportsApi = {
   status: () => call<ReportStatus>('GET', '/status'),
-  scheduling: (period: Period) => call<SchedulingReport>('GET', `/scheduling?period=${period}`),
-  cleaners: (period: Period) => call<CleanersReport>('GET', `/cleaners?period=${period}`),
+  scheduling: (period: Period, locations?: number[] | null) => call<SchedulingReport>('GET', `/scheduling?period=${period}${locations ? `&locations=${locations.join(',')}` : ''}`),
+  cleaners: (period: Period, locations?: number[] | null) => call<CleanersReport>('GET', `/cleaners?period=${period}${locations ? `&locations=${locations.join(',')}` : ''}`),
   cleaner: (id: number, period: Period) => call<CleanerReport>('GET', `/cleaners/${id}?period=${period}`),
   refresh: () => call<{ running: boolean }>('POST', '/refresh'),
 };

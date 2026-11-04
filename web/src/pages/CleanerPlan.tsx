@@ -1,3 +1,4 @@
+import { useBrand } from '../brands/useBrand';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -10,7 +11,8 @@ export function CleanerPlanPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const plan = useQuery({ queryKey: ['schedule', 'plan', cid], queryFn: () => scheduleApi.plan(cid), retry: false });
-  const cleaners = useQuery({ queryKey: ['schedule', 'overview'], queryFn: scheduleApi.overview, retry: false });
+  const brand = useBrand();
+  const cleaners = useQuery({ queryKey: ['schedule', 'overview', null], queryFn: () => scheduleApi.overview(), retry: false });
   const [gap, setGap] = useState<{ date: string; start: number; end: number } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const unavailable = useMutation({
@@ -24,7 +26,7 @@ export function CleanerPlanPage() {
   if (plan.isError) return <div className="error">{(plan.error as Error).message}</div>;
   if (!p) return <p className="muted">Loading…</p>;
   const maxWeek = Math.max(...p.weeks.map((w) => w.booked), 1);
-  const others = (cleaners.data?.rows || []).filter((r) => r.assignable);
+  const others = (cleaners.data?.rows || []).filter((r) => r.assignable && brand.showCleaner(r.location_ids));
   return (
     <div className="sch-page">
       <nav className="small muted"><Link to="/schedule?tab=capacity">Scheduling</Link> / {p.cleaner.name}</nav>

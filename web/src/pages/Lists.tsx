@@ -1,6 +1,9 @@
 // Launch27 admin list pages that are a straight table over one endpoint.
 // Each comment names the Launch27 page it replaces and the calls it makes
 // (see docs/API.md for full request/response shapes).
+import { useBrand } from '../brands/useBrand';
+import { brandLabel } from '../brands/ui';
+import { useActiveTeams } from '../hooks';
 import { useNavigate } from 'react-router-dom';
 import { ResourceList } from '../components/ResourceList';
 import { fmtDateTime, fmtMoney, TIMEZONE } from '../format';
@@ -48,9 +51,15 @@ export function QuotesPage() {
 
 // /admin/payments: GET /v1/staff/teams/payments/summary?filter=active&from&to
 export function TeamPaymentsPage() {
+  // Brand switcher: a cleaner's pay shows under each brand they work in (Launch27 totals
+  // pay per cleaner, not per location, so a shared cleaner's total appears in both).
+  const brand = useBrand();
+  const teams = useActiveTeams();
+  const locs = new Map((teams.data || []).map((t) => [t.id, t.locations?.map((l) => l.id)]));
   return (
     <ResourceList<Row>
-      title="Team payments"
+      title={brand.view === 'both' ? 'Team payments' : `Team payments · ${brandLabel(brand.view)}`}
+      rowFilter={(r) => brand.showCleaner(locs.get(r.team.id))}
       path="/v1/staff/teams/payments/summary"
       params={{ filter: 'active' }}
       dates="range"

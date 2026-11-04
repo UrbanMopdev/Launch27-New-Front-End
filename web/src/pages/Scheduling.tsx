@@ -21,8 +21,8 @@ export function SchedulingPage() {
     next.set('tab', t);
     setParams(next, { replace: true });
   };
-  const overview = useQuery({ queryKey: ['schedule', 'overview'], queryFn: scheduleApi.overview, retry: false, refetchInterval: 120_000 });
   const brand = useBrand();
+  const overview = useQuery({ queryKey: ['schedule', 'overview', brand.locationIds], queryFn: () => scheduleApi.overview(brand.locationIds), retry: false, refetchInterval: 120_000, placeholderData: (prev) => prev });
   const changesQ = useQuery({ queryKey: ['schedule', 'changes'], queryFn: scheduleApi.changes, refetchInterval: 60_000, enabled: overview.isSuccess });
   const openChanges = changesQ.data ? changesQ.data.items.filter((c) => changeInView(brand, c)).length : overview.data?.counts.open_changes;
   return (
@@ -488,15 +488,13 @@ function CapacityTab({ data }: { data: Overview }) {
 // ---------- continuity ----------
 function ContinuityTab() {
   const [toast, setToast] = useState<string | null>(null);
-  const data = useQuery({ queryKey: ['schedule', 'continuity'], queryFn: scheduleApi.continuity });
-  const assign = useAssign(setToast);
   const brand = useBrand();
-  const raw = data.data;
-  if (!raw) return null;
-  const d = { ...raw, upcoming: raw.upcoming.filter((u) => brand.showLocation(u.visit.location_id)) };
+  const data = useQuery({ queryKey: ['schedule', 'continuity', brand.locationIds], queryFn: () => scheduleApi.continuity(brand.locationIds) });
+  const assign = useAssign(setToast);
+  const d = data.data;
+  if (!d) return null;
   return (
     <div className="sch-tab">
-      {brand.view !== 'both' && <p className="muted small">The four numbers below cover both brands; the list is {brandLabel(brand.view)} only.</p>}
       <div className="seg-stats">
         <div className="card seg-stat"><span className="muted small">Visits with the client's main cleaner</span><span className="seg-stat-value">{d.visit_share === null ? '—' : `${Math.round(d.visit_share * 100)}%`}</span><span className="small">last 13 weeks</span></div>
         <div className="card seg-stat"><span className="muted small">Always the same cleaner</span><span className="seg-stat-value">{d.always} of {d.clients}</span><span className="small">{d.three_plus} had three or more cleaners</span></div>

@@ -863,16 +863,17 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       keepFresh(req);
       res.json(await schedule.status());
     }));
+    const brandLocs = (req) => (req.query.locations ? String(req.query.locations).split(',').map(Number).filter((n) => Number.isInteger(n) && n >= 0) : null);
     r.get('/schedule/overview', sched(async (req, res) => {
       keepFresh(req);
-      res.json(await schedule.overview());
+      res.json(await schedule.overview({ locations: brandLocs(req) }));
     }));
     r.get('/schedule/cleaners', sched(async (req, res) => res.json(await schedule.cleaners())));
     r.get('/schedule/plan/:id', sched(async (req, res) => res.json(await schedule.plan(req.params.id))));
     r.get('/schedule/cleaner/:id/profile', sched(async (req, res) => res.json(await schedule.cleanerProfile(req.params.id))));
     r.get('/schedule/gap', sched(async (req, res) => res.json(await schedule.gapOptions(req.query.cleaner, String(req.query.date), Number(req.query.start), Number(req.query.end)))));
     r.get('/schedule/unassigned', sched(async (req, res) => res.json(await schedule.unassigned())));
-    r.get('/schedule/continuity', sched(async (req, res) => res.json(await schedule.continuity())));
+    r.get('/schedule/continuity', sched(async (req, res) => res.json(await schedule.continuity({ locations: brandLocs(req) }))));
     r.get('/schedule/changes', sched(async (req, res) => res.json(await schedule.changes())));
     r.post('/schedule/changes/:id/resolve', sched(async (req, res) => {
       await schedule.resolveChange(Number(req.params.id), req.body?.resolution, req.user.id);
@@ -908,9 +909,10 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     const period = (req) => (['4w', '13w', '12m'].includes(req.query.period) ? req.query.period : '13w');
     const admin = (req) => req.user.role === 'admin';
     r.get('/reports/status', rep(async (req, res) => res.json(await reports.status())));
-    r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req)))));
-    r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req) }))));
-    r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req) }))));
+    const repLocs = (req) => (req.query.locations ? String(req.query.locations).split(',').map(Number).filter((n) => Number.isInteger(n) && n >= 0) : null);
+    r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req), { locations: repLocs(req) }))));
+    r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req), locations: repLocs(req) }))));
+    r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req), locations: repLocs(req) }))));
     r.post('/reports/refresh', needRole('admin'), rep(async (req, res) => {
       reports.start({ bearer: req.bearer });
       res.status(202).json({ running: true });
