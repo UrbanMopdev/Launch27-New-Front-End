@@ -36,6 +36,7 @@ export function slimVisit(b) {
     key,
     id: b.id || null,
     series_id: b.forecasted_from_booking?.id || null,
+    location_id: Number(b.location?.id ?? b.location_id) || null,
     date,
     start,
     duration,
@@ -431,7 +432,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     if (!s) throw Object.assign(new Error('The schedule has not been loaded yet. It loads automatically within a few minutes, or click "Refresh now".'), { status: 409 });
     return s;
   }
-  const cleanerOut = (c) => ({ id: c.id, lat: c.lat, lng: c.lng, name: c.name, status: c.status, status_label: STATUS_LABEL[c.status], assignable: c.assignable, is_new: c.isNew, gender: c.gender, hours_type: c.hoursType, color: c.color, area: c.area, phone: c.phone, weekly_hours: c.weekly_hours, tags: c.tags, rules: c.rules });
+  const cleanerOut = (c) => ({ id: c.id, location_ids: c.location_ids || [], lat: c.lat, lng: c.lng, name: c.name, status: c.status, status_label: STATUS_LABEL[c.status], assignable: c.assignable, is_new: c.isNew, gender: c.gender, hours_type: c.hoursType, color: c.color, area: c.area, phone: c.phone, weekly_hours: c.weekly_hours, tags: c.tags, rules: c.rules });
 
   async function status() {
     const last = await latestRun();
@@ -439,8 +440,14 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return { taken_at: s?.taken_at || null, full_at: s?.full_at || s?.taken_at || null, running: !!running, last_error: last?.status === 'failed' ? last.error : null, refresh_minutes: NEAR_EVERY_MS / 60_000, full_minutes: FULL_EVERY_MS / 60_000 };
   }
 
-  async function overview() {
+  // locations: one brand's Launch27 location ids (brand switcher); null = both brands.
+  const inLocs = (locations) => {
+    const ids = Array.isArray(locations) && locations.length ? new Set(locations.map(Number)) : null;
+    return (v) => !ids || ids.has(Number(v.location_id));
+  };
+  async function overview({ locations = null } = {}) {
     const s = await need();
+    const inLoc = inLocs(locations);
     const weekStart = mondayOf(s.today);
     const weeks = Array.from({ length: 8 }, (_, i) => {
       const from = addDays(weekStart, i * 7);
@@ -456,7 +463,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
         return { booked: Math.round(booked * 10) / 10, capacity: Math.round(capacity * 10) / 10, days_off: off };
       }),
     }));
-    const unassigned = weeks.map((w) => Math.round(s.future.filter((v) => !v.team_ids.length && v.date >= w.from && v.date <= w.to).reduce((h, v) => h + v.duration / 60, 0) * 10) / 10);
+    const unassigned = weeks.map((w) => Math.round(s.future.filter((v) => inLoc(v) && !v.team_ids.length && v.date >= w.from && v.date <= w.to).reduce((h, v) => h + v.duration / 60, 0) * 10) / 10);
     const open = await db.query('SELECT count(*)::int AS n FROM schedule_changes WHERE resolved_at IS NULL');
     return {
       taken_at: s.taken_at,
@@ -477,7 +484,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   }
 
   const visitOut = (s, v) => ({
-    key: v.key, id: v.id, date: v.date, start: v.start, duration: v.duration, time: clock(v.start), customer_id: v.customer_id, customer: v.customer,
+    key: v.key, id: v.id, location_id: v.location_id ?? null, date: v.date, start: v.start, duration: v.duration, time: clock(v.start), customer_id: v.customer_id, customer: v.customer,
     area: v.area, freq: FREQ_LABEL[v.kind], kind: v.kind, prepaid: v.prepaid, weeks: v.weeks, projected: !v.id,
     cleaners: v.team_ids.map((id) => ({ id, name: s.byId.get(id)?.name || 'Unknown' })),
   });
@@ -584,15 +591,16 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return { taken_at: s.taken_at, total_series: out.length, total_visits: s.future.filter((x) => !x.team_ids.length).length, series: out.slice(0, limit) };
   }
 
-  async function continuity() {
+  async function continuity({ locations = null } = {}) {
     const s = await need();
+    const inLoc = inLocs(locations);
     let clients = 0;
     let always = 0;
     let three = 0;
     let visits = 0;
     let withMain = 0;
     for (const cu of s.customers.values()) {
-      const past = cu.past.filter((v) => v.kind !== 'one' && v.team_ids.length);
+      const past = cu.past.filter((v) => inLoc(v) && v.kind !== 'one' && v.team_ids.length);
       if (past.length < 3) continue;
       clients++;
       const counts = new Map();
@@ -607,7 +615,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const until = addDays(s.today, 28);
     const upcoming = [];
     for (const v of s.future) {
-      if (v.date > until || v.kind === 'one') continue;
+      if (v.date > until || v.kind === 'one' || !inLoc(v)) continue;
       const cu = s.customers.get(v.customer_id);
       if (!cu?.main || v.team_ids.includes(cu.main.id)) continue;
       const main = s.byId.get(cu.main.id);
@@ -615,7 +623,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       const f = main.assignable ? fitsDay({ window: windowFor(main, v.date), busy: busyFor(s)(main.id, v.date), start: v.start, duration: v.duration, place: v, transit: main.rules.transit, ignoreKeys: new Set([v.key]) }) : { ok: false, reason: STATUS_LABEL[main.status].toLowerCase() };
       upcoming.push({ visit: visitOut(s, v), main: { id: main.id, name: main.name }, history: cu.main.visits, main_free: f.ok, why: f.ok ? 'Usual cleaner is free' : `Usual cleaner: ${f.reason}` });
     }
-    const noMain = [...s.customers.values()].filter((cu) => cu.recurring && cu.future.length && !cu.main).length;
+    const noMain = [...s.customers.values()].filter((cu) => cu.recurring && cu.future.some(inLoc) && !cu.main).length;
     return { taken_at: s.taken_at, clients, always, three_plus: three, visit_share: visits ? withMain / visits : null, upcoming_count: upcoming.length, upcoming: upcoming.slice(0, 100), without_main: noMain };
   }
 
@@ -665,7 +673,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       const c = r.cleaner_id != null ? s.byId.get(Number(r.cleaner_id)) : null;
       const day = v?.date || dateStr(r.due);
       const w = c && day ? windowFor(c, day) : null;
-      const cleaner = c ? { id: c.id, name: c.name, status: STATUS_LABEL[c.status], hours: w ? `${clock(w[0])}–${clock(w[1])}` : null, working: !!w } : null;
+      const cleaner = c ? { id: c.id, location_ids: c.location_ids || [], name: c.name, status: STATUS_LABEL[c.status], hours: w ? `${clock(w[0])}–${clock(w[1])}` : null, working: !!w } : null;
       const detail = { ...(r.detail || {}) };
       if (r.kind === 'availability' && Array.isArray(detail.affected)) detail.affected_visits = detail.affected.map((k) => s.visits.find((x) => x.key === k)).filter(Boolean).map((x) => visitOut(s, x));
       if (r.kind === 'moved' && detail.from) detail.from_label = `${nice(detail.from.date)} at ${clock(detail.from.start)}`;

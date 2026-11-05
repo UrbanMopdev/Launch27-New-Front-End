@@ -94,5 +94,13 @@ describe('reports: service on the sample Launch27', () => {
     assert.equal(one.stats.earned, undefined);
     assert.equal(one.last40.length, 40);
     assert.ok(one.series.length >= 13);
+    // Brand switcher: Commercial (Commercial Ottawa 167 + Cornwall 168) is a slice of the whole.
+    const com = await reports.cleaners('13w', { admin: true, locations: [167, 168] });
+    const res = await reports.cleaners('13w', { admin: true, locations: [1, 2, 3] });
+    const visits = (r) => r.rows.reduce((a, x) => a + (x.visits || 0), 0);
+    assert.ok(visits(com) > 0 && visits(res) > visits(com));
+    assert.ok(com.rows.length < asAdmin.rows.length, 'only cleaners working in that brand');
+    const comSched = await reports.scheduling('13w', { locations: [167, 168] });
+    assert.ok(comSched.kpis.same_cleaner_visits < sc.kpis.same_cleaner_visits);
   });
 });

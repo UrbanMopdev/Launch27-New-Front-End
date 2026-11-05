@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCanWrite } from '../hooks';
 import { useQuery } from '@tanstack/react-query';
+import { useBrand } from '../brands/useBrand';
+import { BrandPill, brandLabel } from '../brands/ui';
 import { l27All } from '../api';
 import type { Booking } from '../types';
 import { fmtDateTime, fmtMoney, fmtTime, todayISO } from '../format';
@@ -29,9 +31,10 @@ export function BookingsPage() {
     queryFn: () => l27All<Booking>('/v1/staff/bookings', { filter, from, to, sort: 'asc' }),
   });
 
+  const brand = useBrand();
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = [...(bookings.data || [])].sort((a, b) => (a.service_date || '').localeCompare(b.service_date || ''));
+    const list = [...(bookings.data || [])].filter((b) => brand.showLocation(b.location?.id, b.location?.name)).sort((a, b) => (a.service_date || '').localeCompare(b.service_date || ''));
     if (!q) return list;
     return list.filter((b) =>
       [b.id, b.user?.name, b.user?.email, b.address?.full_address, b.teams?.map((t) => t.title).join(' ')]
@@ -39,14 +42,14 @@ export function BookingsPage() {
         .toLowerCase()
         .includes(q),
     );
-  }, [bookings.data, search]);
+  }, [bookings.data, search, brand]);
 
   const total = rows.reduce((sum, b) => sum + (b.summary?.total || 0), 0);
 
   return (
     <>
       <header className="page-header">
-        <h1>Bookings</h1>
+        <h1>Bookings{brand.view !== 'both' && <span className="muted"> · {brandLabel(brand.view)}</span>}</h1>
         <div className="filters">
           <label>
             From <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
@@ -100,7 +103,8 @@ export function BookingsPage() {
                       <td data-label="When">{fmtDateTime(b.service_date)}</td>
                       <td data-label="Customer">
                         {b.user?.name || '—'}
-                        {b.user?.is_new_customer && <span className="badge">new</span>}
+                        {b.user?.is_new_customer && <span className="badge">new</span>}{' '}
+                        <BrandPill brand={brand.brandOf(b.location?.id, b.location?.name)} />
                       </td>
                       <td data-label="Address">{b.address?.full_address || '—'}</td>
                       <td data-label="Service">{b.services?.[0]?.name || '—'}</td>

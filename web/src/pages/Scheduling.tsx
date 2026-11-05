@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useBrand } from '../brands/useBrand';
+import { BrandPill, brandLabel } from '../brands/ui';
 import { segmentsApi } from '../segments/api';
 import { scheduleApi, type Candidate, type Change, type ChangeKind, type Overview, type Series, type Slot, type Visit } from '../schedule/api';
 import { FreqPill, Reasons, ScheduleStatus, niceDate, CleanerDot } from '../schedule/ui';
@@ -19,8 +21,10 @@ export function SchedulingPage() {
     next.set('tab', t);
     setParams(next, { replace: true });
   };
-  const overview = useQuery({ queryKey: ['schedule', 'overview'], queryFn: scheduleApi.overview, retry: false, refetchInterval: 120_000 });
-  const counts = overview.data?.counts;
+  const brand = useBrand();
+  const overview = useQuery({ queryKey: ['schedule', 'overview', brand.locationIds], queryFn: () => scheduleApi.overview(brand.locationIds), retry: false, refetchInterval: 120_000, placeholderData: (prev) => prev });
+  const changesQ = useQuery({ queryKey: ['schedule', 'changes'], queryFn: scheduleApi.changes, refetchInterval: 60_000, enabled: overview.isSuccess });
+  const openChanges = changesQ.data ? changesQ.data.items.filter((c) => changeInView(brand, c)).length : overview.data?.counts.open_changes;
   return (
     <div className="sch-page">
       <header className="page-header">
@@ -28,13 +32,14 @@ export function SchedulingPage() {
           <h1>Scheduling planner</h1>
           <p className="muted">Keep recurring clients with the same cleaner, fill the gaps, keep drives short. The app suggests; you confirm.</p>
           <ScheduleStatus />
+          {brand.view !== 'both' && <p className="brand-scope"><span className={`brand-pill ${brand.view}`}>{brandLabel(brand.view)}</span> Only this brand's cleaners, visits and changes. Switch brands in the menu.</p>}
         </div>
       </header>
       <div className="tabs">
         {TABS.map(([t, label]) => (
           <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => go(t)}>
             {label}
-            {t === 'changes' && counts?.open_changes ? <span className="sch-count">{counts.open_changes}</span> : null}
+            {t === 'changes' && openChanges ? <span className="sch-count">{openChanges}</span> : null}
           </button>
         ))}
       </div>
@@ -183,7 +188,8 @@ function ChangesTab({ initialKind = null }: { initialKind?: ChangeKind | null })
   const changes = useQuery({ queryKey: ['schedule', 'changes'], queryFn: scheduleApi.changes, refetchInterval: 60_000 });
   const resolve = useMutation({ mutationFn: ({ id, r }: { id: number; r: 'fixed' | 'dismissed' }) => scheduleApi.resolve(id, r), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }) });
   const assign = useAssign(setToast);
-  const items = useMemo(() => changes.data?.items || [], [changes.data]);
+  const brand = useBrand();
+  const items = useMemo(() => (changes.data?.items || []).filter((c) => changeInView(brand, c)), [changes.data, brand]);
   const byKind = useMemo(() => {
     const m = new Map<ChangeKind, number>();
     for (const i of items) m.set(i.kind, (m.get(i.kind) || 0) + 1);
@@ -269,9 +275,12 @@ function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r
   const { headline, why } = explain(c);
   const [rec, ...others] = c.suggestions;
   const verb = c.kind === 'different_cleaner' ? 'Move back to' : 'Give to';
+  const brand = useBrand();
+  const cardBrand = v ? brand.brandOf(v.location_id) : c.cleaner ? brand.cleanerBrands(c.cleaner.location_ids)[0] ?? null : null;
   return (
     <article className={c.urgent ? 'card sch-change urgent' : 'card sch-change'}>
       <div className="sch-change-top">
+        <BrandPill brand={cardBrand} />
         <span className={`sch-kind k-${c.kind}`}>{KIND_LABEL[c.kind]}</span>
         {c.urgent && <span className="sch-due urgent">Within 48 hours</span>}
       </div>
@@ -408,8 +417,9 @@ function CapacityTab({ data }: { data: Overview }) {
   const [q, setQ] = useState('');
   const [room, setRoom] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  const rows = data.rows.filter((r) => (showAll || r.assignable) && (!area || r.area === area) && (!q || r.name.toLowerCase().includes(q.toLowerCase())) && (!room || r.weeks.slice(0, 4).some((w) => w.capacity - w.booked >= 4)));
-  const hidden = data.rows.filter((r) => !r.assignable).length;
+  const brand = useBrand();
+  const rows = data.rows.filter((r) => brand.showCleaner(r.location_ids) && (showAll || r.assignable) && (!area || r.area === area) && (!q || r.name.toLowerCase().includes(q.toLowerCase())) && (!room || r.weeks.slice(0, 4).some((w) => w.capacity - w.booked >= 4)));
+  const hidden = data.rows.filter((r) => brand.showCleaner(r.location_ids) && !r.assignable).length;
   return (
     <div className="sch-tab">
       <div className="sch-bar">
@@ -440,7 +450,8 @@ function CapacityTab({ data }: { data: Overview }) {
                     <div className="sch-who">
                       <CleanerDot color={r.color} />
                       <div>
-                        <Link to={`/schedule/cleaner/${r.id}`} className="seg-name">{r.name}</Link>
+                        <Link to={`/schedule/cleaner/${r.id}`} className="seg-name">{r.name}</Link>{' '}
+                        <CleanerBrand ids={r.location_ids} />
                         <div className="muted small">{r.area}{r.is_new ? ' · New hire' : ''}{!r.assignable ? ` · ${r.status_label}` : ''}{r.hours_type ? ` · ${r.hours_type}` : ''}</div>
                       </div>
                     </div>
@@ -477,7 +488,8 @@ function CapacityTab({ data }: { data: Overview }) {
 // ---------- continuity ----------
 function ContinuityTab() {
   const [toast, setToast] = useState<string | null>(null);
-  const data = useQuery({ queryKey: ['schedule', 'continuity'], queryFn: scheduleApi.continuity });
+  const brand = useBrand();
+  const data = useQuery({ queryKey: ['schedule', 'continuity', brand.locationIds], queryFn: () => scheduleApi.continuity(brand.locationIds) });
   const assign = useAssign(setToast);
   const d = data.data;
   if (!d) return null;
@@ -627,3 +639,16 @@ export function FindSlotTab({ presetCustomer, reschedule }: { presetCustomer?: {
   );
 }
 
+
+// A change belongs to the brand of its visit's location, or of the cleaner when there is no visit.
+function changeInView(brand: ReturnType<typeof useBrand>, c: Change) {
+  if (c.visit) return brand.showLocation(c.visit.location_id);
+  if (c.cleaner) return brand.showCleaner(c.cleaner.location_ids);
+  return true;
+}
+
+function CleanerBrand({ ids }: { ids?: number[] }) {
+  const brand = useBrand();
+  const b = brand.cleanerBrands(ids);
+  return <BrandPill brand={b[0] ?? null} shared={b.length > 1} />;
+}

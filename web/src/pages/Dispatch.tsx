@@ -2,6 +2,7 @@ import { DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { l27, l27All, l27Write } from '../api';
+import { useBrand } from '../brands/useBrand';
 import { useActiveTeams, useCanWrite, useLocations } from '../hooks';
 import { fmtMoney, todayISO } from '../format';
 import {
@@ -92,10 +93,15 @@ export function DispatchPage() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  const locations = useLocations();
+  const allLocations = useLocations();
+  const brand = useBrand();
+  // Only the viewed brand's locations; "All locations" means all of this brand's.
+  const brandLocations = useMemo(() => (allLocations.data || []).filter((l) => brand.showLocation(l.id, l.name)), [allLocations.data, brand]);
+  const locations = { data: brandLocations };
   useEffect(() => {
-    if (locationId === null && locations.data?.length) setLocationId((locations.data.find((l) => l.default) || locations.data[0]).id);
-  }, [locations.data, locationId]);
+    if (locationId !== null && locationId !== 'all' && !brandLocations.some((l) => l.id === locationId)) setLocationId(null);
+    else if (locationId === null && brandLocations.length) setLocationId(brand.view === 'both' ? (brandLocations.find((l) => l.default) || brandLocations[0]).id : brandLocations.length > 1 ? 'all' : brandLocations[0].id);
+  }, [brandLocations, locationId, brand.view]);
 
   const bookingsQ = useQuery({
     queryKey: ['dispatch', date],
@@ -104,8 +110,8 @@ export function DispatchPage() {
   });
   const teamsQ = useActiveTeams();
   const teams = useMemo(
-    () => ((teamsQ.data || []) as unknown as DispatchTeam[]).filter((t) => locationId === 'all' || locationId === null || !t.locations?.length || t.locations.some((l) => l.id === locationId)),
-    [teamsQ.data, locationId],
+    () => ((teamsQ.data || []) as unknown as DispatchTeam[]).filter((t) => brand.showCleaner(t.locations?.map((l) => l.id)) && (locationId === 'all' || locationId === null || !t.locations?.length || t.locations.some((l) => l.id === locationId))),
+    [teamsQ.data, locationId, brand],
   );
   const availQ = useQuery({
     queryKey: ['availability', teams.map((t) => t.id).join(',')],
@@ -119,8 +125,8 @@ export function DispatchPage() {
   const availability = availQ.data || new Map<number, AvailabilityRow[]>();
 
   const bookings = useMemo(
-    () => (bookingsQ.data || []).filter((b) => b.active !== false && (locationId === 'all' || locationId === null || b.location?.id === locationId)),
-    [bookingsQ.data, locationId],
+    () => (bookingsQ.data || []).filter((b) => b.active !== false && brand.showLocation(b.location?.id, b.location?.name) && (locationId === 'all' || locationId === null || b.location?.id === locationId)),
+    [bookingsQ.data, locationId, brand],
   );
   const board = useMemo(() => buildBoard(bookings, availability, date, now), [bookings, availability, date, now]);
   // Approximate driving per cleaner for the day (home → jobs → home).
@@ -260,7 +266,7 @@ export function DispatchPage() {
                 {l.name}
               </option>
             ))}
-            <option value="all">All locations</option>
+            <option value="all">{brand.view === 'both' ? 'All locations' : `All ${brand.view === 'residential' ? 'Residential' : 'Commercial'} locations`}</option>
           </select>
           <input placeholder="Find customer, cleaner, address…" value={search} onChange={(e) => setSearch(e.target.value)} />
           <label className="check">

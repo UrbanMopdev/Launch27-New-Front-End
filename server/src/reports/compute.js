@@ -47,6 +47,7 @@ export function slimReportVisit(booking, tt, fb) {
     duration: Number(b.duration) || Number(tt?.estimated_duration) || Math.round((teams[0]?.hours || 3) * 60),
     customer_id: b.user?.id ?? null,
     customer: b.user?.name || [b.user?.first_name, b.user?.last_name].filter(Boolean).join(' ') || 'Customer',
+    location_id: Number(b.location?.id ?? b.location_id ?? booking?.location?.id) || null,
     kind: frequencyKind(booking?.frequency?.name),
     lat: b.address?.latitude ?? null,
     lng: b.address?.longitude ?? null,

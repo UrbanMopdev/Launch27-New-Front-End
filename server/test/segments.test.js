@@ -12,7 +12,7 @@ const TODAY = '2026-11-01';
 
 let nextId = 1000;
 // A Launch27 booking as the API returns it (service at 2 pm Toronto).
-function bk(cid, day, freq, total = 200, { created, vip = false, name } = {}) {
+function bk(cid, day, freq, total = 200, { created, vip = false, name, loc } = {}) {
   return {
     id: nextId++,
     service_date: `${day}T18:00:00Z`,
@@ -20,6 +20,8 @@ function bk(cid, day, freq, total = 200, { created, vip = false, name } = {}) {
     frequency: { id: 1, name: freq },
     phone: `(613) 555-01${String(cid).padStart(2, '0')}`,
     address: { city: 'Ottawa' },
+    // Customers 8 and 9 book Commercial Ottawa (167); customer 1 books both.
+    location: { id: loc || ([8, 9].includes(cid) ? 167 : 1) },
     summary: { total },
     user: { id: cid, name: name || `Customer ${cid}`, email: `c${cid}@example.com`, tags_info: vip ? [{ id: 1, name: 'VIP' }] : [] },
   };
@@ -32,7 +34,7 @@ function fixture() {
   const O = 'One time';
   const active = [
     // 1 recurring for over a year
-    bk(1, '2025-09-02', B), bk(1, '2026-10-20', B), bk(1, '2026-11-03', B), bk(1, '2026-11-17', B),
+    bk(1, '2025-09-02', B), bk(1, '2026-10-20', B, 200, { loc: 167 }), bk(1, '2026-11-03', B), bk(1, '2026-11-17', B),
     // 2 at risk: weekly, last clean Oct 10, nothing booked
     bk(2, '2026-09-26', W), bk(2, '2026-10-03', W), bk(2, '2026-10-10', W, 300),
     // 3 lapsed recurring: monthly until June
@@ -188,6 +190,14 @@ describe('segments: sync, store, read', () => {
     assert.deepEqual(prepaid.rows.map((r) => r.customer_id), [8]);
     assert.equal((await seg.customers({ q: '555-0104' })).rows[0].customer_id, 4);
     assert.equal((await seg.customers({ q: 'customer 7' })).rows[0].segment, 'lapsedOne');
+
+    // Brand switcher: only customers who booked that brand's locations; customer 1 is in both.
+    const commercial = await seg.summary({ locations: [167] });
+    assert.equal(commercial.total, 3);
+    assert.equal(commercial.no_recent, null, 'no company-wide comparison inside one brand');
+    assert.deepEqual((await seg.customers({ locations: [167] })).rows.map((r) => r.customer_id).sort(), [1, 8, 9]);
+    assert.equal((await seg.customers({ locations: [1, 2, 3] })).total, 7);
+    assert.equal((await seg.customers({ locations: [0] })).total, 0, 'a brand with no locations shows nobody');
 
     // Profile: journey history.
     const c8 = await seg.customer(8);

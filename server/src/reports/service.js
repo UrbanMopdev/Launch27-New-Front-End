@@ -100,10 +100,33 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     return s;
   }
 
+  // One brand's view (brand switcher): only visits at its Launch27 locations. null = both brands.
+  const locKey = (locations) => (Array.isArray(locations) && locations.length ? [...new Set(locations.map(Number))].sort((a, b) => a - b).join(',') : '');
+  const scopes = new Map();
+  async function needScoped(locations) {
+    const s = await need();
+    const key = locKey(locations);
+    if (!key) return s;
+    const ck = `${s.taken_at}|${key}`;
+    if (!scopes.has(ck)) {
+      if (scopes.size > 20) scopes.clear();
+      const ids = new Set(key.split(',').map(Number));
+      const visits = s.visits.filter((v) => ids.has(Number(v.location_id)));
+      scopes.set(ck, { ...s, visits, byCustomer: indexVisits(visits) });
+    }
+    return scopes.get(ck);
+  }
+
   // Forward-looking numbers from the planner (next 4 weeks), per cleaner and by area.
-  async function plannerView() {
+  async function plannerView(locations = null) {
     try {
-      const ov = await schedule.overview();
+      const ov = await schedule.overview({ locations });
+      const key = locKey(locations);
+      if (key) {
+        // Only cleaners working in this brand's locations (shared cleaners count in both).
+        const ids = new Set(key.split(',').map(Number));
+        ov.rows = ov.rows.filter((r) => !r.location_ids?.length || r.location_ids.some((id) => ids.has(Number(id))));
+      }
       const util = new Map();
       for (const r of ov.rows) {
         const w = r.weeks.slice(0, 4);
@@ -117,13 +140,13 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     }
   }
 
-  async function scheduling(period = '13w') {
-    const s = await need();
-    const key = `sched|${period}|${s.taken_at}`;
+  async function scheduling(period = '13w', { locations = null } = {}) {
+    const s = await needScoped(locations);
+    const key = `sched|${period}|${s.taken_at}|${locKey(locations)}`;
     if (cache.has(key)) return { ...cache.get(key), planner: await plannerHealth(period) };
     const { from, to } = periodRange(s.today, period);
     const sc = sameCleaner(s.visits, s.byCustomer, from, to);
-    const { ov, util } = await plannerView();
+    const { ov, util } = await plannerView(locations);
     const cleanerInfo = new Map((ov?.rows || []).map((r) => [r.id, r]));
     let tracked = 0, onTime = 0, long = 0, enroute = 0;
     const late = [];
@@ -214,11 +237,11 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     };
   }
 
-  async function cleaners(period = '13w', { admin = false } = {}) {
-    const s = await need();
+  async function cleaners(period = '13w', { admin = false, locations = null } = {}) {
+    const s = await needScoped(locations);
     const { from, to, days } = periodRange(s.today, period);
     const stats = cleanerStats(s.visits, s.byCustomer, from, to, s.today);
-    const { ov, util } = await plannerView();
+    const { ov, util } = await plannerView(locations);
     const info = new Map((ov?.rows || []).map((r) => [r.id, r]));
     const rows = [];
     for (const st of stats.values()) {
@@ -257,13 +280,13 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     };
   }
 
-  async function cleaner(id, period = '13w', { admin = false } = {}) {
-    const s = await need();
+  async function cleaner(id, period = '13w', { admin = false, locations = null } = {}) {
+    const s = await needScoped(locations);
     const cid = Number(id);
     const { from, to, days } = periodRange(s.today, period);
     const stats = cleanerStats(s.visits, s.byCustomer, from, to, s.today);
     const st = stats.get(cid);
-    const { ov, util } = await plannerView();
+    const { ov, util } = await plannerView(locations);
     const i = (ov?.rows || []).find((r) => r.id === cid);
     if (!st && !i) throw Object.assign(new Error('No report for this cleaner'), { status: 404 });
     const base = st || cleanerStats([], new Map(), from, to, s.today).get(cid) || { id: cid, name: i?.name, visits: 0, onsiteMin: 0, bookedMin: 0, tracked: 0, onTime: 0, lateMin: [], long: 0, enroute: 0, km: [], rated: 0, happy: 0, unhappy: 0, unhappyRecent: 0, revenue: 0, earned: 0, last40: [] };

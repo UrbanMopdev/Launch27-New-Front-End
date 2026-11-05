@@ -656,6 +656,38 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   }));
 
   // ---------- admin: every change sent to Launch27 ----------
+  // ---------- brands (Residential / Commercial) ----------
+  // Everyone reads the setup (their screens filter by it); admins change it.
+  r.get('/brands', wrap(async (req, res) => {
+    const brands = (await db.query('SELECT slug, name, color, signature FROM brands ORDER BY position')).rows;
+    const overrides = Object.fromEntries((await db.query('SELECT location_id, brand FROM brand_locations')).rows.map((x) => [String(x.location_id), x.brand]));
+    const people = (await db.query("SELECT id, email, name, role, brand FROM users WHERE active IS NOT FALSE ORDER BY lower(coalesce(name, email))")).rows;
+    res.json({ brands, overrides, me: { id: req.user.id, brand: req.user.brand || null }, people: people.map((p) => ({ id: p.id, email: p.email, name: p.name, role: p.role, brand: p.brand || null })) });
+  }));
+  const brandSlug = async (v) => {
+    if (v === null || v === undefined || v === '') return null;
+    const b = await one(db, 'SELECT slug FROM brands WHERE slug = $1', [String(v)]);
+    if (!b) throw Object.assign(new Error('Unknown brand'), { status: 400 });
+    return b.slug;
+  };
+  r.put('/brands/locations/:id', needRole('admin'), wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Bad location id' });
+    let brand;
+    try { brand = await brandSlug(req.body?.brand); } catch (err) { return res.status(err.status || 400).json({ error: err.message }); }
+    await db.query('INSERT INTO brand_locations (location_id, location_name, brand, set_by) VALUES ($1, $2, $3, $4) ON CONFLICT (location_id) DO UPDATE SET location_name = EXCLUDED.location_name, brand = EXCLUDED.brand, set_by = EXCLUDED.set_by, set_at = now()', [id, req.body?.name ? String(req.body.name).slice(0, 200) : null, brand, req.user.id]);
+    await svc.audit(db, req.user.id, 'brand.location', 'location', id, { brand, name: req.body?.name || null });
+    res.json({ location_id: id, brand });
+  }));
+  r.put('/brands/people/:id', needRole('admin'), wrap(async (req, res) => {
+    let brand;
+    try { brand = await brandSlug(req.body?.brand); } catch (err) { return res.status(err.status || 400).json({ error: err.message }); }
+    const u = await one(db, 'UPDATE users SET brand = $2 WHERE id = $1 RETURNING id, brand', [Number(req.params.id), brand]);
+    if (!u) return res.status(404).json({ error: 'No such person' });
+    await svc.audit(db, req.user.id, 'brand.person', 'user', u.id, { brand });
+    res.json({ id: u.id, brand: u.brand || null });
+  }));
+
   r.get('/admin/l27-writes', needRole('admin'), wrap(async (req, res) => {
     if (!writes) return res.json({ rows: [], counts: { total: 0, day: 0, done: 0 }, allow_writes: config.allowWrites });
     res.json({ ...(await writes.list({ limit: req.query.limit, before: req.query.before })), allow_writes: config.allowWrites });
@@ -779,10 +811,12 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
         throw err;
       }
     });
-    r.get('/segments/summary', segErr(async (req, res) => res.json(await segments.summary({ bearer: req.bearer }))));
+    // ?locations=1,2,3: one brand's Launch27 locations (the brand switcher).
+    const locs = (req) => (req.query.locations ? String(req.query.locations).split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0) : null);
+    r.get('/segments/summary', segErr(async (req, res) => res.json(await segments.summary({ bearer: req.bearer, locations: locs(req) }))));
     r.get('/segments/customers', segErr(async (req, res) => {
       const traits = String(req.query.traits || '').split(',').map((t) => t.trim()).filter(Boolean);
-      res.json(await segments.customers({ segment: req.query.segment || null, traits, q: req.query.q || null, limit: req.query.limit, offset: req.query.offset }));
+      res.json(await segments.customers({ segment: req.query.segment || null, traits, q: req.query.q || null, limit: req.query.limit, offset: req.query.offset, locations: locs(req) }));
     }));
     r.get('/segments/customer/:id', segErr(async (req, res) => {
       const row = await segments.customer(Number(req.params.id));
@@ -829,16 +863,17 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       keepFresh(req);
       res.json(await schedule.status());
     }));
+    const brandLocs = (req) => (req.query.locations ? String(req.query.locations).split(',').map(Number).filter((n) => Number.isInteger(n) && n >= 0) : null);
     r.get('/schedule/overview', sched(async (req, res) => {
       keepFresh(req);
-      res.json(await schedule.overview());
+      res.json(await schedule.overview({ locations: brandLocs(req) }));
     }));
     r.get('/schedule/cleaners', sched(async (req, res) => res.json(await schedule.cleaners())));
     r.get('/schedule/plan/:id', sched(async (req, res) => res.json(await schedule.plan(req.params.id))));
     r.get('/schedule/cleaner/:id/profile', sched(async (req, res) => res.json(await schedule.cleanerProfile(req.params.id))));
     r.get('/schedule/gap', sched(async (req, res) => res.json(await schedule.gapOptions(req.query.cleaner, String(req.query.date), Number(req.query.start), Number(req.query.end)))));
     r.get('/schedule/unassigned', sched(async (req, res) => res.json(await schedule.unassigned())));
-    r.get('/schedule/continuity', sched(async (req, res) => res.json(await schedule.continuity())));
+    r.get('/schedule/continuity', sched(async (req, res) => res.json(await schedule.continuity({ locations: brandLocs(req) }))));
     r.get('/schedule/changes', sched(async (req, res) => res.json(await schedule.changes())));
     r.post('/schedule/changes/:id/resolve', sched(async (req, res) => {
       await schedule.resolveChange(Number(req.params.id), req.body?.resolution, req.user.id);
@@ -874,9 +909,10 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     const period = (req) => (['4w', '13w', '12m'].includes(req.query.period) ? req.query.period : '13w');
     const admin = (req) => req.user.role === 'admin';
     r.get('/reports/status', rep(async (req, res) => res.json(await reports.status())));
-    r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req)))));
-    r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req) }))));
-    r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req) }))));
+    const repLocs = (req) => (req.query.locations ? String(req.query.locations).split(',').map(Number).filter((n) => Number.isInteger(n) && n >= 0) : null);
+    r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req), { locations: repLocs(req) }))));
+    r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req), locations: repLocs(req) }))));
+    r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req), locations: repLocs(req) }))));
     r.post('/reports/refresh', needRole('admin'), rep(async (req, res) => {
       reports.start({ bearer: req.bearer });
       res.status(202).json({ running: true });

@@ -1,5 +1,7 @@
+import { brandLabel } from '../brands/ui';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useBrand } from '../brands/useBrand';
 import { useQuery } from '@tanstack/react-query';
 import { segmentsApi, type Period, type SegmentId, type Trends } from '../segments/api';
 import { SEGMENT_HELP, SegmentPill, UpdatedLine, money, pct, shortDate } from '../segments/ui';
@@ -12,7 +14,8 @@ export function CustomerInsightsPage() {
   const [period, setPeriod] = useState<Period>('12m');
   const [from, setFrom] = useState(iso(new Date(Date.now() - 90 * 86_400_000)));
   const [to, setTo] = useState(iso(new Date()));
-  const summary = useQuery({ queryKey: ['segments', 'summary'], queryFn: segmentsApi.summary });
+  const brand = useBrand();
+  const summary = useQuery({ queryKey: ['segments', 'summary', brand.locationIds], queryFn: () => segmentsApi.summary(brand.locationIds) });
   const trends = useQuery({ queryKey: ['segments', 'trends', period, period === 'custom' ? from : '', period === 'custom' ? to : ''], queryFn: () => segmentsApi.trends(period === 'custom' ? { period, from, to } : { period }), placeholderData: (p) => p });
   const t = trends.data;
 
@@ -21,7 +24,7 @@ export function CustomerInsightsPage() {
       <nav className="small muted">Reports / Customer insights</nav>
       <header className="page-header">
         <div className="seg-head">
-          <h1>Customer insights</h1>
+          <h1>Customer insights{brand.view !== 'both' && <span className="muted"> · {brandLabel(brand.view)}</span>}</h1>
           <p className="muted">Who our customers are, what they are worth, and how that is changing.</p>
           <UpdatedLine summary={summary.data} />
         </div>

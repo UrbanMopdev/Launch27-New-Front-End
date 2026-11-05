@@ -1,3 +1,4 @@
+import { useBrand } from '../brands/useBrand';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -69,7 +70,12 @@ export function MarginsPage() {
     }
   }, [settings]);
 
-  const locations = useLocations();
+  const brand = useBrand();
+  const allLocations = useLocations();
+  const locations = useMemo(() => ({ data: (allLocations.data || []).filter((l) => brand.showLocation(l.id, l.name)) }), [allLocations.data, brand]);
+  useEffect(() => {
+    if (locationId !== 'all' && !locations.data.some((l) => l.id === locationId)) setLocationId('all');
+  }, [locationId, locations.data]);
   const pay = useQuery({
     queryKey: ['margin-pay', range.from, range.to],
     queryFn: () => l27All<MarginInput>('/v1/staff/bookings/time_tracking', { filter: 'active', from: range.from, to: range.to }),
@@ -95,8 +101,8 @@ export function MarginsPage() {
     const unassigned = details.data
       .filter((b) => b.id && !inPay.has(b.id) && b.active !== false && !(b.teams || []).length)
       .map((b) => jobMargin(withEstimatedPay(b, avgRate), settings));
-    return [...assigned, ...unassigned].filter((m) => locationId === 'all' || m.job.location?.id === locationId);
-  }, [pay.data, details.data, settings, locationId]);
+    return [...assigned, ...unassigned].filter((m) => brand.showLocation(m.job.location?.id, m.job.location?.name) && (locationId === 'all' || m.job.location?.id === locationId));
+  }, [pay.data, details.data, settings, locationId, brand]);
 
   const total = useMemo(() => summarise(items), [items]);
   const loading = pay.isLoading || details.isLoading;

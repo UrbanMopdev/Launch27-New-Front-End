@@ -7,6 +7,7 @@ export type CleanerStatus = 'active' | 'new' | 'not_ready' | 'off_schedule' | 'o
 
 export interface Cleaner {
   id: number;
+  location_ids?: number[];
   name: string;
   status: CleanerStatus;
   status_label: string;
@@ -25,6 +26,7 @@ export interface Cleaner {
 export interface Visit {
   key: string;
   id: number | null;
+  location_id?: number | null;
   date: string;
   start: number;
   duration: number;
@@ -142,7 +144,7 @@ export interface Change {
   detail: Record<string, unknown> & { why?: string; hours?: string; with?: string[]; from_label?: string; to_label?: string; when_label?: string; duration?: number; from_names?: string[]; to_names?: string[]; main?: string; booked?: string[]; affected_visits?: Visit[] };
   created_at: string;
   visit: (Visit & { end: string; services: string[] }) | null;
-  cleaner: { id: number; name: string; status: string; hours: string | null; working: boolean } | null;
+  cleaner: { id: number; location_ids?: number[]; name: string; status: string; hours: string | null; working: boolean } | null;
   client: ClientInfo | null;
   suggestions: Candidate[];
   series: { count: number; when: string; first: string; last: string; visit_keys: string[]; projected: number } | null;
@@ -181,12 +183,12 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 export const scheduleApi = {
   status: () => call<Status>('GET', '/status'),
-  overview: () => call<Overview>('GET', '/overview'),
+  overview: (locations?: number[] | null) => call<Overview>('GET', `/overview${locations ? `?locations=${locations.join(',')}` : ''}`),
   plan: (id: number) => call<Plan>('GET', `/plan/${id}`),
   cleanerProfile: (id: number) => call<CleanerProfileData>('GET', `/cleaner/${id}/profile`),
   gap: (cleaner: number, date: string, start: number, end: number) => call<GapOptions>('GET', `/gap?cleaner=${cleaner}&date=${date}&start=${start}&end=${end}`),
   unassigned: () => call<{ total_series: number; total_visits: number; series: Series[] }>('GET', '/unassigned'),
-  continuity: () => call<Continuity>('GET', '/continuity'),
+  continuity: (locations?: number[] | null) => call<Continuity>('GET', `/continuity${locations ? `?locations=${locations.join(',')}` : ''}`),
   changes: () => call<{ items: Change[]; today: string }>('GET', '/changes'),
   resolve: (id: number, resolution: 'fixed' | 'dismissed') => call<void>('POST', `/changes/${id}/resolve`, { resolution }),
   findSlots: (q: SlotQuery) => call<{ place_known: boolean; kind: Visit['kind']; frequency: string; duration: number; customer: { id: number; name: string; main: string | null } | null; cleaner: 'same' | 'any'; no_usual: boolean; any_count: number | null; slots: Slot[] }>('POST', '/find-slots', q),
