@@ -102,9 +102,9 @@ const qs = (params: Record<string, string | number | undefined | null>) => {
 };
 
 export const segmentsApi = {
-  summary: () => call<SegmentSummary>('GET', '/summary'),
-  customers: (p: { segment?: SegmentId | null; traits?: TraitId[]; q?: string; limit?: number; offset?: number }) =>
-    call<{ total: number; rows: SegmentRow[] }>('GET', `/customers${qs({ segment: p.segment, traits: p.traits?.join(','), q: p.q, limit: p.limit, offset: p.offset })}`),
+  summary: (locations?: number[] | null) => call<SegmentSummary>('GET', `/summary${qs({ locations: locations?.join(',') })}`),
+  customers: (p: { segment?: SegmentId | null; traits?: TraitId[]; q?: string; limit?: number; offset?: number; locations?: number[] | null }) =>
+    call<{ total: number; rows: SegmentRow[] }>('GET', `/customers${qs({ segment: p.segment, traits: p.traits?.join(','), q: p.q, limit: p.limit, offset: p.offset, locations: p.locations?.join(',') })}`),
   customer: (id: number) => call<CustomerSegment>('GET', `/customer/${id}`),
   logOutcome: (id: number, body: { outcome: Outcome; note?: string; snooze_days?: number }) => call<void>('POST', `/customer/${id}/outcome`, body),
   stats: (segment: SegmentId) => call<SegmentStats>('GET', `/stats/${segment}`),

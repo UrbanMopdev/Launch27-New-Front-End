@@ -1,3 +1,5 @@
+import { useBrand } from '../brands/useBrand';
+import { brandLabel } from '../brands/ui';
 import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -13,7 +15,8 @@ export function CleanerReportsPage() {
   const [area, setArea] = useState<string>('');
   const [sort, setSort] = useState<SortKey>('visits');
   const [dir, setDir] = useState(-1);
-  const q = useQuery({ queryKey: ['reports', 'cleaners', period], queryFn: () => reportsApi.cleaners(period), retry: false, placeholderData: (p) => p });
+  const brand = useBrand();
+  const q = useQuery({ queryKey: ['reports', 'cleaners', period, brand.locationIds], queryFn: () => reportsApi.cleaners(period, brand.locationIds), retry: false, placeholderData: (p) => p });
   const r = q.data;
   const areas = useMemo(() => [...new Set((r?.rows || []).map((x) => x.area).filter(Boolean) as string[])].sort(), [r]);
   const rows = useMemo(() => {
@@ -32,7 +35,7 @@ export function CleanerReportsPage() {
       <header className="page-header">
         <div className="seg-head">
           <span className="small muted">Reports</span>
-          <h1>Cleaner reports</h1>
+          <h1>Cleaner reports{brand.view !== 'both' && <span className="muted"> · {brandLabel(brand.view)}</span>}</h1>
           <p className="muted">How each cleaner is doing: time, quality, keeping clients.{r?.admin ? ' Pay is shown to admins only.' : ''}</p>
           <ReportStatusLine />
         </div>

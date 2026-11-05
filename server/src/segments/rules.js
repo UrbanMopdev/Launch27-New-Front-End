@@ -57,6 +57,7 @@ export function slimBooking(b) {
     email: u.email || null,
     phone: b.phone || null,
     city: b.address?.city || null,
+    loc: Number(b.location?.id ?? b.location_id) || null,
     vip: (u.tags_info || []).some(isVipTag),
     day: torontoDate(b.service_date),
     created: b.created_at ? torontoDate(b.created_at) : torontoDate(b.service_date),
@@ -115,6 +116,8 @@ export function classify(bookings, t, { settings = DEFAULT_SEGMENT_SETTINGS, kno
     email: latest.email || null,
     phone: [...list].reverse().find((b) => b.phone)?.phone || null,
     city: latest.city || null,
+    // Launch27 locations booked (decides the customer's brands).
+    location_ids: [...new Set(list.map((b) => b.loc).filter(Boolean))].sort((a, b) => a - b),
   };
 }
 

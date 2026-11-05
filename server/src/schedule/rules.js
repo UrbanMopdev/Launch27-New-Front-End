@@ -73,6 +73,8 @@ export function parseCleaner(t) {
     name,
     title,
     status,
+    // Launch27 locations the cleaner works in (decides their brand).
+    location_ids: (t.locations || []).map((l) => Number(l.id)).filter(Boolean),
     assignable: status === 'active' || status === 'new',
     isNew: status === 'new',
     gender: codes.includes('F') || has(/^female$/) ? 'F' : codes.includes('M') || has(/^male$/) ? 'M' : null,

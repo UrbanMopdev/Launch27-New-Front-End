@@ -1,3 +1,5 @@
+import { brandLabel } from '../brands/ui';
+import { useBrand } from '../brands/useBrand';
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -48,10 +50,11 @@ function SegmentsView() {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
 
-  const summary = useQuery({ queryKey: ['segments', 'summary'], queryFn: segmentsApi.summary, refetchInterval: (query) => (query.state.data?.running ? 5000 : 60_000) });
+  const brand = useBrand();
+  const summary = useQuery({ queryKey: ['segments', 'summary', brand.locationIds], queryFn: () => segmentsApi.summary(brand.locationIds), refetchInterval: (query) => (query.state.data?.running ? 5000 : 60_000) });
   const list = useQuery({
-    queryKey: ['segments', 'customers', segment, traits.join(','), q, page],
-    queryFn: () => segmentsApi.customers({ segment, traits, q: q.trim() || undefined, limit: PAGE, offset: page * PAGE }),
+    queryKey: ['segments', 'customers', segment, traits.join(','), q, page, brand.locationIds],
+    queryFn: () => segmentsApi.customers({ segment, traits, q: q.trim() || undefined, limit: PAGE, offset: page * PAGE, locations: brand.locationIds }),
     placeholderData: (prev) => prev,
   });
   const refresh = useMutation({ mutationFn: segmentsApi.refresh, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['segments'] }) });
@@ -73,7 +76,7 @@ function SegmentsView() {
     <div className="seg-page">
       <header className="page-header">
         <div className="seg-head">
-          <h1>Customers</h1>
+          <h1>Customers{brand.view !== 'both' && <span className="muted"> · {brandLabel(brand.view)}</span>}</h1>
           <p className="muted">Find a customer or work a list. Segments update on their own from booking history.</p>
           <UpdatedLine summary={s} />
         </div>

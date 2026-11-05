@@ -21,6 +21,10 @@ const COMMENTS_BAD = ['Missed the baseboards and the kitchen floor.', 'Arrived l
 const LOCATIONS = [
   { id: 1, name: 'Ottawa', active: true, default: true, postcodes: ['K1A'], booking_spots_mode: 'flexible', counts: {} },
   { id: 167, name: 'Commercial Ottawa', active: true, default: false, postcodes: ['K1A'], booking_spots_mode: 'flexible', counts: {} },
+  // The rest of UrbanMop's locations (Residential: Kitchener-Waterloo, Carpet Cleaning; Commercial: Cornwall).
+  { id: 2, name: 'Kitchener-Waterloo', active: true, default: false, postcodes: ['N2L'], booking_spots_mode: 'flexible', counts: {} },
+  { id: 3, name: 'Carpet Cleaning', active: true, default: false, postcodes: ['K1A'], booking_spots_mode: 'flexible', counts: {} },
+  { id: 168, name: 'Cornwall', active: true, default: false, postcodes: ['K6H'], booking_spots_mode: 'flexible', counts: {} },
 ];
 const SERVICES = [
   { id: 1180, name: 'One Bedroom Home', price: 137.5, duration: 150 },
@@ -57,7 +61,7 @@ const iso = (d) => d.toISOString().replace('.000Z', 'Z');
 const DAY0 = Date.UTC(2020, 0, 1);
 // Bump when the generated schedule changes shape, so the planner starts fresh instead of
 // reading the switch as hundreds of moved and cancelled visits.
-export const SAMPLE_VERSION = 2;
+export const SAMPLE_VERSION = 6;
 // Monday of week A in the scheduling planner's 4-week cycle (server/src/schedule/rules.js).
 const CYCLE_IDX = Math.round((Date.UTC(2026, 10, 2) - DAY0) / 86_400_000);
 // Launch27 takes service_date as local (Toronto) wall-clock time and returns UTC.
@@ -208,7 +212,8 @@ function buildTeams() {
       confirmed: true,
       share: [20, 21, 22, 22, 22, 23, 24][i % 7],
       tags_info: TEAM_TAGS[i].map((name, k) => ({ id: 700 + i * 10 + k, name })),
-      locations: [i < 11 ? LOCATIONS[0] : LOCATIONS[1]].map(({ id, name }) => ({ id, name, active: true, default: id === 1 })),
+            // 0-9 Residential Ottawa; 10 works both (shared); 11-12 Commercial Ottawa; 13 Cornwall.
+      locations: (i < 10 ? [LOCATIONS[0]] : i === 10 ? [LOCATIONS[0], LOCATIONS[1]] : i < 13 ? [LOCATIONS[1]] : [LOCATIONS[4]]).map(({ id, name }) => ({ id, name, active: true, default: id === 1 })),
     };
   });
 }
@@ -248,8 +253,10 @@ function buildCustomers() {
         i % 13 === 5 ? '#female cleaner only' : null,
       ].filter(Boolean).map((name, k) => ({ id: 800 + i * 10 + k, name, type: 'regular', color: null })),
       // Mix like the real business: 20% weekly, 45% biweekly, 15% monthly, 20% one-time.
-      frequency: FREQUENCIES[[3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 0, 0, 0, 0][i % 20]],
-      location: i % 10 === 9 ? LOCATIONS[1] : LOCATIONS[0],
+      // Commercial clients are mostly weekly contracts; a few every two weeks.
+      frequency: i % 5 === 4 ? FREQUENCIES[i % 15 === 14 ? 1 : 3] : FREQUENCIES[[3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 0, 0, 0, 0][i % 20]],
+      // About 1 in 5 clients are commercial (a quarter of those in Cornwall).
+      location: i % 5 === 4 ? (i % 20 === 19 ? LOCATIONS[4] : LOCATIONS[1]) : LOCATIONS[0],
     };
   });
 }
@@ -386,7 +393,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const r = rng(hash(`series:${c.id}:${i * 7919}`));
     r.next();
     const interval = c.frequency.interval;
-    const svc = c.location.id === 167 ? SERVICES[4] : SERVICES[r.int(4)];
+    const svc = [167, 168].includes(c.location.id) ? SERVICES[4] : SERVICES[r.int(4)];
     const baths = 1 + r.int(3);
     const len = (svc.duration + (baths - 1) * 30) / 60;
     if (interval === 'o') {
@@ -475,7 +482,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
 
   // sp: the client's series (fixed service, time, usual cleaner); daysAhead: from today.
   function makeBooking(id, date, r, c = customers[(id * 7 + 3) % customers.length], sp = null, daysAhead = 0) {
-    const svc = sp ? sp.svc : c.location.id === 167 ? SERVICES[4] : SERVICES[r.int(4)];
+    const svc = sp ? sp.svc : [167, 168].includes(c.location.id) ? SERVICES[4] : SERVICES[r.int(4)];
     const hour = sp ? sp.hour : [8, 8, 9, 9, 10, 12, 13, 13, 14][r.int(9)];
     const start = new Date(`${date}T${String(hour + 5).padStart(2, '0')}:00:00Z`); // ~EST
     const extras = r.next() < (sp ? 0.04 : 0.2) ? [{ ...r.pick(EXTRAS), quantity: 1 }] : [];
