@@ -25,6 +25,7 @@ export interface SegmentSummary {
 }
 
 export interface SegmentRow {
+  location_ids?: number[];
   customer_id: number;
   name: string | null;
   email: string | null;

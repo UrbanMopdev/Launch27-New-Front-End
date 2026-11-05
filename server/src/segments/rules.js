@@ -68,6 +68,17 @@ export function slimBooking(b) {
   };
 }
 
+// The Launch27 locations that decide a customer's brand(s): where they book now (upcoming
+// visits and the last 90 days), else where they booked last. An old one-off visit at another
+// location (an office clean, a booking entered under the wrong location) doesn't count.
+export const CURRENT_DAYS = 90;
+export function currentLocations(bookings, t) {
+  const since = addDays(t, -CURRENT_DAYS);
+  const current = bookings.filter((b) => b.loc && b.day >= since);
+  const pick = current.length ? current : bookings.filter((b) => b.loc).slice(-1);
+  return [...new Set(pick.map((b) => b.loc))].sort((a, b) => a - b);
+}
+
 // Classify one customer as of date `t` (YYYY-MM-DD).
 // bookings: slimmed, non-cancelled bookings. opts.known: only count bookings created by t
 // (rebuilding history). opts.everPlan: known from earlier runs. opts.cancelled: count of
@@ -116,8 +127,7 @@ export function classify(bookings, t, { settings = DEFAULT_SEGMENT_SETTINGS, kno
     email: latest.email || null,
     phone: [...list].reverse().find((b) => b.phone)?.phone || null,
     city: latest.city || null,
-    // Launch27 locations booked (decides the customer's brands).
-    location_ids: [...new Set(list.map((b) => b.loc).filter(Boolean))].sort((a, b) => a - b),
+    location_ids: currentLocations(list, t),
   };
 }
 

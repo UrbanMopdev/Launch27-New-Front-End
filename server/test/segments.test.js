@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, slimBooking, suggestion, monthEnds, validateSegmentSettings, DEFAULT_SEGMENT_SETTINGS } from '../src/segments/rules.js';
+import { classify, slimBooking, suggestion, monthEnds, validateSegmentSettings, DEFAULT_SEGMENT_SETTINGS, currentLocations } from '../src/segments/rules.js';
 import { createSegments } from '../src/segments/service.js';
 import { openDb } from '../src/db/index.js';
 import { createApp } from '../src/app.js';
@@ -94,6 +94,18 @@ const quiet = { info() {}, warn() {}, error() {} };
 describe('segments: rules', () => {
   const data = fixture();
   const seg = (cid, opts) => classify(forCustomer(data, cid), TODAY, opts);
+
+  test('brand: where the customer books now, not an old one-off at another location', () => {
+    const v = (day, loc) => ({ day, loc });
+    const t = '2026-11-05';
+    // Residential client with one office clean at Commercial Ottawa (167) last spring.
+    assert.deepEqual(currentLocations([v('2026-04-02', 167), v('2026-10-01', 1), v('2026-10-29', 1), v('2026-11-12', 1)], t), [1]);
+    // Books both now: shows in both.
+    assert.deepEqual(currentLocations([v('2026-10-20', 167), v('2026-11-03', 1)], t), [1, 167]);
+    // Nothing recent: where they booked last.
+    assert.deepEqual(currentLocations([v('2025-12-01', 1), v('2026-03-01', 168)], t), [168]);
+    assert.deepEqual(currentLocations([], t), []);
+  });
 
   test('each customer lands in exactly the segment the rules say', () => {
     assert.equal(seg(1).segment, 'recurring');
