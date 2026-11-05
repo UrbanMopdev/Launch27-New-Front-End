@@ -61,7 +61,7 @@ const iso = (d) => d.toISOString().replace('.000Z', 'Z');
 const DAY0 = Date.UTC(2020, 0, 1);
 // Bump when the generated schedule changes shape, so the planner starts fresh instead of
 // reading the switch as hundreds of moved and cancelled visits.
-export const SAMPLE_VERSION = 6;
+export const SAMPLE_VERSION = 7;
 // Monday of week A in the scheduling planner's 4-week cycle (server/src/schedule/rules.js).
 const CYCLE_IDX = Math.round((Date.UTC(2026, 10, 2) - DAY0) / 86_400_000);
 // Launch27 takes service_date as local (Toronto) wall-clock time and returns UTC.

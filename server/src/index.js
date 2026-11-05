@@ -39,7 +39,7 @@ const fetchImpl = config.l27Mode === 'mock' ? createMockLaunch27({ password: con
 const qaSender = createQaSender({ config, fetchImpl, log });
 const writes = createWriteLog({ db, log });
 const segments = createSegments({ db, config, fetchImpl, log });
-const schedule = createSchedule({ db, config, fetchImpl, log, writes, dataTag: () => (qaStore?.summary()?.created_at ? `qa:${qaStore.summary().created_at}:v6` : SAMPLE_VERSION) });
+const schedule = createSchedule({ db, config, fetchImpl, log, writes, dataTag: () => (qaStore?.summary()?.created_at ? `qa:${qaStore.summary().created_at}:v7` : SAMPLE_VERSION) });
 const reports = createReports({ db, config, fetchImpl, schedule, log });
 const jobs = { consecutiveFailures: 0, lastSuccessAt: null, lastError: null };
 onQaChange = (why) => {

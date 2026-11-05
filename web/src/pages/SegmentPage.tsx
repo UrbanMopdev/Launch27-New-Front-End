@@ -1,3 +1,4 @@
+import { AlsoOtherBrand } from '../brands/ui';
 import { useBrand } from '../brands/useBrand';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -95,7 +96,7 @@ function WorkCard({ row: r, segment }: { row: SegmentRow; segment: SegmentId }) 
     <article className={snoozed ? 'card seg-work-card snoozed' : 'card seg-work-card'}>
       <div className="seg-work-top">
         <div>
-          <Link to={`/customers/${r.customer_id}`} className="seg-name big">{r.name || `#${r.customer_id}`}</Link>
+          <Link to={`/customers/${r.customer_id}`} className="seg-name big">{r.name || `#${r.customer_id}`}</Link>{' '}<AlsoOtherBrand locationIds={r.location_ids} />
           <div className="muted small">{[r.plan, r.city, `${money(r.spend_12m)} in 12 months`].filter(Boolean).join(' · ')}</div>
           {r.traits.length > 0 && <div className="seg-trait-row">{r.traits.map((t) => <TraitTag key={t} trait={t} />)}</div>}
         </div>

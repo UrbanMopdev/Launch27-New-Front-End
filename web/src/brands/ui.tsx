@@ -35,3 +35,11 @@ export function BrandPill({ brand, shared = false, always = false }: { brand: Br
 export function brandLabel(view: 'residential' | 'commercial' | 'both') {
   return view === 'both' ? 'Both brands' : `UrbanMop ${SHORT[view]}`;
 }
+
+// On one brand's view: flags a customer who also books the other brand now.
+export function AlsoOtherBrand({ locationIds }: { locationIds?: number[] }) {
+  const { view, brandOf } = useBrand();
+  if (view === 'both' || !locationIds?.length) return null;
+  const other = locationIds.map((id) => brandOf(id)).find((b) => b && b !== view);
+  return other ? <span className={`brand-pill ${other}`} title="Has current bookings in the other brand too">Also {SHORT[other]}</span> : null;
+}
