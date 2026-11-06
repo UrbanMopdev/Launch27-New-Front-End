@@ -500,6 +500,8 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   const visitOut = (s, v) => ({
     key: v.key, id: v.id, location_id: v.location_id ?? null, date: v.date, start: v.start, duration: v.duration, time: clock(v.start), customer_id: v.customer_id, customer: v.customer,
     area: v.area, freq: FREQ_LABEL[v.kind], kind: v.kind, prepaid: v.prepaid, weeks: v.weeks, projected: !v.id,
+    // Short partner label for cards ("OWCS", "Carefor", "QCH @ Home"); null for ordinary customers.
+    partner: v.program || (v.partner_kind === 'homemaking' ? String(v.partner_name || '').replace(/\s+homemaking$/i, '') : null) || null,
     cleaners: v.team_ids.map((id) => ({ id, name: s.byId.get(id)?.name || 'Unknown' })),
   });
 
