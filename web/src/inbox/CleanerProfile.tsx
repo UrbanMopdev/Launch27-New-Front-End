@@ -191,7 +191,7 @@ export function CleanerProfile({ tid, contact, onText, onEmail, editContact }: {
           <section className="card cp-card">
             <div className="cp-card-head"><h2>Regular clients{r ? ` · ${r.clients.length}` : ''}</h2>{r && <Link to={`/reports/cleaners/${c.id}`} className="small">All →</Link>}</div>
             {r?.clients.slice(0, 6).map((x) => (
-              <div key={x.customer_id} className="cp-line"><span><Link to={`/customers/${x.customer_id}`} className="seg-name">{x.customer}</Link> · {x.rhythm}</span><span className="muted small">since {monthYear(x.since)}</span></div>
+              <div key={x.customer_id} className="cp-line"><span>{x.customer_id > 0 ? <Link to={`/customers/${x.customer_id}`} className="seg-name">{x.customer}</Link> : <b>{x.customer}</b>} · {x.rhythm}</span><span className="muted small">since {monthYear(x.since)}</span></div>
             ))}
             {r && r.clients.length === 0 && <p className="muted small">No regular clients right now.</p>}
             {!r && <p className="muted small">Shows once reports are built (overnight).</p>}
@@ -226,7 +226,7 @@ function TodayCard({ p, trackingFor }: { p: CleanerProfileData; trackingFor: (id
               <b className="cp-time">{v.time}</b>
               <span className="cp-dot" aria-hidden="true" />
               <div className="cp-visit-main">
-                {v.customer_id ? <Link to={`/customers/${v.customer_id}`} className="seg-name">{v.customer}</Link> : <b>{v.customer}</b>}
+                {v.customer_id && v.customer_id > 0 ? <Link to={`/customers/${v.customer_id}`} className="seg-name">{v.customer}</Link> : <b>{v.customer}</b>}
                 <span className="muted small"><FreqPill visit={v} /> {Math.round((v.duration / 60) * 10) / 10}h{v.area ? ` · ${v.area}` : ''}{v.drive_before ? ` · ${v.drive_before} min drive` : ''}{v.note ? ` · ${v.note}` : ''}</span>
               </div>
               <span className="cp-badges">

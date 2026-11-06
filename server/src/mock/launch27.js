@@ -61,7 +61,7 @@ const iso = (d) => d.toISOString().replace('.000Z', 'Z');
 const DAY0 = Date.UTC(2020, 0, 1);
 // Bump when the generated schedule changes shape, so the planner starts fresh instead of
 // reading the switch as hundreds of moved and cancelled visits.
-export const SAMPLE_VERSION = 7;
+export const SAMPLE_VERSION = 8;
 // Monday of week A in the scheduling planner's 4-week cycle (server/src/schedule/rules.js).
 const CYCLE_IDX = Math.round((Date.UTC(2026, 10, 2) - DAY0) / 86_400_000);
 // Launch27 takes service_date as local (Toronto) wall-clock time and returns UTC.
@@ -77,7 +77,8 @@ const dateOf = (index) => new Date(DAY0 + index * 86_400_000).toISOString().slic
 
 // Status codes in the title follow UrbanMop's convention: (1) active, (2) new hire,
 // (3) not ready, (X) off schedule, "ON HOLD" in front = not taking bookings; (F)/(M), (FT)/(PT).
-const TEAM_CODES = ['(1)(F)', '(1)(M)', '(1)(F)(FT)', '(1)(F)', '(2)(F)', '(1)(M)(PT)', '(1)(F)', '(2)(M)', '(1)(F)(PT)', '(3)(F)', '(1)(M)', 'ON HOLD(1)(F)', '(X)(1)(M)', '(1)(F)'];
+// 14-16: homemaking cleaners for the commercial partners and hospital programs.
+const TEAM_CODES = ['(1)(F)', '(1)(M)', '(1)(F)(FT)', '(1)(F)', '(2)(F)', '(1)(M)(PT)', '(1)(F)', '(2)(M)', '(1)(F)(PT)', '(3)(F)', '(1)(M)', 'ON HOLD(1)(F)', '(X)(1)(M)', '(1)(F)', '(1)(F)(FT)', '(1)(F)', '(2)(F)(FT)'];
 const TEAM_TAGS = [
   ['Own Equipment', 'Vehicle', 'Female', 'Best for homemaking/recurring clients'],
   ['Own Equipment', 'Vehicle', 'Male', 'Can take last minute bookings'],
@@ -186,7 +187,7 @@ export function copyAvailability(teamId, hoursByTeam) {
 
 function buildTeams() {
   const r = rng(42);
-  return Array.from({ length: 14 }, (_, i) => {
+  return Array.from({ length: 17 }, (_, i) => {
     const first = FIRST[(i * 3) % FIRST.length];
     const last = LAST[(i * 7) % LAST.length];
     return {
@@ -211,9 +212,9 @@ function buildTeams() {
       active: true,
       confirmed: true,
       share: [20, 21, 22, 22, 22, 23, 24][i % 7],
-      tags_info: TEAM_TAGS[i].map((name, k) => ({ id: 700 + i * 10 + k, name })),
+      tags_info: (TEAM_TAGS[i] || ['Own Equipment', 'Vehicle', 'Female', 'Best for homemaking/recurring clients']).map((name, k) => ({ id: 700 + i * 10 + k, name })),
             // 0-9 Residential Ottawa; 10 works both (shared); 11-12 Commercial Ottawa; 13 Cornwall.
-      locations: (i < 10 ? [LOCATIONS[0]] : i === 10 ? [LOCATIONS[0], LOCATIONS[1]] : i < 13 ? [LOCATIONS[1]] : [LOCATIONS[4]]).map(({ id, name }) => ({ id, name, active: true, default: id === 1 })),
+      locations: (i < 10 ? [LOCATIONS[0]] : i === 10 ? [LOCATIONS[0], LOCATIONS[1]] : i < 13 || i > 13 ? [LOCATIONS[1]] : [LOCATIONS[4]]).map(({ id, name }) => ({ id, name, active: true, default: id === 1 })),
     };
   });
 }
@@ -254,7 +255,7 @@ function buildCustomers() {
       ].filter(Boolean).map((name, k) => ({ id: 800 + i * 10 + k, name, type: 'regular', color: null })),
       // Mix like the real business: 20% weekly, 45% biweekly, 15% monthly, 20% one-time.
       // Commercial clients are mostly weekly contracts; a few every two weeks.
-      frequency: i % 5 === 4 ? FREQUENCIES[i % 15 === 14 ? 1 : 3] : FREQUENCIES[[3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 0, 0, 0, 0][i % 20]],
+      frequency: i % 5 === 4 ? FREQUENCIES[i % 15 === 14 ? 3 : 1] : FREQUENCIES[[3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 0, 0, 0, 0][i % 20]],
       // About 1 in 5 clients are commercial (a quarter of those in Cornwall).
       location: i % 5 === 4 ? (i % 20 === 19 ? LOCATIONS[4] : LOCATIONS[1]) : LOCATIONS[0],
     };
@@ -428,6 +429,71 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     // No room anywhere: the client still books, but nobody is set to clean for them.
     return { c, svc, hour: 9, baths, len, weekday: days[start], every, phase, teamId: null, startAgo: 20 + r.int(200), endAgo: null };
   });
+  // Commercial partners book every client from one account (as in UrbanMop's Launch27):
+  // Carefor and OWCS for ongoing homemaking, plus three hospital transition programs.
+  const account = (id, first, last, email, company) => ({ id, first_name: first, last_name: last, email, company_name: company, is_new_customer: false, tags_info: [] });
+  const PARTNERS = {
+    carefor: { acct: account(80001, 'Carefor', 'Homemaking', 'carefor-homemaking@example.com', 'CAREFOR'), svc: { id: 1190, name: 'Carefor Homemaking (1 Cleaner x 2.00 Hours)', price: 80, duration: 120 } },
+    owcs: { acct: account(80002, 'OWCS', 'Homemaking', 'owcs@example.com', 'OWCS'), svc: { id: 1191, name: 'OWCS Homemaking (1 Cleaner x 2.00 Hours)', price: 80, duration: 120 } },
+  };
+  const PROGRAM_ACCOUNTS = [
+    { code: 'B@H', acct: account(80011, 'Bruyere', 'at Home', 'bruyereathome@example.com', 'CAREFOR'), svc: { id: 1192, name: 'Homemaking(B@H) (1 Cleaner x 2.00 Hours)', price: 80, duration: 120 }, perWeek: 1, since: 480 },
+    { code: 'QCH @ Home', acct: account(80012, 'QCH', 'at Home', 'qch-at-home@example.com', null), svc: { id: 1193, name: 'Homemaking(QCH @ Home) (1 Cleaner x 2.00 Hours)', price: 80, duration: 120 }, perWeek: 2, since: 330 },
+    { code: 'MFT @ Home', acct: account(80013, 'MFT', 'at Home', 'mft-at-home@example.com', null), svc: { id: 1194, name: 'Homemaking (MFT @ Home) (1 Cleaner x 2.00 Hours)', price: 80, duration: 120 }, perWeek: 1, since: 270 },
+  ];
+  const notesFor = (first, last, r) => [`${first} ${last}`, `(613) 555-${String(1000 + r.int(8999))}`, r.next() < 0.3 ? `Prefers ${FIRST[r.int(FIRST.length)]}` : r.next() < 0.2 ? 'Female cleaner only' : ''].filter(Boolean).join('\n');
+  for (const sp of series) {
+    if (sp.once || ![167, 168].includes(sp.c.location.id)) continue;
+    const i = sp.c.id - 50000;
+    if (i % 15 === 14) continue; // a few stay as their own commercial accounts
+    const pr = sp.c.location.id === 168 || i % 2 === 0 ? PARTNERS.carefor : PARTNERS.owcs;
+    Object.assign(sp, { account: pr.acct, svc: pr.svc, baths: 1, len: 2, notes: notesFor(sp.c.first_name, sp.c.last_name, rng(hash(`notes:${sp.c.id}`))) });
+  }
+  // Program patients: a few new each week; 4 weekly, 2 every two weeks, 1 monthly (the plan),
+  // though some get 6 weekly visits instead, as the real data shows. Older visits were booked
+  // under the Ottawa location; since spring 2026, under Commercial Ottawa.
+  const programByDay = new Map(); // day index -> visit specs
+  const PLAN = [0, 7, 14, 21, 35, 49, 77];
+  const SIX_WEEKLY = [0, 7, 14, 21, 28, 35];
+  // Program visits go to any active Ottawa-area cleaner, commercial cleaners first.
+  const commercialTeams = genTeams.filter((t) => t.locations.some((l) => l.id === 167 || l.id === 1) && /^\((1|2)\)/.test(t.title)).sort((x, y) => Number(y.locations.some((l) => l.id === 167)) - Number(x.locations.some((l) => l.id === 167)));
+  const progTaken = new Set();
+  const letterOf = (di) => (((Math.floor((di - CYCLE_IDX) / 7)) % 4) + 4) % 4;
+  for (const pa of PROGRAM_ACCOUNTS) {
+    const r = rng(hash(`program:${pa.code}`));
+    for (let w = Math.floor(pa.since / 7); w >= -2; w--) {
+      for (let k = 0; k < pa.perWeek + (r.next() < 0.3 ? 1 : 0); k++) {
+        const weekday = 1 + r.int(5);
+        const startIdx = baseIdx - w * 7 + ((weekday - new Date(`${new Date(now()).toISOString().slice(0, 10)}T12:00:00Z`).getUTCDay() + 7) % 7);
+        const offsets = r.next() < 0.7 ? PLAN : SIX_WEEKLY;
+        const hour = [9, 11.5, 14][r.int(3)];
+        const first = FIRST[r.int(FIRST.length)];
+        const last = LAST[r.int(LAST.length)];
+        const n = r.int(900);
+        const patient = { id: pa.acct.id, first_name: first, last_name: last, email: pa.acct.email, phone: `(613) 555-${String(1000 + n).slice(-4)}`, address: `${100 + n} ${STREETS[r.int(STREETS.length)]}`, city: 'Ottawa', zip: 'K1A 0A1', latitude: 45.3 + r.next() * 0.2, longitude: -75.85 + r.next() * 0.3, is_new_customer: false, tags_info: [], frequency: FREQUENCIES[3] };
+        const freeOn = (t, di, hr = hour) => { const wd = new Date(DAY0 + di * 86_400_000).getUTCDay(); const h = hoursOf(t.id, wd); return h && hr >= h[0] && hr + 2 <= h[1] && !progTaken.has(`${t.id}:${di}:${hr}`) && isFree(t.id, wd, [letterOf(di)], hr, hr + 2); };
+        const notes = notesFor(first, last, r);
+        let prev = null;
+        offsets.forEach((o, vi) => {
+          const di = startIdx + o;
+          // Same cleaner as last visit when free, else whoever is free that day.
+          let at = hour;
+          let team = prev && freeOn(prev, di) && r.next() < 0.75 ? prev : commercialTeams.find((t) => freeOn(t, di)) || null;
+          // Nobody free at the usual slot: one of the other two daily slots.
+          for (const alt of [9, 11.5, 14]) {
+            if (team) break;
+            team = commercialTeams.find((t) => freeOn(t, di, alt)) || null;
+            if (team) at = alt;
+          }
+          prev = team || prev;
+          if (team) progTaken.add(`${team.id}:${di}:${at}`);
+          const historic = di < baseIdx - 180;
+          const spec = { c: { ...patient, location: historic ? LOCATIONS[0] : LOCATIONS[1] }, account: pa.acct, svc: pa.svc, hour: at, baths: 1, len: 2, teamId: team && r.next() > 0.06 ? team.id : null, notes, freq: vi < 4 || offsets === SIX_WEEKLY ? FREQUENCIES[3] : FREQUENCIES[0], program: true };
+          (programByDay.get(di) || programByDay.set(di, []).get(di)).push(spec);
+        });
+      }
+    }
+  }
   const overlay = new Map(); // booking id -> partial changes
   const created = new Map(); // booking id -> booking created through the API
   let nextId = 900_000;
@@ -474,6 +540,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       busy.push(chosen);
       due[due.indexOf(sp)] = chosen;
     }
+    for (const ps of programByDay.get(idx) || []) due.push(ps);
     due.sort((a, b) => a.hour - b.hour || a.c.id - b.c.id);
     const list = due.slice(0, 99).map((sp, k) => makeBooking(idx * 100 + k, date, rng(hash(`${date}:${sp.c.id}:v`)), sp.c, sp, idx - todayIdx));
     for (const b of created.values()) if (b.service_date.slice(0, 10) === date) list.push(b);
@@ -484,7 +551,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
   function makeBooking(id, date, r, c = customers[(id * 7 + 3) % customers.length], sp = null, daysAhead = 0) {
     const svc = sp ? sp.svc : [167, 168].includes(c.location.id) ? SERVICES[4] : SERVICES[r.int(4)];
     const hour = sp ? sp.hour : [8, 8, 9, 9, 10, 12, 13, 13, 14][r.int(9)];
-    const start = new Date(`${date}T${String(hour + 5).padStart(2, '0')}:00:00Z`); // ~EST
+    const start = new Date(`${date}T${String(Math.floor(hour) + 5).padStart(2, '0')}:${hour % 1 ? '30' : '00'}:00Z`); // ~EST
     const extras = r.next() < (sp ? 0.04 : 0.2) ? [{ ...r.pick(EXTRAS), quantity: 1 }] : [];
     const baths = sp ? sp.baths : 1 + r.int(3);
     const pp = [
@@ -492,7 +559,8 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       { id: 138, type: 'flat', name: 'Half Bathrooms', price: 18.33, quantity: 0, total: 0 },
     ];
     const subtotal = svc.price + pp.reduce((s, p) => s + p.total, 0) + extras.reduce((s, x) => s + x.price, 0);
-    const discount = Math.round(subtotal * (c.frequency.percent / 100) * 100) / 100;
+    const freq = sp?.freq || c.frequency;
+    const discount = Math.round(subtotal * (freq.percent / 100) * 100) / 100;
     const revenue = Math.round((subtotal - discount) * 100) / 100;
     const tax = Math.round(revenue * 0.13 * 100) / 100;
     const duration = svc.duration + (baths - 1) * 30 + extras.length * 60;
@@ -531,16 +599,16 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       digest: `mock${id}`,
       location: { id: c.location.id, name: c.location.name, active: true, default: c.location.id === 1, postcodes: [] },
       location_id: c.location.id,
-      user: { id: c.id, name: `${c.first_name} ${c.last_name}`, email: c.email, first_name: c.first_name, last_name: c.last_name, is_new_customer: c.is_new_customer, tags_info: c.tags_info || [] },
+      user: sp?.account ? { id: sp.account.id, name: `${sp.account.email} -`, email: sp.account.email, first_name: sp.account.first_name, last_name: sp.account.last_name, company_name: sp.account.company_name, is_new_customer: false, tags_info: [] } : { id: c.id, name: `${c.first_name} ${c.last_name}`, email: c.email, first_name: c.first_name, last_name: c.last_name, is_new_customer: c.is_new_customer, tags_info: c.tags_info || [] },
       service_date: iso(start),
       arrival_window: 60,
       address: { full_address: `${c.address}, ${c.city}, ON ${c.zip}`, street: c.address, city: c.city, state: 'ON', zip: c.zip, latitude: c.latitude, longitude: c.longitude },
       phone: c.phone,
-      frequency: c.frequency,
+      frequency: freq,
       payment_method_info: card ? { code: 'stripe', text: 'visa - 4242', brand: 'visa', last4: '4242' } : { code: 'check', text: 'Cash / cheque' },
       services: [{ id: svc.id, name: svc.name, price: svc.price, extras: extras.map((x) => ({ ...x, total: x.price, recurring: false })), pricing_parameters: pp, commercial: svc.id === 21 }],
       teams: unassigned ? [] : [{ id: team.id, title: team.title, image: null, share: team.share, hours, earned: Math.round(team.share * hours * 100) / 100, fg_color: '#000000', bg_color: team.bg_color }],
-      staff_notes: null,
+      staff_notes: sp?.notes || null,
       customer_notes: r.next() < 0.1 ? 'Please use the side door.' : null,
       duration,
       blocked_duration: duration,

@@ -67,6 +67,10 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
         if (b.active === false) continue;
         visits.push(slimReportVisit(b, tracking.get(id), rated.get(id)));
       }
+      // Hospital programs were booked under the Ottawa (Residential) location until spring
+      // 2026; they are Commercial work, so count them under the Commercial location.
+      const commercialLoc = visits.find((v) => /commercial/i.test(v.location_name || ''))?.location_id || null;
+      if (commercialLoc) for (const v of visits) if (v.partner_kind === 'program' && !/commercial|cornwall/i.test(v.location_name || '')) v.location_id = commercialLoc;
       const data = { today: t, from, to, visits };
       await db.tx(async (q) => {
         await q.query('INSERT INTO report_snapshots (data) VALUES ($1::jsonb)', [JSON.stringify(data)]);
@@ -313,5 +317,7 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     return { taken_at: s?.taken_at || null, running: !!running, last_error: last?.status === 'failed' ? last.error : null, covers_from: s?.from || null };
   }
 
-  return { sync, start, maybeRun, scheduling, cleaners, cleaner, status, isRunning: () => !!running, mondayOf };
+  // The raw year of visits (for the Commercial area).
+  const visitsSnapshot = () => need();
+  return { sync, start, maybeRun, scheduling, cleaners, cleaner, status, visitsSnapshot, isRunning: () => !!running, mondayOf };
 }

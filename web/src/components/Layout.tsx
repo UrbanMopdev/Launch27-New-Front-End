@@ -36,6 +36,13 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
     ],
   },
   {
+    section: 'Commercial',
+    items: [
+      { to: '/commercial/organizations', label: 'Organizations', icon: 'badge' },
+      { to: '/commercial/programs', label: 'Hospital programs', icon: 'home' },
+    ],
+  },
+  {
     section: 'Money',
     items: [
       { to: '/profitability', label: 'Job profitability', icon: 'trend' },
