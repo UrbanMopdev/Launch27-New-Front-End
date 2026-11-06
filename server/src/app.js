@@ -15,7 +15,7 @@ const FORWARD_HEADERS = ['accept', 'content-type'];
 
 export function createApp(
   config,
-  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null, schedule = null, reports = null, writes = null } = {},
+  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null } = {},
 ) {
   const app = express();
   // Behind Railway's (or any) HTTPS proxy: trust X-Forwarded-* so secure cookies work.
@@ -195,7 +195,7 @@ export function createApp(
   // The support workspace (conversations, contacts, routing). Needs a database.
   if (db) {
     const l27 = createL27Client({ baseUrl: config.l27BaseUrl, fetchImpl });
-    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule, reports, writes }));
+    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule, reports, writes, commercial }));
   }
 
   // Last-resort error handler: log it (without personal data), answer generically.

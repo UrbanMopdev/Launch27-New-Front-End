@@ -1,6 +1,7 @@
 // Scheduling planner: sync from Launch27 (read-only), detect changes, answer the screens.
 // Writes (assigning a cleaner) go to Launch27 with the signed-in user's own login.
 import { SAMPLE_VERSION } from '../mock/launch27.js';
+import { clientId, clientLabel, noteHints, partnerOf } from '../commercial/partners.js';
 import {
   FREQ_LABEL, STATUS_LABEL, addDays, areaOf, customerPrefs, cycleWeek, cycleWeeks, daysBetween, fitsDay, frequencyKind,
   isPrepaid, km, nameMatches, localDate, localMinutes, mainCleaner, mondayOf, openGaps, parseCleaner, rankCleaners, seriesDates,
@@ -27,6 +28,12 @@ const clock = (min) => {
 // Launch27 booking -> the fields the planner needs.
 export function slimVisit(b) {
   const u = b.user || {};
+  const services = (b.services || []).map((x) => x.name).filter(Boolean);
+  // Partners (Carefor, OWCS, hospital programs) book every client from one account:
+  // each address is its own client, named from the first line of the staff notes.
+  const partner = partnerOf(services, u.company_name);
+  const perAddress = partner && (partner.kind === 'homemaking' || partner.kind === 'program');
+  const street = b.address?.street || b.address?.full_address || '';
   const key = b.id ? String(b.id) : `f${b.forecasted_from_booking?.id || 'x'}-${String(b.service_date).slice(0, 10)}`;
   const start = localMinutes(b.service_date);
   const duration = Number(b.duration) || Math.round((b.teams?.[0]?.hours || 3) * 60);
@@ -41,8 +48,14 @@ export function slimVisit(b) {
     start,
     duration,
     end: start + duration,
-    customer_id: u.id ?? null,
-    customer: u.name || [u.first_name, u.last_name].filter(Boolean).join(' ') || u.company_name || 'Customer',
+    customer_id: perAddress && u.id != null ? clientId(u.id, street) : u.id ?? null,
+    account_id: u.id ?? null,
+    customer: perAddress ? clientLabel(b.staff_notes, street) : u.name || [u.first_name, u.last_name].filter(Boolean).join(' ') || u.company_name || 'Customer',
+    partner: partner?.key || null,
+    partner_name: partner?.name || null,
+    partner_kind: partner?.kind || null,
+    program: partner?.program || null,
+    addr: street || null,
     phone: b.phone || null,
     lat: b.address?.latitude ?? null,
     lng: b.address?.longitude ?? null,
@@ -51,10 +64,11 @@ export function slimVisit(b) {
     kind,
     prepaid: isPrepaid(b.frequency?.name),
     weeks: cycleWeeks(kind, date),
-    services: (b.services || []).map((s) => s.name).filter(Boolean),
+    services,
     team_ids: (b.teams || []).map((t) => Number(t.id)),
     team_hours: Object.fromEntries((b.teams || []).map((t) => [t.id, t.hours || 0])),
-    tags: (u.tags_info || []).map((t) => t.name).filter(Boolean),
+    // Customer tags plus cleaner wishes typed in the staff notes ("prefers…", "do not assign…").
+    tags: [...(u.tags_info || []).map((t) => t.name).filter(Boolean), ...noteHints(b.staff_notes)],
   };
 }
 

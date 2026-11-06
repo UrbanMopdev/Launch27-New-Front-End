@@ -25,7 +25,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -656,6 +656,23 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   }));
 
   // ---------- admin: every change sent to Launch27 ----------
+  // ---------- Commercial area: organizations and hospital programs (read-only) ----------
+  if (commercial) {
+    const com = (fn) => wrap(async (req, res) => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    const cLocs = (req) => (req.query.locations ? String(req.query.locations).split(',').map(Number).filter((n) => Number.isInteger(n) && n >= 0) : null);
+    const per = (req) => (['4w', '13w', '12m'].includes(req.query.period) ? req.query.period : '13w');
+    r.get('/commercial/organizations', com(async (req, res) => res.json(await commercial.organizations({ period: per(req), locations: cLocs(req) }))));
+    r.get('/commercial/organizations/:key', com(async (req, res) => res.json(await commercial.organization(String(req.params.key), { period: per(req), locations: cLocs(req) }))));
+    r.get('/commercial/programs', com(async (req, res) => res.json(await commercial.programs())));
+  }
+
   // ---------- brands (Residential / Commercial) ----------
   // Everyone reads the setup (their screens filter by it); admins change it.
   r.get('/brands', wrap(async (req, res) => {
