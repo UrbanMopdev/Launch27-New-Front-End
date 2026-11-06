@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BrandSwitcher } from '../brands/ui';
+import { useBrand } from '../brands/useBrand';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { auth } from '../api';
@@ -96,6 +97,8 @@ export function Layout({ email }: { email: string }) {
   const [closed, setClosed] = useState<Record<string, boolean>>(() => loadPref('closed', { Developer: true }));
   const location = useLocation();
   useEffect(() => setMenuOpen(false), [location.pathname]);
+  // The Commercial section belongs to the Commercial brand: hidden while viewing Residential.
+  const { view: brandView } = useBrand();
   const current = NAV.flatMap((g) => g.items).filter((i) => location.pathname === i.to || location.pathname.startsWith(`${i.to}/`)).sort((a, b) => b.to.length - a.to.length)[0];
   const counts = useCounts();
   const wide = location.pathname.startsWith('/inbox/') || location.pathname === '/inbox';
@@ -161,7 +164,7 @@ export function Layout({ email }: { email: string }) {
         <BrandSwitcher />
 
         <nav>
-          {NAV.map((group) => {
+          {NAV.filter((group) => !(group.section === 'Commercial' && brandView === 'residential')).map((group) => {
             // Rail: every item shows. Expanded: closed sections hide their items, except the current page.
             const open = rail || !closed[group.section];
             const items = open ? group.items : group.items.filter((i) => i === current);
