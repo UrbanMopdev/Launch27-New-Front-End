@@ -1707,3 +1707,7 @@ i.rep-cell { width: 14px; height: 14px; }
   :root:not([data-theme="light"]) .com-pill.mo { background: #0f3b39; color: #a8e6df; }
   :root:not([data-theme="light"]) .com-bar { background: #24295a; }
 }
+
+/* Partner label on planner cards (OWCS, Carefor, QCH @ Home) */
+.sch-partner { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 1.6; background: #e8eaf8; color: #2b3785; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sch-partner { background: #24295a; color: #c9cff7; } }
