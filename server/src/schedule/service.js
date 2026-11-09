@@ -362,7 +362,9 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const cleaners = [];
     for (const tm of teams) {
       const c = parseCleaner(tm);
-      c.availability = await get(bearer, `/v1/staff/teams/${tm.id}/availability`).catch(() => []);
+      // With a date range Launch27 also returns one-day changes (a day off, a short day) on top of
+      // the weekly hours; without one it returns only the weekly hours.
+      c.availability = await get(bearer, `/v1/staff/teams/${tm.id}/availability`, { from: addDays(t, -7), to: addDays(t, AHEAD_DAYS) }).catch(() => []);
       c.weekly_hours = weeklyHours(c.availability);
       c.area = areaOf(c);
       c.share = tm.share || null;
