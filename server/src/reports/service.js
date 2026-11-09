@@ -3,6 +3,7 @@
 // from Launch27 and stores them slimmed; reports are computed from that plus the planner's
 // live schedule. Cleaner pay is only returned to admins.
 import { addDays, localDate, mondayOf } from '../schedule/rules.js';
+import { harmonizePartners } from '../commercial/partners.js';
 import { PERIODS, cleanerRow, cleanerStats, flagsFor, indexVisits, median, outsideArea, pct, periodRange, regularClients, round1, sameCleaner, slimReportVisit, timing, weeklySeries } from './compute.js';
 
 const DAYS_BACK = 365;
@@ -47,7 +48,10 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
   async function load() {
     if (snap) return snap;
     const row = (await db.query("SELECT taken_at, data FROM report_snapshots WHERE status = 'done' ORDER BY id DESC LIMIT 1")).rows[0];
-    if (row) snap = { ...row.data, taken_at: new Date(row.taken_at).toISOString(), byCustomer: indexVisits(row.data.visits) };
+    if (row) {
+      const visits = harmonizePartners(row.data.visits);
+      snap = { ...row.data, visits, taken_at: new Date(row.taken_at).toISOString(), byCustomer: indexVisits(visits) };
+    }
     return snap;
   }
 
@@ -67,6 +71,7 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
         if (b.active === false) continue;
         visits.push(slimReportVisit(b, tracking.get(id), rated.get(id)));
       }
+      visits.splice(0, visits.length, ...harmonizePartners(visits));
       // Hospital programs were booked under the Ottawa (Residential) location until spring
       // 2026; they are Commercial work, so count them under the Commercial location.
       const commercialLoc = visits.find((v) => /commercial/i.test(v.location_name || ''))?.location_id || null;

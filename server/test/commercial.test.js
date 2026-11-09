@@ -41,3 +41,25 @@ describe('commercial partners', () => {
     assert.deepEqual([due.unbooked, due.next_planned], [true, '2026-11-13']);
   });
 });
+
+describe('partner clients stay one client across every booking', () => {
+  test('a forecast with no service, notes or frequency shows as the same client', async () => {
+    const { fillForecasts } = await import('../src/schedule/service.js');
+    const { harmonizePartners, clientId } = await import('../src/commercial/partners.js');
+    const id = clientId(5505, '12 Main St');
+    const real = { id: 900, key: '900', date: '2026-11-12', account_id: 5505, addr: '12 Main St', customer_id: id, customer: 'Peter Bing', partner: 'b-h', partner_name: 'Bruyère at Home', partner_kind: 'program', program: 'B@H', kind: 'weekly', freq: 'Weekly', services: ['Homemaking(B@H)'], tags: ['prefers karen'] };
+    const forecast = { id: null, key: 'f900-2026-11-26', series_id: 900, date: '2026-11-26', account_id: 5505, addr: '12 Main St', customer_id: 5505, customer: 'bruyereathome@carefor.ca -', partner: null, partner_kind: null, program: null, kind: 'one', freq: null, services: [], tags: [] };
+    const [, f] = harmonizePartners(fillForecasts([real, forecast]));
+    assert.deepEqual([f.customer_id, f.customer, f.program, f.kind, f.tags], [id, 'Peter Bing', 'B@H', 'weekly', ['prefers karen']]);
+  });
+  test('a separate one-time booking under another service name on the partner account', async () => {
+    const { harmonizePartners, clientId } = await import('../src/commercial/partners.js');
+    const id = clientId(5505, '12 Main St');
+    const known = { id: 1, date: '2026-11-12', account_id: 5505, addr: '12 Main St', customer_id: id, customer: 'Peter Bing', partner: 'b-h', partner_name: 'Bruyère at Home', partner_kind: 'program', program: 'B@H' };
+    const odd = { id: 2, date: '2026-11-26', account_id: 5505, addr: '12 Main St', customer_id: 5505, customer: 'bruyereathome@carefor.ca -', partner: 'co-carefor', partner_kind: 'company', program: null };
+    const other = { id: 3, date: '2026-11-26', account_id: 777, addr: '1 Elm St', customer_id: 777, customer: 'Jane Doe', partner: null, partner_kind: null };
+    const out = harmonizePartners([known, odd, other]);
+    assert.deepEqual([out[1].customer_id, out[1].customer, out[1].program], [id, 'Peter Bing', 'B@H']);
+    assert.equal(out[2], other, 'ordinary customers untouched');
+  });
+});

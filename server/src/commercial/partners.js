@@ -107,3 +107,35 @@ export function planStatus(dates, today) {
   const unbooked = state === 'active' && !booked.length && nextPlanned && day(nextPlanned) - day(today) <= 7;
   return { visits: n, done: done.length, booked: booked.length, state, stage, next_planned: state === 'active' ? nextPlanned : null, next_label: n < PROGRAM_PLAN.length ? PLAN_LABEL[n] : null, flags, extra, unbooked };
 }
+
+// Once an account is known to be a partner or program account (from any of its bookings),
+// every booking on it belongs to that partner, matched to the client by address. Programs
+// book later visits as separate one-time bookings, sometimes under another service name or
+// without the client's name in the notes; without this they showed as the account itself.
+// Also lends a client's name to visits at the same address that only had the address.
+export function harmonizePartners(visits) {
+  const isPartner = (v) => v.partner_kind === 'homemaking' || v.partner_kind === 'program';
+  const street = (a) => String(a || '').split(',')[0].trim();
+  const byAccount = new Map(); // account -> Map(fieldsJSON -> count)
+  const names = new Map(); // client id -> name (not just the address)
+  for (const v of visits) {
+    if (v.account_id == null || !isPartner(v)) continue;
+    const f = JSON.stringify({ partner: v.partner, partner_name: v.partner_name, partner_kind: v.partner_kind, program: v.program });
+    const m = byAccount.get(v.account_id) || new Map();
+    m.set(f, (m.get(f) || 0) + 1);
+    byAccount.set(v.account_id, m);
+    if (v.customer_id < 0 && v.customer && v.customer !== street(v.addr)) names.set(v.customer_id, v.customer);
+  }
+  if (!byAccount.size) return visits;
+  return visits.map((v) => {
+    const m = v.account_id != null ? byAccount.get(v.account_id) : null;
+    if (!m) return v;
+    if (isPartner(v)) {
+      const better = names.get(v.customer_id);
+      return better && v.customer !== better ? { ...v, customer: better } : v;
+    }
+    const fields = JSON.parse([...m.entries()].sort((a, b) => b[1] - a[1])[0][0]);
+    const id = clientId(v.account_id, v.addr || '');
+    return { ...v, ...fields, customer_id: id, customer: names.get(id) || street(v.addr) || v.customer };
+  });
+}
