@@ -1671,3 +1671,43 @@ i.rep-cell { width: 14px; height: 14px; }
   :root:not([data-theme="light"]) .brand-pill.none { background: #4a1d1d; color: #ffc9c9; }
   :root:not([data-theme="light"]) .brands-warn { background: #3d2e10; border-color: #6b5220; color: #ffe2a8; }
 }
+
+/* Commercial: organizations and hospital programs */
+.com-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.com-tools input[type="search"] { min-height: 38px; }
+.com-pill { display: inline-block; font-size: 12px; font-weight: 600; line-height: 1.6; padding: 0 8px; border-radius: 999px; white-space: nowrap; background: var(--bg); color: var(--text-2); }
+.com-pill.up { background: var(--ok-soft); color: var(--ok); }
+.com-pill.down { background: var(--danger-soft); color: var(--danger-ink); }
+.com-pill.new { background: var(--accent-soft); color: var(--accent-ink); }
+.com-pill.wk { background: var(--warn-soft); color: var(--warn-ink); }
+.com-pill.bi { background: #e8eaf8; color: #2b3785; }
+.com-pill.mo { background: #e3f3f1; color: #075c58; }
+.com-bar { display: inline-block; width: 70px; height: 8px; border-radius: 4px; background: #e8eaf8; overflow: hidden; vertical-align: middle; }
+.com-bar span { display: block; height: 100%; background: #3846a3; }
+.com-weeks { display: flex; align-items: flex-end; gap: 4px; height: 160px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.com-week { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; }
+.com-week span { display: block; width: 100%; min-height: 2px; border-radius: 3px 3px 0 0; background: #7c86d6; }
+.com-weeks-axis { display: flex; justify-content: space-between; margin-top: 6px; }
+.com-months { position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; align-items: end; height: 190px; }
+.com-month { display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
+.com-month-bar { width: 60%; height: 72%; display: flex; align-items: flex-end; }
+.com-month-bar span { display: block; width: 100%; min-height: 2px; border-radius: 4px 4px 0 0; background: #3846a3; }
+.com-expected { position: absolute; left: 0; right: 0; border-top: 2px dashed var(--warn); }
+.com-actions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.com-actions li { padding-bottom: 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+.com-dots { display: inline-flex; gap: 4px; align-items: center; }
+.com-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #3846a3; box-sizing: border-box; }
+.com-dot.done { background: #3846a3; }
+.com-dot.booked { background: #c3c8ef; }
+.com-dot.todo { background: transparent; border-color: var(--border-strong); }
+.com-dot.off { border-color: var(--danger); }
+.com-dot.done.off { background: var(--danger); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .com-pill.bi { background: #24295a; color: #c9cff7; }
+  :root:not([data-theme="light"]) .com-pill.mo { background: #0f3b39; color: #a8e6df; }
+  :root:not([data-theme="light"]) .com-bar { background: #24295a; }
+}
+
+/* Partner label on planner cards (OWCS, Carefor, QCH @ Home) */
+.sch-partner { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 1.6; background: #e8eaf8; color: #2b3785; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sch-partner { background: #24295a; color: #c9cff7; } }

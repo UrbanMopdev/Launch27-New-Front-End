@@ -101,7 +101,7 @@ function Row({ label, sub, cells, selected, onGap, onUnavailable, busy }: { labe
             <Link key={v.key} to={v.id ? `/bookings/${v.id}` : '#'} className={`sch-visit f-${v.kind}`}>
               <span className="sch-visit-top"><b>{v.time}</b><FreqPill visit={v} /></span>
               <span className="sch-visit-name">{v.customer}</span>
-              <span className="small muted">{Math.round((v.duration / 60) * 10) / 10}h{v.area ? ` · ${v.area}` : ''}</span>
+              <span className="small muted">{v.partner && <span className="sch-partner">{v.partner}</span>}{Math.round((v.duration / 60) * 10) / 10}h{v.area ? ` · ${v.area}` : ''}</span>
             </Link>
           ))}
           {c.gaps.map((g) => (

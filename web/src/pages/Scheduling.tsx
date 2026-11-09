@@ -49,7 +49,7 @@ export function SchedulingPage() {
           {tab === 'changes' && <ChangesTab initialKind={initialKind} />}
           {tab === 'capacity' && <CapacityTab data={overview.data} />}
           {tab === 'continuity' && <ContinuityTab />}
-          {tab === 'find' && <FindFromLink customerId={Number(params.get('customer')) || null} reschedule={rescheduleFrom(params)} />}
+          {tab === 'find' && <FindFromLink customerId={Number(params.get('customer')) || null} name={params.get('name')} reschedule={rescheduleFrom(params)} />}
         </>
       )}
     </div>
@@ -65,10 +65,11 @@ function rescheduleFrom(params: URLSearchParams): Reschedule | undefined {
   const kind = params.get('freq');
   return { bookingId, next, hours: Number(params.get('hours')) || undefined, kind: (['weekly', 'bi', 'monthly', 'one'].includes(kind || '') ? kind : undefined) as Visit['kind'] | undefined, current: params.get('current') || undefined };
 }
-function FindFromLink({ customerId, reschedule }: { customerId: number | null; reschedule?: Reschedule }) {
-  const cust = useQuery({ queryKey: ['segments', 'customer', customerId], queryFn: () => segmentsApi.customer(customerId!), enabled: !!customerId, retry: false });
+function FindFromLink({ customerId, reschedule, name }: { customerId: number | null; reschedule?: Reschedule; name?: string | null }) {
+  // Partner clients (negative ids, one per address) aren't customers in Launch27: the link names them.
+  const cust = useQuery({ queryKey: ['segments', 'customer', customerId], queryFn: () => segmentsApi.customer(customerId!), enabled: !!customerId && customerId > 0, retry: false });
   if (customerId && cust.isLoading) return <p className="muted">Loading…</p>;
-  const preset = customerId ? { id: customerId, name: cust.data?.name || `Customer #${customerId}` } : undefined;
+  const preset = customerId ? { id: customerId, name: cust.data?.name || name || `Customer #${customerId}` } : undefined;
   return <FindSlotTab key={`${customerId || 0}-${reschedule?.bookingId || 0}`} presetCustomer={preset} reschedule={reschedule} />;
 }
 
@@ -335,7 +336,7 @@ function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r
       </div>
       <div className="sch-footer">
         {v?.id && <Link to={`/bookings/${v.id}`}>Open booking</Link>}
-        {c.client && <Link to={`/customers/${c.client.id}`}>Client profile</Link>}
+        {c.client && c.client.id > 0 && <Link to={`/customers/${c.client.id}`}>Client profile</Link>}
         <span className="sch-footer-right">
           <button className="secondary" disabled={busy} onClick={() => onResolve('fixed')}>Handled</button>
           <button className="link" disabled={busy} onClick={() => onResolve('dismissed')}>Dismiss</button>

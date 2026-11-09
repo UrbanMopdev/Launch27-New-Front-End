@@ -179,7 +179,7 @@ export function CleanerReportPage() {
               <tbody>
                 {r.clients.map((x) => (
                   <tr key={x.customer_id}>
-                    <td><Link to={`/customers/${x.customer_id}`} className="seg-name">{x.customer}</Link></td>
+                    <td>{x.customer_id > 0 ? <Link to={`/customers/${x.customer_id}`} className="seg-name">{x.customer}</Link> : <b>{x.customer}</b>}</td>
                     <td className="small">{x.rhythm}</td>
                     <td className="small">{x.since ? monthYear(x.since) : '—'} · {x.cleans} cleans</td>
                     <td className="small">{x.last_rating ? <span className={x.last_rating.r === 0 ? 'warn' : x.last_rating.r === 2 ? 'ok' : ''}>{x.last_rating.r === 2 ? 'Happy' : x.last_rating.r === 0 ? 'Unhappy' : 'OK'}{x.last_rating.comment ? ` · "${x.last_rating.comment}"` : ''}</span> : <span className="muted">Not rated</span>}</td>

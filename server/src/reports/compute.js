@@ -1,4 +1,5 @@
 // Scheduling and cleaner reports: pure calculations over a year of slimmed visits.
+import { clientId, clientLabel, partnerOf } from '../commercial/partners.js';
 import { addDays, areaOf, daysBetween, frequencyKind, localDate, localMinutes, mondayOf, weekday } from '../schedule/rules.js';
 
 const MIN = 60_000;
@@ -45,9 +46,26 @@ export function slimReportVisit(booking, tt, fb) {
     start: localMinutes(b.service_date),
     window: Number(b.arrival_window) || 60,
     duration: Number(b.duration) || Number(tt?.estimated_duration) || Math.round((teams[0]?.hours || 3) * 60),
-    customer_id: b.user?.id ?? null,
-    customer: b.user?.name || [b.user?.first_name, b.user?.last_name].filter(Boolean).join(' ') || 'Customer',
+    ...(() => {
+      // Partners book every client from one account: each address is its own client.
+      const services = ((booking || b).services || []).map((x) => x.name).filter(Boolean);
+      const partner = partnerOf(services, b.user?.company_name);
+      const perAddress = partner && (partner.kind === 'homemaking' || partner.kind === 'program');
+      const street = (booking || b).address?.street || (booking || b).address?.full_address || '';
+      return {
+        customer_id: perAddress && b.user?.id != null ? clientId(b.user.id, street) : b.user?.id ?? null,
+        account_id: b.user?.id ?? null,
+        customer: perAddress ? clientLabel((booking || b).staff_notes, street) : b.user?.name || [b.user?.first_name, b.user?.last_name].filter(Boolean).join(' ') || 'Customer',
+        partner: partner?.key || null,
+        partner_name: partner?.name || null,
+        partner_kind: partner?.kind || null,
+        program: partner?.program || null,
+        addr: street || null,
+        freq: (booking || b).frequency?.name || null,
+      };
+    })(),
     location_id: Number(b.location?.id ?? b.location_id ?? booking?.location?.id) || null,
+    location_name: b.location?.name ?? booking?.location?.name ?? null,
     kind: frequencyKind(booking?.frequency?.name),
     lat: b.address?.latitude ?? null,
     lng: b.address?.longitude ?? null,

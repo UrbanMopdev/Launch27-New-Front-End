@@ -1,4 +1,4 @@
-import { brandLabel } from '../brands/ui';
+import { AlsoOtherBrand, brandLabel } from '../brands/ui';
 import { useBrand } from '../brands/useBrand';
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -181,7 +181,7 @@ function SegmentsView() {
                   {list.data?.rows.map((r) => (
                     <tr key={r.customer_id} className="clickable" onClick={() => navigate(`/customers/${r.customer_id}`)}>
                       <td>
-                        <Link to={`/customers/${r.customer_id}`} onClick={(e) => e.stopPropagation()} className="seg-name">{r.name || `#${r.customer_id}`}</Link>
+                        <Link to={`/customers/${r.customer_id}`} onClick={(e) => e.stopPropagation()} className="seg-name">{r.name || `#${r.customer_id}`}</Link>{' '}<AlsoOtherBrand locationIds={r.location_ids} />
                         {r.traits.length > 0 && <div className="seg-trait-row">{r.traits.map((t) => <TraitTag key={t} trait={t} />)}</div>}
                       </td>
                       <td><SegmentPill segment={r.segment} /></td>
