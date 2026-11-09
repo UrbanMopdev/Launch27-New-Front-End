@@ -23,7 +23,7 @@ import { buildRoutes, fmtKm, fmtMin, type CleanerRoute } from '../lib/routes';
 // Dispatch board: one row per cleaner, the day's bookings as blocks on a timeline.
 //   GET  /v1/staff/bookings?from=D&to=D                 (refreshes every minute)
 //   GET  /v1/staff/teams?filter=active                  (cleaners)
-//   GET  /v1/staff/teams/:id/availability               (working hours, cached)
+//   GET  /v1/staff/teams/:id/availability?from&to       (working hours incl. one-day changes, cached)
 //   POST /v1/staff/bookings/assign/teams                { booking_ids, teams: [{ id, hours, share }] }
 // Assigning changes only that visit (not the rest of a recurring series).
 
@@ -114,13 +114,14 @@ export function DispatchPage() {
     [teamsQ.data, locationId, brand],
   );
   const availQ = useQuery({
-    queryKey: ['availability', teams.map((t) => t.id).join(',')],
+    // The date range makes Launch27 include one-day changes (a day off, a short day).
+    queryKey: ['availability', date, teams.map((t) => t.id).join(',')],
     queryFn: async () => {
-      const rows = await mapLimit(teams, 8, (t) => l27<AvailabilityRow[]>(`/v1/staff/teams/${t.id}/availability`).catch(() => [] as AvailabilityRow[]));
+      const rows = await mapLimit(teams, 8, (t) => l27<AvailabilityRow[]>(`/v1/staff/teams/${t.id}/availability`, { from: date, to: date }).catch(() => [] as AvailabilityRow[]));
       return new Map(teams.map((t, i) => [t.id, rows[i]]));
     },
     enabled: teams.length > 0,
-    staleTime: 30 * 60_000,
+    staleTime: 10 * 60_000,
   });
   const availability = availQ.data || new Map<number, AvailabilityRow[]>();
 
