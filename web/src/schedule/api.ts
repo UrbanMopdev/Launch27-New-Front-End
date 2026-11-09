@@ -27,6 +27,7 @@ export interface Visit {
   key: string;
   id: number | null;
   location_id?: number | null;
+  partner?: string | null;
   date: string;
   start: number;
   duration: number;
