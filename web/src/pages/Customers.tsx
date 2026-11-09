@@ -77,7 +77,7 @@ function SegmentsView() {
       <header className="page-header">
         <div className="seg-head">
           <h1>Customers{brand.view !== 'both' && <span className="muted"> · {brandLabel(brand.view)}</span>}</h1>
-          <p className="muted">Find a customer or work a list. Segments update on their own from booking history. Testing claude changes.</p>
+          <p className="muted">Find a customer or work a list. Segments update on their own from booking history.</p>
           <UpdatedLine summary={s} />
         </div>
         <div className="seg-head-actions">
