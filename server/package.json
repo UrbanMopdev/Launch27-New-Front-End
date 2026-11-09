@@ -11,7 +11,7 @@
     "migrate:verify": "node --env-file-if-exists=../.env src/db/migrate-cli.js verify"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.5.15",
+    "@electric-sql/pglite": "^0.5.14",
     "cookie-parser": "^1.4.7",
     "express": "^4.21.2",
     "pg": "^8.23.1"
