@@ -776,7 +776,24 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const teamList = () => (q.get('filter') === 'active' ? teams.filter((t) => t.active !== false) : teams);
     if (path === '/v1/staff/teams') return [200, page(teamList(), q)];
     if (path === '/v1/staff/teams/count') return [200, { count: teamList().length }];
-    if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) return [200, snap ? copyAvailability(m[1], snapHours) : mockAvailability(m[1])];
+    if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/))) {
+      const weekly = snap ? copyAvailability(m[1], snapHours) : mockAvailability(m[1]);
+      // Like Launch27: one-day changes (a day off, a short day) only come back with a date range.
+      const from = q.get('from');
+      const to = q.get('to');
+      if (!from || !to) return [200, weekly];
+      const dated = [];
+      for (let d = Date.parse(`${from}T12:00:00Z`); d <= Date.parse(`${to}T12:00:00Z`) && dated.length < 60; d += 86_400_000) {
+        const date = new Date(d).toISOString().slice(0, 10);
+        const h = hash(`off:${m[1]}:${date}`) % 40;
+        const wd = new Date(d).getUTCDay();
+        const base = weekly.find((r) => r.weekday === wd);
+        if (!base || base.dayoff) continue;
+        if (h === 0) dated.push({ id: Number(m[1]) * 1000 + dated.length, date, weekday: null, dayoff: true, start_time: null, end_time: null });
+        else if (h === 1) dated.push({ id: Number(m[1]) * 1000 + dated.length, date, weekday: null, dayoff: false, start_time: base.start_time, end_time: '12:30' });
+      }
+      return [200, [...weekly, ...dated]];
+    }
     if ((m = path.match(/^\/v1\/staff\/teams\/(\d+)$/))) return (t => (t ? [200, t] : [404, { error: 'Not found' }]))(teams.find((t) => t.id === Number(m[1])));
 
     // Customers

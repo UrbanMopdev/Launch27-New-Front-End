@@ -112,6 +112,7 @@ function world() {
     { id: 3, title: 'ON HOLD(1)(F)Cat Held', latitude: 45.40, longitude: -75.70, share: 22, tags_info: [] },
   ];
   const avail = Object.fromEntries(teams.map((t) => [t.id, [1, 2, 3, 4, 5].map((d) => ({ weekday: d, date: null, dayoff: false, start_time: '08:00', end_time: '17:00' }))]));
+  const dated = {}; // team id -> one-day changes [{ date, dayoff, start_time, end_time }]
   const bookings = [
     // Client 1: biweekly with Ann for months; upcoming visits have no cleaner.
     B(1, '2026-09-08', 9, 'Biweekly - 10% off', 1), B(1, '2026-09-22', 9, 'Biweekly - 10% off', 1), B(1, '2026-10-06', 9, 'Biweekly - 10% off', 1), B(1, '2026-10-20', 9, 'Biweekly - 10% off', 1),
@@ -128,7 +129,8 @@ function world() {
     if (u.pathname === '/latest/login') return json({ bearer: 'b' });
     if (u.pathname === '/v1/staff/teams') return json(Number(u.searchParams.get('offset')) ? [] : teams);
     const m = u.pathname.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/);
-    if (m) return json(avail[m[1]]);
+    // Like Launch27: one-day changes come back only when a date range is asked for.
+    if (m) return json([...avail[m[1]], ...(u.searchParams.get('from') && u.searchParams.get('to') ? (dated[m[1]] || []).filter((r) => r.date >= u.searchParams.get('from') && r.date <= u.searchParams.get('to')) : [])]);
     if (u.pathname === '/v1/staff/bookings/assign/teams' && init.method === 'POST') {
       const body = JSON.parse(init.body);
       posts.push(body);
@@ -152,7 +154,7 @@ function world() {
     }
     return json({ error: 'nf' }, 404);
   };
-  return { teams, avail, bookings, posts, fetchImpl };
+  return { teams, avail, dated, bookings, posts, fetchImpl };
 }
 
 describe('schedule: sync, plan, assign, changes', () => {
@@ -323,6 +325,23 @@ describe('schedule: sync, plan, assign, changes', () => {
     await s.maybeRun({ bearer: 'viewer-token' });
     await settle();
     assert.notEqual((await s.status()).taken_at, first.taken_at, 'quick refresh after 3 minutes');
+  });
+
+  test('one-day changes in Launch27 (a day off, a short day) override the weekly hours', async () => {
+    const w = world();
+    w.dated[1] = [
+      { id: 91, date: '2026-11-11', weekday: null, dayoff: true, start_time: null, end_time: null },
+      { id: 92, date: '2026-11-13', weekday: null, dayoff: false, start_time: '09:00', end_time: '12:30' },
+    ];
+    const db = await openDb();
+    const s = createSchedule({ db, config: loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' }), fetchImpl: w.fetchImpl, log: quiet, now: () => NOW });
+    await s.sync();
+    const cells = (await s.plan(1)).weeks.flatMap((wk) => wk.cells);
+    const day = (d) => cells.find((c) => c.date === d);
+    assert.ok(day('2026-11-11').off, 'day off shows as not working');
+    assert.ok(!day('2026-11-11').gaps.length, 'no open time offered on a day off');
+    assert.match(day('2026-11-13').hours, /12:30/, 'short day ends at 12:30');
+    assert.ok(day('2026-11-13').gaps.every((g) => g.end <= 12 * 60 + 30));
   });
 
   test('quick refresh: next 14 days every few minutes; moved further out reads as moved, not cancelled', async () => {
