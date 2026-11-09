@@ -1,7 +1,7 @@
 // Scheduling planner: sync from Launch27 (read-only), detect changes, answer the screens.
 // Writes (assigning a cleaner) go to Launch27 with the signed-in user's own login.
 import { SAMPLE_VERSION } from '../mock/launch27.js';
-import { clientId, clientLabel, noteHints, partnerOf } from '../commercial/partners.js';
+import { clientId, clientLabel, harmonizePartners, noteHints, partnerOf } from '../commercial/partners.js';
 import {
   FREQ_LABEL, STATUS_LABEL, addDays, areaOf, customerPrefs, cycleWeek, cycleWeeks, daysBetween, fitsDay, frequencyKind,
   isPrepaid, km, nameMatches, localDate, localMinutes, mainCleaner, mondayOf, openGaps, parseCleaner, rankCleaners, seriesDates,
@@ -24,6 +24,33 @@ const clock = (min) => {
   const m = min % 60;
   return `${h % 12 || 12}${m ? `:${pad(m)}` : ''}${h >= 12 ? 'pm' : 'am'}`;
 };
+
+// Launch27's forecast of a visit it hasn't created yet can come without the service, notes or
+// frequency of the booking it repeats; fill those in from that booking (or, failing that, the
+// latest real booking for the same account and address) so it shows as the same client.
+export function fillForecasts(visits) {
+  const real = new Map(visits.filter((v) => v.id).map((v) => [Number(v.id), v]));
+  const latestAt = new Map();
+  for (const v of visits) {
+    if (!v.id || v.account_id == null) continue;
+    const k = `${v.account_id}|${String(v.addr || '').toLowerCase()}`;
+    const cur = latestAt.get(k);
+    if (!cur || v.date > cur.date) latestAt.set(k, v);
+  }
+  return visits.map((v) => {
+    if (v.id) return v;
+    const src = (v.series_id && real.get(Number(v.series_id))) || latestAt.get(`${v.account_id}|${String(v.addr || '').toLowerCase()}`);
+    if (!src) return v;
+    const kind = v.kind === 'one' && src.kind !== 'one' && !v.freq ? src.kind : v.kind;
+    return {
+      ...v,
+      customer_id: src.customer_id, customer: src.customer, partner: v.partner || src.partner, partner_name: v.partner_name || src.partner_name, partner_kind: v.partner_kind || src.partner_kind, program: v.program || src.program,
+      kind, freq: v.freq || src.freq, weeks: cycleWeeks(kind, v.date), prepaid: v.prepaid || src.prepaid,
+      services: v.services?.length ? v.services : src.services, tags: v.tags?.length ? v.tags : src.tags,
+      phone: v.phone || src.phone, area: v.area || src.area, lat: v.lat ?? src.lat, lng: v.lng ?? src.lng,
+    };
+  });
+}
 
 // Launch27 booking -> the fields the planner needs.
 export function slimVisit(b) {
@@ -136,7 +163,9 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   }
 
   // ---------- derived indexes over a snapshot ----------
-  function index(data) {
+  function index(raw) {
+    // Partner accounts: every booking on them is one of their clients (see harmonizePartners).
+    const data = { ...raw, visits: harmonizePartners(fillForecasts(raw.visits)) };
     const cleaners = data.cleaners;
     const byId = new Map(cleaners.map((c) => [c.id, c]));
     const t = data.today;
