@@ -804,9 +804,28 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.status(201).json(await db.tx((q) => svc.logCall(q, req.user, call, { lookup })));
   }));
 
+  // Shared numbers: the customer last picked for this number (pre-selected next time).
+  const callsSaved = () => !(config.ringcentralClientId && config.ringcentralRecord === false);
+  r.get('/caller-choice', wrap(async (req, res) => {
+    const phone = normalizePhone(req.query.phone);
+    if (!phone || !callsSaved()) return res.json({ l27_customer_id: null });
+    const row = await one(db, 'SELECT l27_customer_id FROM caller_choices WHERE phone = $1', [phone]);
+    res.json({ l27_customer_id: row ? Number(row.l27_customer_id) : null });
+  }));
+  r.put('/caller-choice', wrap(async (req, res) => {
+    const phone = normalizePhone(req.body?.phone);
+    const id = Number(req.body?.l27_customer_id);
+    if (!phone || !Number.isInteger(id) || id <= 0) throw new svc.InboxError(400, 'Pick a customer for this number');
+    if (!callsSaved()) return res.status(202).json({ saved: false });
+    await db.query('INSERT INTO caller_choices (phone, l27_customer_id, chosen_by) VALUES ($1, $2, $3) ON CONFLICT (phone) DO UPDATE SET l27_customer_id = EXCLUDED.l27_customer_id, chosen_by = EXCLUDED.chosen_by, chosen_at = now()', [phone, id, req.user?.id ?? null]);
+    res.json({ saved: true });
+  }));
+
   // Screen pop: who is calling?
   r.get('/lookup', wrap(async (req, res) => {
-    if (config.ringcentralClientId && config.ringcentralRecord === false) return res.json({ contacts: [], open: [], l27: null });
+    // Real logins outside production: no real caller's number is looked up here. Test calls
+    // from the Channel simulator (test data) still are.
+    if (config.ringcentralClientId && config.ringcentralRecord === false && req.query.simulated !== '1') return res.json({ contacts: [], open: [], l27: null });
     const kind = req.query.kind === 'email' ? 'email' : 'phone';
     const value = normalizeIdentity(kind, req.query.value);
     if (!value) return res.json({ contacts: [], l27: null });

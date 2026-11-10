@@ -297,6 +297,13 @@ describe('/api end to end', () => {
     assert.equal((await as('/api/brands/locations/42', { brand: 'residential' }, 'PUT')).status, 403);
   });
 
+  test('calls: the last customer picked for a shared number is remembered', async () => {
+    assert.deepEqual((await api('/api/caller-choice?phone=613-555-0199')).body, { l27_customer_id: null });
+    assert.equal((await api('/api/caller-choice', { phone: '(613) 555-0199', l27_customer_id: 77 }, 'PUT')).status, 200);
+    assert.deepEqual((await api('/api/caller-choice?phone=+16135550199')).body, { l27_customer_id: 77 });
+    assert.equal((await api('/api/caller-choice', { phone: '613-555-0199', l27_customer_id: 'x' }, 'PUT')).status, 400);
+  });
+
   test('requires login', async () => {
     assert.equal((await fetch(`${base}/api/me`)).status, 401);
   });

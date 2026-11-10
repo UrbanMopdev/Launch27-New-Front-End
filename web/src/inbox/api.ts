@@ -374,5 +374,7 @@ export const inbox = {
   saveSla: (id: number, patch: { first_response_minutes: number; warn_minutes?: number; business_hours?: boolean }) => call<SlaPolicy>('PUT', `/admin/sla/${id}`, patch),
   simulate: (body: { channel: Channel; from: string; to?: string; subject?: string; body: string; from_name?: string; thread_key?: string }) => call<{ conversationId: number; isNew: boolean; reopened: boolean }>('POST', '/simulate/inbound', body),
   logCall: (body: Record<string, unknown>) => call<{ conversationId: number }>('POST', '/calls', body),
-  lookup: (kind: 'phone' | 'email', value: string) => call<{ contacts: Contact[]; open: { id: number; channel: Channel; subject: string | null }[]; l27: { name: string; roles: Role[]; l27_customer_id?: number | null; l27_team_id?: number | null } | null }>('GET', `/lookup${qs({ kind, value })}`),
+  callerChoice: (phone: string) => call<{ l27_customer_id: number | null }>('GET', `/caller-choice${qs({ phone })}`),
+  rememberCallerChoice: (phone: string, customerId: number) => call<{ saved: boolean }>('PUT', '/caller-choice', { phone, l27_customer_id: customerId }),
+  lookup: (kind: 'phone' | 'email', value: string, simulated = false) => call<{ contacts: Contact[]; open: { id: number; channel: Channel; subject: string | null }[]; l27: { name: string; roles: Role[]; l27_customer_id?: number | null; l27_team_id?: number | null } | null }>('GET', `/lookup${qs({ kind, value, ...(simulated ? { simulated: '1' } : {}) })}`),
 };
