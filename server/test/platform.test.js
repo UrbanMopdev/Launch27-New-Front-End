@@ -34,6 +34,18 @@ describe('environment guards', () => {
   test('RingCentral is disabled outside production unless it points at the sandbox', () => {
     assert.equal(loadConfig({ APP_ENV: 'staging', RINGCENTRAL_CLIENT_ID: 'abc', RINGCENTRAL_SERVER: 'https://platform.ringcentral.com' }).ringcentralClientId, null);
     assert.equal(loadConfig({ APP_ENV: 'staging', RINGCENTRAL_CLIENT_ID: 'abc', RINGCENTRAL_SERVER: 'https://platform.devtest.ringcentral.com' }).ringcentralClientId, 'abc');
+    assert.equal(loadConfig({ APP_ENV: 'staging', RINGCENTRAL_CLIENT_ID: 'abc', RINGCENTRAL_SERVER: 'https://platform.devtest.ringcentral.com' }).ringcentralRecord, true);
+  });
+
+  test('real RingCentral logins outside production only with the switch, and nothing is saved', () => {
+    const off = loadConfig({ APP_ENV: 'development', RINGCENTRAL_CLIENT_ID: 'abc' });
+    assert.equal(off.ringcentralClientId, null);
+    const on = loadConfig({ APP_ENV: 'development', RINGCENTRAL_CLIENT_ID: 'abc', RINGCENTRAL_LIVE_OUTSIDE_PROD: 'true' });
+    assert.equal(on.ringcentralClientId, 'abc');
+    assert.equal(on.ringcentralRecord, false);
+    const prod = loadConfig({ APP_ENV: 'production', RINGCENTRAL_CLIENT_ID: 'abc', RINGCENTRAL_LIVE_OUTSIDE_PROD: 'false' });
+    assert.equal(prod.ringcentralClientId, 'abc');
+    assert.equal(prod.ringcentralRecord, true);
   });
 
   test('production refuses to start without a real secret and database', () => {
