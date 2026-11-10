@@ -385,7 +385,8 @@ function PhoneSimulator() {
   const [phone, setPhone] = useState(SIM_CALLERS[0].phone);
   const [live, setLive] = useState<string | null>(null);
   if (!meta.data?.ringcentral) return null;
-  const send = (type: string, key: string) => window.postMessage({ type, call: { telephonySessionId: key, direction: 'Inbound', from: { phoneNumber: phone }, to: { phoneNumber: '+16136919880' }, simulated: true } }, '*');
+  // A private event, not a window message: the real RingCentral widget must never see fake calls.
+  const send = (type: string, key: string) => window.dispatchEvent(new CustomEvent('workspace:sim-call', { detail: { type, call: { telephonySessionId: key, direction: 'Inbound', from: { phoneNumber: phone }, to: { phoneNumber: '+16136919880' }, simulated: true } } }));
   const ring = () => {
     const key = `sim-${Date.now()}`;
     setLive(key);
