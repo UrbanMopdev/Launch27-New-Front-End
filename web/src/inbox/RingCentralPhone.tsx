@@ -82,7 +82,8 @@ export function RingCentralPhone() {
       const key = call?.telephonySessionId || call?.sessionId || call?.id || '';
       if (data.type === 'rc-call-ring-notify' && call) {
         const phone = num(call.from, call.fromNumber);
-        const who = await inbox.lookup('phone', phone).catch(() => null);
+        // Real logins in dev/QA: don't send real callers' numbers to the test server.
+        const who = cfg.record === false ? null : await inbox.lookup('phone', phone).catch(() => null);
         const contact = who?.contacts[0];
         const p = { phone, name: contact?.name || who?.l27?.name, role: (contact?.roles || who?.l27?.roles || [])[0], conversationId: who?.open[0]?.id, contactId: contact?.id, href: who?.l27?.l27_team_id ? `/cleaners/${who.l27.l27_team_id}` : who?.l27?.l27_customer_id ? `/customers/${who.l27.l27_customer_id}` : undefined };
         setPop(p);
@@ -105,6 +106,11 @@ export function RingCentralPhone() {
       }
       if (data.type === 'rc-call-start-notify' || data.type === 'rc-call-end-notify') stopAlert.current();
       if (data.type === 'rc-call-start-notify' && key) answered.current.add(key);
+      if (data.type === 'rc-call-end-notify' && call && cfg.record === false) {
+        answered.current.delete(key);
+        setPop(null);
+        return;
+      }
       if (data.type === 'rc-call-end-notify' && call) {
         const inbound = /in/i.test(call.direction || '');
         const start = call.startTime ? Number(new Date(call.startTime)) : Date.now();
@@ -140,7 +146,7 @@ export function RingCentralPhone() {
       window.removeEventListener('workspace:dial', onDial);
       stopAlert.current();
     };
-  }, [cfg?.clientId, navigate, queryClient]);
+  }, [cfg?.clientId, cfg?.record, navigate, queryClient]);
 
   if (!pop) {
     if (!cfg?.clientId || !askAlerts) return null;
