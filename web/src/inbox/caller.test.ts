@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blankCaller, hasUnsavedWork, isHidden, last10, pageFor, type Caller } from './caller';
+import { badgeFor, blankCaller, hasUnsavedWork, isHidden, last10, pageFor, type Caller } from './caller';
 
 const caller = (over: Partial<Caller>): Caller => ({ ...blankCaller('+16135551234'), ...over });
 
@@ -43,5 +43,18 @@ describe('incoming calls: unsaved work (A-8)', () => {
     expect(hasUnsavedWork(doc([field('same', 'same')]))).toBe(false);
     expect(hasUnsavedWork(doc([field('x', '', { readOnly: true })]))).toBe(false);
     expect(hasUnsavedWork(doc([field('x', '', { ignored: true })]))).toBe(false);
+  });
+});
+
+describe('incoming calls: the label on the card', () => {
+  it('warns about spam and wrong numbers before anything else', () => {
+    expect(badgeFor(caller({ kind: 'contact', flag: 'spam', lead: true }))).toBe('Likely spam');
+    expect(badgeFor(caller({ kind: 'contact', flag: 'wrong_number' }))).toBe('Wrong number before');
+  });
+  it('says Lead or Job applicant for portal contacts, Customer once linked', () => {
+    expect(badgeFor(caller({ kind: 'contact', lead: true }))).toBe('Lead');
+    expect(badgeFor(caller({ kind: 'contact', applicant: true }))).toBe('Job applicant');
+    expect(badgeFor(caller({ kind: 'contact' }))).toBe('Known contact');
+    expect(badgeFor(caller({ kind: 'customer', customerId: 1 }))).toBe('Customer');
   });
 });

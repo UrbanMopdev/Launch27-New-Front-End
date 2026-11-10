@@ -322,6 +322,34 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json(rows);
   }));
 
+  // Contacts that are not (yet) a Launch27 customer or cleaner: leads, job applicants, others,
+  // numbers nobody named, and numbers marked spam or wrong number.
+  const CONTACT_LISTS = {
+    leads: "c.lead_stage IS NOT NULL AND c.caller_flag IS NULL AND NOT c.roles ? 'applicant'",
+    applicants: "c.roles ? 'applicant' AND c.caller_flag IS NULL",
+    other: "c.name IS NOT NULL AND c.lead_stage IS NULL AND NOT c.roles ? 'applicant' AND c.caller_flag IS NULL",
+    number_only: "c.name IS NULL AND c.lead_stage IS NULL AND NOT c.roles ? 'applicant' AND c.caller_flag IS NULL",
+    flagged: 'c.caller_flag IS NOT NULL',
+  };
+  r.get('/contact-list', wrap(async (req, res) => {
+    const where = CONTACT_LISTS[req.query.list] || CONTACT_LISTS.leads;
+    const rows = await many(
+      db,
+      `SELECT c.id, c.name, c.roles, c.lead_stage, c.lead_source, c.caller_flag, c.notes, c.created_at,
+              COALESCE((SELECT json_agg(json_build_object('kind', i.kind, 'value', i.value) ORDER BY i.kind) FROM contact_identities i WHERE i.contact_id = c.id), '[]') AS identities,
+              (SELECT max(v.last_message_at) FROM conversations v WHERE v.contact_id = c.id) AS last_activity
+       FROM contacts c
+       WHERE c.l27_customer_id IS NULL AND c.l27_team_id IS NULL AND NOT c.roles ? 'system' AND ${where}
+       ORDER BY COALESCE((SELECT max(v.last_message_at) FROM conversations v WHERE v.contact_id = c.id), c.created_at) DESC
+       LIMIT 300`,
+    );
+    const counts = {};
+    for (const [k, w] of Object.entries(CONTACT_LISTS)) {
+      counts[k] = Number((await one(db, `SELECT count(*)::int AS n FROM contacts c WHERE c.l27_customer_id IS NULL AND c.l27_team_id IS NULL AND NOT c.roles ? 'system' AND ${w}`)).n);
+    }
+    res.json({ rows, counts });
+  }));
+
   r.get('/contacts/:id', wrap(async (req, res) => {
     const contact = await one(db, 'SELECT * FROM contacts WHERE id = $1', [req.params.id]);
     if (!contact) throw new svc.InboxError(404, 'Contact not found');
@@ -347,7 +375,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   }));
 
   r.patch('/contacts/:id', wrap(async (req, res) => {
-    const allowed = ['name', 'roles', 'lead_stage', 'lead_source', 'communication_preference', 'notes', 'l27_customer_id', 'l27_team_id'];
+    const allowed = ['name', 'roles', 'lead_stage', 'lead_source', 'communication_preference', 'notes', 'l27_customer_id', 'l27_team_id', 'caller_flag'];
+    if (req.body?.caller_flag !== undefined && ![null, 'spam', 'wrong_number'].includes(req.body.caller_flag)) throw new svc.InboxError(400, 'caller_flag must be spam, wrong_number or null');
     const sets = [];
     const params = [req.params.id];
     for (const k of allowed) {
