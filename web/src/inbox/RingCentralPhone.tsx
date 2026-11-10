@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { l27 } from '../api';
@@ -112,8 +112,7 @@ export function RingCentralPhone() {
       // Unknown and hidden callers: the card stays up for the call.
     };
 
-    const onMessage = async (e: MessageEvent) => {
-      const data = e.data as { type?: string; call?: RcCall };
+    const onEvent = async (data: { type?: string; call?: RcCall }) => {
       if (!data || typeof data !== 'object' || !data.type?.startsWith('rc-')) return;
       const call = data.call;
       const key = keyOf(call);
@@ -191,10 +190,20 @@ export function RingCentralPhone() {
       const frame = document.querySelector<HTMLIFrameElement>('#rc-widget-adapter-frame');
       frame?.contentWindow?.postMessage({ type: 'rc-adapter-new-call', phoneNumber: phone, toCall: true }, '*');
     };
+    // Real calls come from the RingCentral widget as window messages. Test calls from the
+    // Channel simulator come as a private event the widget never sees (it must not get
+    // fake call messages).
+    const onMessage = (e: MessageEvent) => {
+      // Simulated calls only arrive through the private event below.
+      if (e.data && typeof e.data === 'object' && !(e.data as { call?: RcCall }).call?.simulated) void onEvent(e.data);
+    };
+    const onSimulated = (e: Event) => void onEvent({ ...(e as CustomEvent<{ type: string; call: RcCall }>).detail });
     window.addEventListener('message', onMessage);
+    window.addEventListener('workspace:sim-call', onSimulated);
     window.addEventListener('workspace:dial', onDial);
     return () => {
       window.removeEventListener('message', onMessage);
+      window.removeEventListener('workspace:sim-call', onSimulated);
       window.removeEventListener('workspace:dial', onDial);
       stopAlert.current();
     };
@@ -209,9 +218,15 @@ export function RingCentralPhone() {
 
   return (
     <>
-      {picker && <WhoIsCalling caller={picker} onPick={(id) => pick(picker, id)} onClose={() => setPicker(null)} />}
+      {picker && (
+        <CallSafe key={`pick-${picker.phone}`}>
+          <WhoIsCalling caller={picker} onPick={(id) => pick(picker, id)} onClose={() => setPicker(null)} />
+        </CallSafe>
+      )}
       {pop ? (
-        <CallCard pop={pop} onOpen={openPage} onDismiss={() => setPop(null)} onPick={() => setPicker(pop.caller)} />
+        <CallSafe key={pop.key}>
+          <CallCard pop={pop} onOpen={openPage} onDismiss={() => setPop(null)} onPick={() => setPicker(pop.caller)} />
+        </CallSafe>
       ) : cfg?.clientId && askAlerts ? (
         <div className="call-pop call-pop-ask" role="status">
           <div className="call-pop-title">Phone</div>
@@ -224,6 +239,21 @@ export function RingCentralPhone() {
       ) : null}
     </>
   );
+}
+
+// A problem drawing the call card must never take the page (or the phone) down with it:
+// hide the card (the widget still shows the call) and keep the error for the browser console.
+class CallSafe extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(err: unknown) {
+    console.error('Call card failed', err);
+  }
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
 }
 
 // R-1 to R-5: who is calling and why they may be calling. It never takes focus (R-7).
