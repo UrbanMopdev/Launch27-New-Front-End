@@ -67,7 +67,8 @@ export function RingCentralPhone() {
     if (!cfg?.clientId || document.getElementById('rc-adapter-script')) return;
     const s = document.createElement('script');
     s.id = 'rc-adapter-script';
-    const params = new URLSearchParams({ clientId: cfg.clientId, ...(cfg.appServer ? { appServer: cfg.appServer } : {}) });
+    // defaultDirection=left: the widget sits bottom left, clear of the call card (top right).
+    const params = new URLSearchParams({ clientId: cfg.clientId, defaultDirection: 'left', ...(cfg.appServer ? { appServer: cfg.appServer } : {}) });
     s.src = `${ADAPTER}?${params}`;
     s.async = true;
     document.body.appendChild(s);
