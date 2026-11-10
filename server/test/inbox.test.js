@@ -297,6 +297,13 @@ describe('/api end to end', () => {
     assert.equal((await as('/api/brands/locations/42', { brand: 'residential' }, 'PUT')).status, 403);
   });
 
+  test('calls: a hidden caller can be saved by name alone; nothing at all is refused', async () => {
+    const made = await api('/api/contacts', { name: 'Hidden caller about a quote', roles: [] });
+    assert.equal(made.status, 201);
+    assert.equal(made.body.name, 'Hidden caller about a quote');
+    assert.equal((await api('/api/contacts', { roles: [] })).status, 400);
+  });
+
   test('calls: the last customer picked for a shared number is remembered', async () => {
     assert.deepEqual((await api('/api/caller-choice?phone=613-555-0199')).body, { l27_customer_id: null });
     assert.equal((await api('/api/caller-choice', { phone: '(613) 555-0199', l27_customer_id: 77 }, 'PUT')).status, 200);
@@ -395,5 +402,10 @@ describe('/api end to end', () => {
     assert.equal((await as('/api/admin/rules', { rules }, 'PUT')).status, 403);
     assert.equal((await api('/api/admin/rules', { rules }, 'PUT')).status, 200);
     await api('/api/admin/settings', { settings_editors: 'everyone' }, 'PUT');
+  });
+  test('calls: test calls from the simulator are saved (missed calls get a callback conversation)', async () => {
+    const res = await api('/api/calls', { call_id: 'sim-1', simulated: true, direction: 'inbound', from: '613-555-0177', to: '613-691-9880', result: 'missed', started_at: new Date().toISOString() });
+    assert.equal(res.status, 201);
+    assert.ok(res.body.conversationId);
   });
 });

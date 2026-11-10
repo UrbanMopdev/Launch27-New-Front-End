@@ -7,6 +7,7 @@ import type { Booking, Customer, Tag } from '../types';
 import { inbox } from './api';
 import { displayIdentity, useMeta } from './util';
 import { alertPermission, askForAlerts, callAlertText, flashTitle, showCallAlert } from './callAlerts';
+import { NewCaller } from './NewCaller';
 import { blankCaller, CALLER_BADGE, hasUnsavedWork, identifyCaller, pageFor, rememberChoice, type Caller } from './caller';
 
 // RingCentral Embeddable: RingCentral's own softphone widget, loaded into the workspace.
@@ -46,7 +47,7 @@ type RcCall = {
 const num = (v: RcCall['from'], alt?: string) => (typeof v === 'string' ? v : v?.phoneNumber) || alt || '';
 const keyOf = (c?: RcCall) => c?.telephonySessionId || c?.sessionId || c?.id || '';
 
-type Pop = { key: string; caller: Caller; loading: boolean; answered: boolean };
+type Pop = { key: string; caller: Caller; loading: boolean; answered: boolean; simulated: boolean };
 
 export function RingCentralPhone() {
   const meta = useMeta();
@@ -54,8 +55,10 @@ export function RingCentralPhone() {
   const queryClient = useQueryClient();
   const [pop, setPop] = useState<Pop | null>(null);
   const [picker, setPicker] = useState<Caller | null>(null);
+  const [newCaller, setNewCaller] = useState<{ caller: Caller; canSave: boolean; simulated: boolean } | null>(null);
   const ringing = useRef(new Map<string, Caller | null>()); // call key -> caller (null while looking up)
   const answered = useRef(new Set<string>());
+  const simulatedKeys = useRef(new Set<string>());
   const stopAlert = useRef<() => void>(() => {});
   const cfg = meta.data?.ringcentral;
   const [askAlerts, setAskAlerts] = useState(() => {
@@ -98,8 +101,13 @@ export function RingCentralPhone() {
     const saving = cfg.record !== false;
 
     // When the agent answers: open the caller's page, or ask which customer it is.
-    const onAnswered = (key: string, caller: Caller) => {
+    const onAnswered = (key: string, caller: Caller, simulated: boolean) => {
       setPop((p) => (p && p.key === key ? { ...p, answered: true } : p));
+      // A-6: unknown and hidden callers get the "New caller" screen; the card stays up too.
+      if (caller.kind === 'unknown' || caller.kind === 'hidden') {
+        setNewCaller({ caller, canSave: saving || simulated, simulated });
+        return;
+      }
       if (caller.kind === 'several') {
         setPicker(caller);
         return;
@@ -109,7 +117,6 @@ export function RingCentralPhone() {
         openRef.current(path);
         setPop((p) => (p && p.key === key ? null : p)); // the page now shows everything
       }
-      // Unknown and hidden callers: the card stays up for the call.
     };
 
     const onEvent = async (data: { type?: string; call?: RcCall }) => {
@@ -122,7 +129,8 @@ export function RingCentralPhone() {
         const k = key || phone;
         // The card shows the number at once and fills in the name when the lookup returns.
         ringing.current.set(k, null);
-        setPop({ key: k, caller: blankCaller(phone), loading: saving || !!call.simulated, answered: false });
+        simulatedKeys.current[call.simulated ? 'add' : 'delete'](k);
+        setPop({ key: k, caller: blankCaller(phone), loading: saving || !!call.simulated, answered: false, simulated: !!call.simulated });
         stopAlert.current();
         const background = document.hidden || !document.hasFocus();
         const stopFlash = background ? flashTitle(`☎ ${displayIdentity(phone)}`) : () => {};
@@ -144,7 +152,7 @@ export function RingCentralPhone() {
             if (path) openRef.current(path);
           });
         }
-        if (answered.current.has(k)) onAnswered(k, caller); // answered before the lookup returned
+        if (answered.current.has(k)) onAnswered(k, caller, !!call.simulated); // answered before the lookup returned
         return;
       }
 
@@ -156,7 +164,7 @@ export function RingCentralPhone() {
         if (!k) return;
         answered.current.add(k);
         const caller = ringing.current.get(k);
-        if (caller) onAnswered(k, caller);
+        if (caller) onAnswered(k, caller, simulatedKeys.current.has(k));
         return;
       }
 
@@ -164,15 +172,18 @@ export function RingCentralPhone() {
         const k = ringing.current.has(key) ? key : ringing.current.has(num(call.from, call.fromNumber)) ? num(call.from, call.fromNumber) : key;
         const wasAnswered = answered.current.has(k) || /connected|answered|accepted/i.test(call.callStatus || call.result || '');
         ringing.current.delete(k);
+        simulatedKeys.current.delete(k);
         answered.current.delete(k);
         setPop((p) => (p && p.key === k ? null : p));
-        if (!saving || call.simulated) return;
+        // Real calls are saved only where calls are recorded; test calls from the simulator always.
+        if (!saving && !call.simulated) return;
         const inbound = /in/i.test(call.direction || '');
         const start = call.startTime ? Number(new Date(call.startTime)) : Date.now();
         const end = call.endTime || call.callEndTime ? Number(new Date((call.endTime || call.callEndTime)!)) : Date.now();
         await inbox
           .logCall({
             call_id: key || undefined,
+            ...(call.simulated ? { simulated: true } : {}),
             direction: inbound ? 'inbound' : 'outbound',
             from: num(call.from, call.fromNumber),
             to: num(call.to, call.toNumber),
@@ -223,9 +234,25 @@ export function RingCentralPhone() {
           <WhoIsCalling caller={picker} onPick={(id) => pick(picker, id)} onClose={() => setPicker(null)} />
         </CallSafe>
       )}
+      {newCaller && (
+        <CallSafe key={`new-${newCaller.caller.phone}`}>
+          <NewCaller
+            caller={newCaller.caller}
+            canSave={newCaller.canSave}
+            simulated={newCaller.simulated}
+            onClose={() => setNewCaller(null)}
+            onDone={(path) => {
+              setNewCaller(null);
+              setPop((p) => (p && p.caller.phone === newCaller.caller.phone ? null : p));
+              queryClient.invalidateQueries({ queryKey: ['inbox'] });
+              openPage(path);
+            }}
+          />
+        </CallSafe>
+      )}
       {pop ? (
         <CallSafe key={pop.key}>
-          <CallCard pop={pop} onOpen={openPage} onDismiss={() => setPop(null)} onPick={() => setPicker(pop.caller)} />
+          <CallCard pop={pop} onOpen={openPage} onDismiss={() => setPop(null)} onPick={() => setPicker(pop.caller)} onAdd={() => setNewCaller({ caller: pop.caller, canSave: cfg?.record !== false || pop.simulated, simulated: pop.simulated })} />
         </CallSafe>
       ) : cfg?.clientId && askAlerts ? (
         <div className="call-pop call-pop-ask" role="status">
@@ -257,7 +284,7 @@ class CallSafe extends Component<{ children: ReactNode }, { failed: boolean }> {
 }
 
 // R-1 to R-5: who is calling and why they may be calling. It never takes focus (R-7).
-function CallCard({ pop, onOpen, onDismiss, onPick }: { pop: Pop; onOpen: (path: string) => void; onDismiss: () => void; onPick: () => void }) {
+function CallCard({ pop, onOpen, onDismiss, onPick, onAdd }: { pop: Pop; onOpen: (path: string) => void; onDismiss: () => void; onPick: () => void; onAdd: () => void }) {
   const c = pop.caller;
   const path = pageFor(c);
   const conv = c.open[0];
@@ -268,7 +295,7 @@ function CallCard({ pop, onOpen, onDismiss, onPick }: { pop: Pop; onOpen: (path:
         {pop.loading ? displayIdentity(c.phone) : c.name || (c.kind === 'hidden' ? 'Hidden number' : displayIdentity(c.phone))}{' '}
         {!pop.loading && <span className={`role-badge ${c.kind === 'cleaner' ? 'cleaner' : c.kind === 'customer' ? 'customer' : ''}`}>{CALLER_BADGE[c.kind]}</span>}
       </div>
-      {c.kind !== 'hidden' && <div className="muted small">{displayIdentity(c.phone)}</div>}
+      {c.kind !== 'hidden' && !pop.loading && c.name && <div className="muted small">{displayIdentity(c.phone)}</div>}
       {pop.loading && <div className="muted small">Looking up…</div>}
       {!pop.loading && c.kind === 'customer' && c.customerId && <CustomerFacts id={c.customerId} />}
       {!pop.loading && c.kind === 'cleaner' && c.teamId && <CleanerFacts id={c.teamId} />}
@@ -295,6 +322,7 @@ function CallCard({ pop, onOpen, onDismiss, onPick }: { pop: Pop; onOpen: (path:
       <div className="actions">
         {path && <button onClick={() => onOpen(path)}>Open {c.kind === 'cleaner' ? 'cleaner' : c.kind === 'customer' ? 'customer' : 'profile'}</button>}
         {c.kind === 'several' && <button onClick={onPick}>Who is it?</button>}
+        {!pop.loading && (c.kind === 'unknown' || c.kind === 'hidden') && <button onClick={onAdd}>Add contact</button>}
         {conv && <button className="secondary" onClick={() => onOpen(`/inbox/${conv.id}`)}>Open conversation</button>}
         <button className="secondary" onClick={onDismiss}>Dismiss</button>
       </div>
