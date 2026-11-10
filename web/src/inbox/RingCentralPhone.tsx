@@ -8,7 +8,7 @@ import { inbox } from './api';
 import { displayIdentity, useMeta } from './util';
 import { alertPermission, askForAlerts, callAlertText, flashTitle, showCallAlert } from './callAlerts';
 import { NewCaller } from './NewCaller';
-import { blankCaller, CALLER_BADGE, hasUnsavedWork, identifyCaller, pageFor, rememberChoice, type Caller } from './caller';
+import { badgeFor, blankCaller, hasUnsavedWork, identifyCaller, pageFor, rememberChoice, type Caller } from './caller';
 
 // RingCentral Embeddable: RingCentral's own softphone widget, loaded into the workspace.
 // Agents sign in with their RingCentral login inside the widget, and calls ring in the
@@ -142,7 +142,7 @@ export function RingCentralPhone() {
         };
         // Real logins in dev/QA: don't send real callers' numbers to the test server.
         // Simulated calls use test data, so they are looked up everywhere.
-        const caller = saving || call.simulated ? await identifyCaller(phone, !!call.simulated).catch(() => blankCaller(phone)) : blankCaller(phone);
+        const caller = saving || call.simulated ? await identifyCaller(phone, !!call.simulated, saving || !!call.simulated).catch(() => blankCaller(phone)) : blankCaller(phone);
         if (!ringing.current.has(k)) return; // already over
         ringing.current.set(k, caller);
         setPop((p) => (p && p.key === k ? { ...p, caller, loading: false } : p));
@@ -245,7 +245,7 @@ export function RingCentralPhone() {
               setNewCaller(null);
               setPop((p) => (p && p.caller.phone === newCaller.caller.phone ? null : p));
               queryClient.invalidateQueries({ queryKey: ['inbox'] });
-              openPage(path);
+              if (path) openPage(path);
             }}
           />
         </CallSafe>
@@ -293,10 +293,12 @@ function CallCard({ pop, onOpen, onDismiss, onPick, onAdd }: { pop: Pop; onOpen:
       <div className="call-pop-title">{pop.answered ? '☎ On call' : '☎ Incoming call'}</div>
       <div className="call-pop-who">
         {pop.loading ? displayIdentity(c.phone) : c.name || (c.kind === 'hidden' ? 'Hidden number' : displayIdentity(c.phone))}{' '}
-        {!pop.loading && <span className={`role-badge ${c.kind === 'cleaner' ? 'cleaner' : c.kind === 'customer' ? 'customer' : ''}`}>{CALLER_BADGE[c.kind]}</span>}
+        {!pop.loading && <span className={`role-badge ${c.flag ? 'warn' : c.kind === 'cleaner' ? 'cleaner' : c.kind === 'customer' ? 'customer' : ''}`}>{badgeFor(c)}</span>}
       </div>
       {c.kind !== 'hidden' && !pop.loading && c.name && <div className="muted small">{displayIdentity(c.phone)}</div>}
       {pop.loading && <div className="muted small">Looking up…</div>}
+      {!pop.loading && c.linked && <div className="small">Now linked to their Launch27 customer record.</div>}
+      {!pop.loading && c.flag && <div className="small warn">{c.flag === 'spam' ? 'Marked as spam on an earlier call.' : 'Marked as a wrong number on an earlier call.'}</div>}
       {!pop.loading && c.kind === 'customer' && c.customerId && <CustomerFacts id={c.customerId} />}
       {!pop.loading && c.kind === 'cleaner' && c.teamId && <CleanerFacts id={c.teamId} />}
       {!pop.loading && c.kind === 'several' && (

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { l27 } from '../api';
 import type { Customer } from '../types';
 import { inbox, type Role } from './api';
-import type { Caller } from './caller';
+import { linkToCustomer, type Caller } from './caller';
 import { displayIdentity } from './util';
 
 // "New caller" (requirements U-1 to U-6): an unknown or hidden caller is either an existing
@@ -12,14 +12,15 @@ import { displayIdentity } from './util';
 // canSave is false for real calls on dev and QA, where nothing about real callers is kept.
 
 const KINDS: { value: string; label: string; roles: Role[]; lead: boolean }[] = [
-  { value: 'lead', label: 'New lead (wants a quote or booking)', roles: ['customer'], lead: true },
+  // A lead is not a customer until they book: no Customer role until linked to Launch27.
+  { value: 'lead', label: 'New lead (wants a quote or booking)', roles: [], lead: true },
   { value: 'applicant', label: 'Job applicant', roles: ['applicant'], lead: false },
   { value: 'other', label: 'Vendor, partner or other', roles: [], lead: false },
 ];
 
 const nameOf = (c: Customer) => [c.first_name, c.last_name].filter(Boolean).join(' ') || c.company_name || c.email || `Customer #${c.id}`;
 
-export function NewCaller({ caller, canSave, simulated = false, onDone, onClose }: { caller: Caller; canSave: boolean; simulated?: boolean; onDone: (path: string) => void; onClose: () => void }) {
+export function NewCaller({ caller, canSave, simulated = false, onDone, onClose }: { caller: Caller; canSave: boolean; simulated?: boolean; onDone: (path: string | null) => void; onClose: () => void }) {
   const hidden = caller.kind === 'hidden';
   const [q, setQ] = useState('');
   const [name, setName] = useState('');
@@ -30,7 +31,7 @@ export function NewCaller({ caller, canSave, simulated = false, onDone, onClose 
   const term = q.trim();
   const found = useQuery({ queryKey: ['call', 'find', term], queryFn: () => l27<Customer[]>('/v1/staff/customers', { query: term, limit: 8 }), enabled: term.length >= 2, staleTime: 60_000 });
 
-  const run = async (fn: () => Promise<string>) => {
+  const run = async (fn: () => Promise<string | null>) => {
     setBusy(true);
     setError(null);
     try {
@@ -43,9 +44,14 @@ export function NewCaller({ caller, canSave, simulated = false, onDone, onClose 
 
   // U-2: an existing customer on a new number. The number is added to them in the portal
   // (Launch27 itself is unchanged while writes are off).
+  // A contact the call log already made with just this number (the call ended first).
+  const numberOnly = async () => (hidden ? null : (await inbox.lookup('phone', caller.phone, simulated).catch(() => null))?.contacts.find((c) => !c.name && !c.l27_customer_id && !c.l27_team_id && !c.lead_stage) || null);
+
   const thisIsThem = (c: Customer) =>
     run(async () => {
       if (canSave && !hidden) {
+        const bare = await numberOnly();
+        if (bare) await linkToCustomer(bare, c.id);
         const contact = await inbox.fromL27({ customer_id: c.id });
         const known = (contact.identities || []).some((i) => i.kind === 'phone' && i.value.replace(/\D/g, '').slice(-10) === caller.phone.replace(/\D/g, '').slice(-10));
         if (!known) await inbox.addIdentity(contact.id, 'phone', caller.phone, 'Called from');
@@ -57,15 +63,22 @@ export function NewCaller({ caller, canSave, simulated = false, onDone, onClose 
   const save = () =>
     run(async () => {
       const k = KINDS.find((x) => x.value === kind)!;
-      // The call log may already have made a contact with just this number (call ended first):
-      // fill that one in rather than making a second.
-      const existing = hidden ? null : (await inbox.lookup('phone', caller.phone, simulated).catch(() => null))?.contacts.find((c) => !c.name && !c.l27_customer_id && !c.l27_team_id);
+      // Fill in the number-only contact if the call log already made one, rather than a second.
+      const existing = await numberOnly();
       const contact = existing || (await inbox.createContact({ name: name.trim(), roles: k.roles, ...(hidden ? {} : { phone: caller.phone }) }));
       const patch: Record<string, unknown> = existing ? { name: name.trim(), roles: k.roles } : {};
-      if (k.lead) Object.assign(patch, { lead_stage: 'new', lead_source: 'Phone call' });
+      if (k.lead) Object.assign(patch, { lead_stage: 'New', lead_source: 'Phone call' });
       if (notes.trim()) patch.notes = notes.trim();
       if (Object.keys(patch).length) await inbox.updateContact(contact.id, patch as Parameters<typeof inbox.updateContact>[1]);
       return `/contacts/${contact.id}`;
+    });
+
+  // U-4: a wrong number or spam. The number is kept so the next call from it is labelled.
+  const mark = (flag: 'spam' | 'wrong_number') =>
+    run(async () => {
+      const contact = (await numberOnly()) || (await inbox.createContact({ name: '', roles: [], phone: caller.phone }));
+      await inbox.updateContact(contact.id, { caller_flag: flag });
+      return null;
     });
 
   return (
@@ -114,6 +127,12 @@ export function NewCaller({ caller, canSave, simulated = false, onDone, onClose 
         </label>
         {error && <div className="error">{error}</div>}
         <div className="actions end">
+          {!hidden && (
+            <>
+              <button type="button" className="secondary" disabled={busy || !canSave} onClick={() => mark('wrong_number')} title="Label future calls from this number">Wrong number</button>
+              <button type="button" className="secondary" disabled={busy || !canSave} onClick={() => mark('spam')} title="Label future calls from this number as likely spam">Spam</button>
+            </>
+          )}
           <button type="button" className="secondary" disabled={busy} onClick={onClose}>Not now</button>
           <button type="button" disabled={busy || !canSave || !name.trim()} onClick={save}>Save contact</button>
         </div>
