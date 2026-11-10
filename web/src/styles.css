@@ -1711,3 +1711,7 @@ i.rep-cell { width: 14px; height: 14px; }
 /* Partner label on planner cards (OWCS, Carefor, QCH @ Home) */
 .sch-partner { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 1.6; background: #e8eaf8; color: #2b3785; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sch-partner { background: #24295a; color: #c9cff7; } }
+.call-pop-facts { margin: 8px 0 4px; display: grid; gap: 2px; }
+.call-pop-facts .chips { margin-top: 4px; }
+.call-pop-list { margin: 8px 0 4px; padding-left: 18px; display: grid; gap: 4px; }
+.call-pick { display: grid; gap: 10px; margin: 12px 0; }

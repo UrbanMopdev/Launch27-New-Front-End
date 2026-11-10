@@ -333,6 +333,7 @@ export function SimulatorPage() {
               </button>
             ))}
           </div>
+          <PhoneSimulator />
         </section>
         <section className="card">
           <h2>Message</h2>
@@ -369,4 +370,58 @@ export function CleanerRedirectPage() {
     inbox.fromL27({ team_id: Number(id) }).then((c) => navigate(`/contacts/${c.id}`, { replace: true })).catch((err) => setError((err as Error).message));
   }, [id, navigate]);
   return error ? <div className="error">{error}</div> : <p className="muted">Opening profile…</p>;
+}
+
+// Rings the portal's phone with a made-up call, the way the RingCentral widget reports one,
+// so the call card and what opens on answer can be tried with test data (dev and QA).
+const SIM_CALLERS = [
+  { label: 'Customer', phone: '(613) 555-0103' },
+  { label: 'Cleaner', phone: '(613) 555-0200' },
+  { label: 'Unknown', phone: '(613) 555-9876' },
+  { label: 'Hidden', phone: 'Anonymous' },
+];
+function PhoneSimulator() {
+  const meta = useMeta();
+  const [phone, setPhone] = useState(SIM_CALLERS[0].phone);
+  const [live, setLive] = useState<string | null>(null);
+  if (!meta.data?.ringcentral) return null;
+  const send = (type: string, key: string) => window.postMessage({ type, call: { telephonySessionId: key, direction: 'Inbound', from: { phoneNumber: phone }, to: { phoneNumber: '+16136919880' }, simulated: true } }, '*');
+  const ring = () => {
+    const key = `sim-${Date.now()}`;
+    setLive(key);
+    send('rc-call-ring-notify', key);
+  };
+  const answer = () => {
+    if (!live) return;
+    const key = live;
+    send('rc-call-start-notify', key);
+    setLive(null);
+    // The page opens on answer; hang up a minute later on its own.
+    setTimeout(() => send('rc-call-end-notify', key), 60_000);
+  };
+  const hangUp = () => {
+    if (!live) return;
+    send('rc-call-end-notify', live);
+    setLive(null);
+  };
+  return (
+    <>
+      <h3>Incoming call</h3>
+      <p className="small muted">Rings the phone card with a test caller. Answer opens their page; the test call ends itself a minute later.</p>
+      <div className="actions">
+        {SIM_CALLERS.map((c) => (
+          <button key={c.label} type="button" className={phone === c.phone ? '' : 'secondary'} onClick={() => setPhone(c.phone)}>{c.label}</button>
+        ))}
+      </div>
+      <label>Caller's number<input value={phone} onChange={(e) => setPhone(e.target.value)} /></label>
+      <div className="actions">
+        {!live ? <button type="button" onClick={ring}>☎ Ring</button> : (
+          <>
+            <button type="button" onClick={answer}>Answer</button>
+            <button type="button" className="secondary" onClick={hangUp}>Hang up (missed)</button>
+          </>
+        )}
+      </div>
+    </>
+  );
 }

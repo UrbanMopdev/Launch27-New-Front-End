@@ -1,21 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { l27 } from '../api';
+import { fmtTime, todayISO, TIMEZONE } from '../format';
+import type { Booking, Customer, Tag } from '../types';
 import { inbox } from './api';
-import { displayIdentity, ROLE_LABEL, useMeta } from './util';
+import { displayIdentity, useMeta } from './util';
 import { alertPermission, askForAlerts, callAlertText, flashTitle, showCallAlert } from './callAlerts';
+import { blankCaller, CALLER_BADGE, hasUnsavedWork, identifyCaller, pageFor, rememberChoice, type Caller } from './caller';
 
 // RingCentral Embeddable: RingCentral's own softphone widget, loaded into the workspace.
 // Agents sign in with their RingCentral login inside the widget, and calls ring in the
-// browser while the workspace is open. We listen to the widget's events to:
-//   - pop the caller's profile when a call rings, plus a desktop alert and a blinking tab
-//     title when the portal is in the background (needs the browser's permission once)
-//   - log every finished call on the right conversation (POST /api/calls)
-// and send it "dial this number" messages for click-to-call.
+// browser while the workspace is open. Behavior follows "Incoming calls: desired behavior"
+// (approved Nov 10, 2026):
+//   - while it rings: a card with who is calling and why they may be calling (R-1 to R-9),
+//     a desktop alert and blinking tab when the portal is in the background; the page the
+//     agent is on never moves while it rings
+//   - when answered: the caller's page opens (A-1 to A-5), in a new tab if the agent has
+//     unsaved typing (A-8); a number shared by several customers asks who it is (A-4, D-3)
+//   - when it ends: the call is logged on the right conversation (POST /api/calls)
 // It only loads when RINGCENTRAL_CLIENT_ID is set on the server (UrbanMop's registered app).
-//
-// Event names and payloads follow RingCentral's Embeddable docs; check them against the
-// widget version in use when the client ID is first configured.
+// With real logins outside production (record: false) nothing is looked up or saved.
 
 const ADAPTER = 'https://apps.ringcentral.com/integration/ringcentral-embeddable/latest/adapter.js';
 
@@ -35,15 +40,21 @@ type RcCall = {
   callStatus?: string;
   result?: string;
   recording?: { contentUri?: string; link?: string };
+  simulated?: boolean; // a test call from the Channel simulator (test data only)
 };
 
 const num = (v: RcCall['from'], alt?: string) => (typeof v === 'string' ? v : v?.phoneNumber) || alt || '';
+const keyOf = (c?: RcCall) => c?.telephonySessionId || c?.sessionId || c?.id || '';
+
+type Pop = { key: string; caller: Caller; loading: boolean; answered: boolean };
 
 export function RingCentralPhone() {
   const meta = useMeta();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [pop, setPop] = useState<null | { phone: string; name?: string; role?: string; conversationId?: number; contactId?: number; href?: string }>(null);
+  const [pop, setPop] = useState<Pop | null>(null);
+  const [picker, setPicker] = useState<Caller | null>(null);
+  const ringing = useRef(new Map<string, Caller | null>()); // call key -> caller (null while looking up)
   const answered = useRef(new Set<string>());
   const stopAlert = useRef<() => void>(() => {});
   const cfg = meta.data?.ringcentral;
@@ -63,6 +74,14 @@ export function RingCentralPhone() {
     }
   };
 
+  // A-8: never throw away what the agent is typing; open the page in a new tab instead.
+  const openPage = (path: string) => {
+    if (hasUnsavedWork()) window.open(path, '_blank', 'noopener');
+    else navigate(path);
+  };
+  const openRef = useRef(openPage);
+  openRef.current = openPage;
+
   useEffect(() => {
     if (!cfg?.clientId || document.getElementById('rc-adapter-script')) return;
     const s = document.createElement('script');
@@ -76,48 +95,83 @@ export function RingCentralPhone() {
 
   useEffect(() => {
     if (!cfg?.clientId) return;
+    const saving = cfg.record !== false;
+
+    // When the agent answers: open the caller's page, or ask which customer it is.
+    const onAnswered = (key: string, caller: Caller) => {
+      setPop((p) => (p && p.key === key ? { ...p, answered: true } : p));
+      if (caller.kind === 'several') {
+        setPicker(caller);
+        return;
+      }
+      const path = pageFor(caller);
+      if (path) {
+        openRef.current(path);
+        setPop((p) => (p && p.key === key ? null : p)); // the page now shows everything
+      }
+      // Unknown and hidden callers: the card stays up for the call.
+    };
+
     const onMessage = async (e: MessageEvent) => {
       const data = e.data as { type?: string; call?: RcCall };
       if (!data || typeof data !== 'object' || !data.type?.startsWith('rc-')) return;
       const call = data.call;
-      const key = call?.telephonySessionId || call?.sessionId || call?.id || '';
+      const key = keyOf(call);
+
       if (data.type === 'rc-call-ring-notify' && call) {
         const phone = num(call.from, call.fromNumber);
-        // Real logins in dev/QA: don't send real callers' numbers to the test server.
-        const who = cfg.record === false ? null : await inbox.lookup('phone', phone).catch(() => null);
-        const contact = who?.contacts[0];
-        const p = { phone, name: contact?.name || who?.l27?.name, role: (contact?.roles || who?.l27?.roles || [])[0], conversationId: who?.open[0]?.id, contactId: contact?.id, href: who?.l27?.l27_team_id ? `/cleaners/${who.l27.l27_team_id}` : who?.l27?.l27_customer_id ? `/customers/${who.l27.l27_customer_id}` : undefined };
-        setPop(p);
-        // Ringing while the portal is in the background: a desktop alert and a blinking tab.
+        const k = key || phone;
+        // The card shows the number at once and fills in the name when the lookup returns.
+        ringing.current.set(k, null);
+        setPop({ key: k, caller: blankCaller(phone), loading: saving || !!call.simulated, answered: false });
         stopAlert.current();
-        if (document.hidden || !document.hasFocus()) {
-          const text = callAlertText(phone, p.name, p.role);
-          const stopFlash = flashTitle(text.tabTitle);
-          const close = showCallAlert(text, key || phone, () => {
-            if (p.conversationId) navigate(`/inbox/${p.conversationId}`);
-            else if (p.contactId) navigate(`/contacts/${p.contactId}`);
-            else if (p.href) navigate(p.href);
+        const background = document.hidden || !document.hasFocus();
+        const stopFlash = background ? flashTitle(`☎ ${displayIdentity(phone)}`) : () => {};
+        let closeAlert = () => {};
+        stopAlert.current = () => {
+          stopFlash();
+          closeAlert();
+          stopAlert.current = () => {};
+        };
+        // Real logins in dev/QA: don't send real callers' numbers to the test server.
+        // Simulated calls use test data, so they are looked up everywhere.
+        const caller = saving || call.simulated ? await identifyCaller(phone, !!call.simulated).catch(() => blankCaller(phone)) : blankCaller(phone);
+        if (!ringing.current.has(k)) return; // already over
+        ringing.current.set(k, caller);
+        setPop((p) => (p && p.key === k ? { ...p, caller, loading: false } : p));
+        if (background) {
+          closeAlert = showCallAlert(callAlertText(phone, caller.kind === 'several' ? null : caller.name, caller.kind), k, () => {
+            const path = pageFor(caller);
+            if (path) openRef.current(path);
           });
-          stopAlert.current = () => {
-            stopFlash();
-            close();
-            stopAlert.current = () => {};
-          };
         }
-      }
-      if (data.type === 'rc-call-start-notify' || data.type === 'rc-call-end-notify') stopAlert.current();
-      if (data.type === 'rc-call-start-notify' && key) answered.current.add(key);
-      if (data.type === 'rc-call-end-notify' && call && cfg.record === false) {
-        answered.current.delete(key);
-        setPop(null);
+        if (answered.current.has(k)) onAnswered(k, caller); // answered before the lookup returned
         return;
       }
+
+      if (data.type === 'rc-call-start-notify' || data.type === 'rc-call-end-notify') stopAlert.current();
+
+      if (data.type === 'rc-call-start-notify') {
+        // Only calls that rang here (inbound); outbound calls start without ringing.
+        const k = ringing.current.has(key) ? key : ringing.current.size === 1 ? [...ringing.current.keys()][0] : '';
+        if (!k) return;
+        answered.current.add(k);
+        const caller = ringing.current.get(k);
+        if (caller) onAnswered(k, caller);
+        return;
+      }
+
       if (data.type === 'rc-call-end-notify' && call) {
+        const k = ringing.current.has(key) ? key : ringing.current.has(num(call.from, call.fromNumber)) ? num(call.from, call.fromNumber) : key;
+        const wasAnswered = answered.current.has(k) || /connected|answered|accepted/i.test(call.callStatus || call.result || '');
+        ringing.current.delete(k);
+        answered.current.delete(k);
+        setPop((p) => (p && p.key === k ? null : p));
+        if (!saving || call.simulated) return;
         const inbound = /in/i.test(call.direction || '');
         const start = call.startTime ? Number(new Date(call.startTime)) : Date.now();
         const end = call.endTime || call.callEndTime ? Number(new Date((call.endTime || call.callEndTime)!)) : Date.now();
-        const wasAnswered = answered.current.has(key) || /connected|answered|accepted/i.test(call.callStatus || call.result || '');
-        const res = await inbox
+        await inbox
           .logCall({
             call_id: key || undefined,
             direction: inbound ? 'inbound' : 'outbound',
@@ -129,10 +183,7 @@ export function RingCentralPhone() {
             recording_url: call.recording?.link || call.recording?.contentUri || null,
           })
           .catch(() => null);
-        answered.current.delete(key);
-        setPop(null);
         queryClient.invalidateQueries({ queryKey: ['inbox'] });
-        if (res && wasAnswered) navigate(`/inbox/${res.conversationId}`);
       }
     };
     const onDial = (e: Event) => {
@@ -147,33 +198,151 @@ export function RingCentralPhone() {
       window.removeEventListener('workspace:dial', onDial);
       stopAlert.current();
     };
-  }, [cfg?.clientId, cfg?.record, navigate, queryClient]);
+  }, [cfg?.clientId, cfg?.record, queryClient]);
 
-  if (!pop) {
-    if (!cfg?.clientId || !askAlerts) return null;
-    return (
-      <div className="call-pop call-pop-ask" role="status">
-        <div className="call-pop-title">Phone</div>
-        <div className="small">Get a desktop alert when a call rings while you're in another tab or app?</div>
-        <div className="actions">
-          <button onClick={() => askForAlerts().finally(doneAsking)}>Turn on call alerts</button>
-          <button className="secondary" onClick={doneAsking}>Not now</button>
-        </div>
-      </div>
-    );
-  }
+  const pick = (caller: Caller, customerId: number) => {
+    rememberChoice(caller.phone, customerId);
+    setPicker(null);
+    setPop((p) => (p && p.caller.phone === caller.phone ? null : p));
+    openPage(`/customers/${customerId}`);
+  };
+
   return (
-    <div className="call-pop" role="alert">
-      <div className="call-pop-title">☎ Incoming call</div>
+    <>
+      {picker && <WhoIsCalling caller={picker} onPick={(id) => pick(picker, id)} onClose={() => setPicker(null)} />}
+      {pop ? (
+        <CallCard pop={pop} onOpen={openPage} onDismiss={() => setPop(null)} onPick={() => setPicker(pop.caller)} />
+      ) : cfg?.clientId && askAlerts ? (
+        <div className="call-pop call-pop-ask" role="status">
+          <div className="call-pop-title">Phone</div>
+          <div className="small">Get a desktop alert when a call rings while you're in another tab or app?</div>
+          <div className="actions">
+            <button onClick={() => askForAlerts().finally(doneAsking)}>Turn on call alerts</button>
+            <button className="secondary" onClick={doneAsking}>Not now</button>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+// R-1 to R-5: who is calling and why they may be calling. It never takes focus (R-7).
+function CallCard({ pop, onOpen, onDismiss, onPick }: { pop: Pop; onOpen: (path: string) => void; onDismiss: () => void; onPick: () => void }) {
+  const c = pop.caller;
+  const path = pageFor(c);
+  const conv = c.open[0];
+  return (
+    <div className="call-pop" role="status" aria-live="polite">
+      <div className="call-pop-title">{pop.answered ? '☎ On call' : '☎ Incoming call'}</div>
       <div className="call-pop-who">
-        {pop.name || displayIdentity(pop.phone)} {pop.role && <span className={`role-badge ${pop.role}`}>{ROLE_LABEL[pop.role as keyof typeof ROLE_LABEL]}</span>}
+        {pop.loading ? displayIdentity(c.phone) : c.name || (c.kind === 'hidden' ? 'Hidden number' : displayIdentity(c.phone))}{' '}
+        {!pop.loading && <span className={`role-badge ${c.kind === 'cleaner' ? 'cleaner' : c.kind === 'customer' ? 'customer' : ''}`}>{CALLER_BADGE[c.kind]}</span>}
       </div>
-      <div className="muted small">{displayIdentity(pop.phone)}</div>
+      {c.kind !== 'hidden' && <div className="muted small">{displayIdentity(c.phone)}</div>}
+      {pop.loading && <div className="muted small">Looking up…</div>}
+      {!pop.loading && c.kind === 'customer' && c.customerId && <CustomerFacts id={c.customerId} />}
+      {!pop.loading && c.kind === 'cleaner' && c.teamId && <CleanerFacts id={c.teamId} />}
+      {!pop.loading && c.kind === 'several' && (
+        <ul className="call-pop-list small">
+          {c.matches.map((m) => (
+            <li key={m.customerId}>
+              <strong>{m.name}</strong>
+              {m.customerId === c.preselect && <span className="muted"> · last time</span>}
+              {m.address && <div className="muted">{m.address}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {!pop.loading && c.open.length > 0 && (
+        <div className="call-pop-facts small">
+          <div className="muted">Open conversations</div>
+          {c.open.slice(0, 3).map((o) => (
+            <div key={o.id}>{o.subject || `${o.channel} conversation`}</div>
+          ))}
+        </div>
+      )}
+      {!pop.loading && (c.kind === 'unknown' || c.kind === 'hidden') && <div className="small muted">Not in Launch27 or the inbox.</div>}
       <div className="actions">
-        {pop.conversationId && <button onClick={() => navigate(`/inbox/${pop.conversationId}`)}>Open conversation</button>}
-        {!pop.conversationId && pop.contactId && <button onClick={() => navigate(`/contacts/${pop.contactId}`)}>Open profile</button>}
-        {!pop.conversationId && !pop.contactId && pop.href && <button onClick={() => navigate(pop.href!)}>Open {pop.role === 'cleaner' ? 'cleaner' : 'customer'}</button>}
-        <button className="secondary" onClick={() => setPop(null)}>Dismiss</button>
+        {path && <button onClick={() => onOpen(path)}>Open {c.kind === 'cleaner' ? 'cleaner' : c.kind === 'customer' ? 'customer' : 'profile'}</button>}
+        {c.kind === 'several' && <button onClick={onPick}>Who is it?</button>}
+        {conv && <button className="secondary" onClick={() => onOpen(`/inbox/${conv.id}`)}>Open conversation</button>}
+        <button className="secondary" onClick={onDismiss}>Dismiss</button>
+      </div>
+    </div>
+  );
+}
+
+const day = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: TIMEZONE, weekday: 'short', month: 'short', day: 'numeric' }) : '');
+const RATING = ['Unhappy', 'Okay', 'Happy'];
+
+// R-2: next booking, last visit and how it went, tags, the customer's own notes.
+function CustomerFacts({ id }: { id: number }) {
+  const next = useQuery({ queryKey: ['call', 'customer', id, 'next'], queryFn: () => l27<Booking[]>('/v1/staff/bookings', { customers: id, options: 'not_completed', sort: 'asc', limit: 1 }), staleTime: 60_000 });
+  const last = useQuery({ queryKey: ['call', 'customer', id, 'last'], queryFn: () => l27<(Booking & { feedback?: { rating?: number } })[]>('/v1/staff/bookings', { customers: id, options: 'completed,exclude_forecasted', sort: 'desc', limit: 1 }), staleTime: 60_000 });
+  const tags = useQuery({ queryKey: ['customer', String(id), 'tags'], queryFn: () => l27<Tag[]>(`/v1/staff/customers/${id}/tags`), staleTime: 5 * 60_000 });
+  const customer = useQuery({ queryKey: ['customer', String(id)], queryFn: () => l27<Customer>(`/v1/staff/customers/${id}`), staleTime: 5 * 60_000 });
+  const n = next.data?.[0];
+  const l = last.data?.[0];
+  const rating = l?.feedback?.rating;
+  const note = (customer.data?.notes || '').split(/\r?\n/).find((x) => x.trim());
+  return (
+    <div className="call-pop-facts small">
+      <div>
+        <span className="muted">Next: </span>
+        {next.isLoading ? '…' : n ? `${day(n.service_date)} ${fmtTime(n.service_date)}${n.teams?.length ? ` · ${n.teams.map((t) => t.title).join(', ')}` : ''}` : 'nothing booked'}
+      </div>
+      <div>
+        <span className="muted">Last visit: </span>
+        {last.isLoading ? '…' : l ? `${day(l.service_date)}${typeof rating === 'number' ? ` · ${RATING[rating] || 'rated'}` : ''}` : 'none yet'}
+      </div>
+      {!!tags.data?.length && <div className="chips">{tags.data.slice(0, 4).map((t) => <span key={t.id} className="chip">{t.name}</span>)}</div>}
+      {note && <div className="muted">Note: {note.length > 90 ? `${note.slice(0, 90)}…` : note}</div>}
+    </div>
+  );
+}
+
+// R-3: the cleaner's jobs today.
+function CleanerFacts({ id }: { id: number }) {
+  const today = todayISO();
+  const jobs = useQuery({ queryKey: ['call', 'cleaner', id, today], queryFn: () => l27<Booking[]>('/v1/staff/bookings', { teams: id, from: today, to: today, sort: 'asc', limit: 20 }), staleTime: 60_000 });
+  const list = jobs.data || [];
+  return (
+    <div className="call-pop-facts small">
+      <div className="muted">Today</div>
+      {jobs.isLoading ? <div>…</div> : list.length ? list.slice(0, 4).map((b) => (
+        <div key={b.id}>
+          {fmtTime(b.service_date)} · {b.address?.street || b.address?.full_address || 'address'}{b.completed ? ' · done' : ''}
+        </div>
+      )) : <div>No jobs today</div>}
+      {list.length > 4 && <div className="muted">+{list.length - 4} more</div>}
+    </div>
+  );
+}
+
+// A-4 / D-3: several customers share the number; ask who it is, last choice pre-selected.
+function WhoIsCalling({ caller, onPick, onClose }: { caller: Caller; onPick: (customerId: number) => void; onClose: () => void }) {
+  const [chosen, setChosen] = useState<number | null>(caller.preselect);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="card modal" role="dialog" aria-label="Who is calling?" onClick={(e) => e.stopPropagation()}>
+        <h2>Who is calling?</h2>
+        <p className="muted small">{displayIdentity(caller.phone)} belongs to {caller.matches.length} customers.</p>
+        <div className="call-pick">
+          {caller.matches.map((m) => (
+            <label key={m.customerId} className="check">
+              <input type="radio" name="caller" checked={chosen === m.customerId} onChange={() => setChosen(m.customerId)} />
+              <span>
+                <strong>{m.name}</strong>
+                {m.customerId === caller.preselect && <span className="muted"> · picked last time</span>}
+                {m.address && <span className="muted small"> · {m.address}</span>}
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="actions end">
+          <button type="button" className="secondary" onClick={onClose}>Not now</button>
+          <button type="button" disabled={!chosen} onClick={() => chosen && onPick(chosen)}>Open customer</button>
+        </div>
       </div>
     </div>
   );
