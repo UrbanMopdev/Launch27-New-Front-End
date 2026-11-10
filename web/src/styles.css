@@ -1715,3 +1715,7 @@ i.rep-cell { width: 14px; height: 14px; }
 .call-pop-facts .chips { margin-top: 4px; }
 .call-pop-list { margin: 8px 0 4px; padding-left: 18px; display: grid; gap: 4px; }
 .call-pick { display: grid; gap: 10px; margin: 12px 0; }
+.new-caller { width: min(560px, 100%); max-height: 88vh; overflow: auto; }
+.new-caller h3 { margin: 14px 0 6px; font-size: 14px; }
+.new-caller-results { display: grid; gap: 6px; margin-top: 8px; }
+.new-caller-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }

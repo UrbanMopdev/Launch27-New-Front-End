@@ -336,7 +336,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   r.post('/contacts', wrap(async (req, res) => {
     const { name, roles = ['customer'], email, phone } = req.body || {};
     const identities = [email && { kind: 'email', value: email }, phone && { kind: 'phone', value: phone }].filter(Boolean);
-    if (!identities.length) throw new svc.InboxError(400, 'Add an email or phone number');
+    // A caller with a hidden number can be saved by name alone.
+    if (!identities.length && !String(name || '').trim()) throw new svc.InboxError(400, 'Add a name, email or phone number');
     const contact = await db.tx(async (q) => {
       const c = await svc.createContact(q, { name, roles, identities });
       await svc.audit(q, req.user.id, 'contact.created', 'contact', c.id, { name, roles });
@@ -795,7 +796,10 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   // Call records from the RingCentral widget in the agent's browser.
   r.post('/calls', wrap(async (req, res) => {
     // Real RingCentral logins outside production: never store real calls here.
-    if (config.ringcentralClientId && config.ringcentralRecord === false) return res.status(202).json({ saved: false });
+    // Test calls from the Channel simulator (test numbers) are saved wherever the simulator is
+    // on, so missed-call follow-up can be tried on dev and QA; never in production.
+    if (req.body?.simulated === true && config.simulator === false) throw new svc.InboxError(403, 'The simulator is turned off');
+    if (config.ringcentralClientId && config.ringcentralRecord === false && req.body?.simulated !== true) return res.status(202).json({ saved: false });
     const call = req.body || {};
     const theirs = normalizePhone(call.direction === 'outbound' || call.direction === 'out' ? call.to : call.from);
     if (!theirs) throw new svc.InboxError(400, 'Call needs a phone number');
