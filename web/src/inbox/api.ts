@@ -270,7 +270,7 @@ export interface Meta {
   canned: Canned[];
   identities: { email: string[]; sms: string[] };
   connected_channels: Channel[];
-  ringcentral: { clientId: string; appServer: string | null } | null;
+  ringcentral: { clientId: string; appServer: string | null; record?: boolean } | null;
   holidays: { day: string; name: string }[];
 }
 
@@ -374,5 +374,5 @@ export const inbox = {
   saveSla: (id: number, patch: { first_response_minutes: number; warn_minutes?: number; business_hours?: boolean }) => call<SlaPolicy>('PUT', `/admin/sla/${id}`, patch),
   simulate: (body: { channel: Channel; from: string; to?: string; subject?: string; body: string; from_name?: string; thread_key?: string }) => call<{ conversationId: number; isNew: boolean; reopened: boolean }>('POST', '/simulate/inbound', body),
   logCall: (body: Record<string, unknown>) => call<{ conversationId: number }>('POST', '/calls', body),
-  lookup: (kind: 'phone' | 'email', value: string) => call<{ contacts: Contact[]; open: { id: number; channel: Channel; subject: string | null }[]; l27: { name: string; roles: Role[] } | null }>('GET', `/lookup${qs({ kind, value })}`),
+  lookup: (kind: 'phone' | 'email', value: string) => call<{ contacts: Contact[]; open: { id: number; channel: Channel; subject: string | null }[]; l27: { name: string; roles: Role[]; l27_customer_id?: number | null; l27_team_id?: number | null } | null }>('GET', `/lookup${qs({ kind, value })}`),
 };

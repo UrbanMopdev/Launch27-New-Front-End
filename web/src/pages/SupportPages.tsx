@@ -161,7 +161,7 @@ function LeadFields({ contact }: { contact: Contact }) {
 export function DialButton({ contact }: { contact: Contact }) {
   const meta = useMeta();
   const phone = contact.identities.find((i) => i.kind === 'phone')?.value;
-  if (!phone || !meta.data?.ringcentral) return null;
+  if (!phone || !meta.data?.ringcentral || meta.data.ringcentral.record === false) return null;
   return <button className="secondary" onClick={() => window.dispatchEvent(new CustomEvent('workspace:dial', { detail: phone }))}>☎ Call</button>;
 }
 
