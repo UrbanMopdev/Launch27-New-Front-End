@@ -7,6 +7,8 @@ export function CallButton({ phone, label = 'Call', className = 'secondary' }: {
   const meta = useMeta();
   if (!phone) return null;
   if (meta.data?.ringcentral) {
+    // Real logins in dev/QA: no click-to-call from test data (dial in the widget by hand).
+    if (meta.data.ringcentral.record === false) return null;
     return (
       <button type="button" className={className} onClick={() => window.dispatchEvent(new CustomEvent('workspace:dial', { detail: phone }))}>
         <Icon name="voice" /> {label}

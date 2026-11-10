@@ -42,12 +42,22 @@ export function loadConfig(env = process.env) {
     notificationsMode = 'sandbox';
   }
 
-  // RingCentral: non-production must use the RingCentral sandbox platform.
+  // RingCentral: non-production uses the RingCentral sandbox platform, unless
+  // RINGCENTRAL_LIVE_OUTSIDE_PROD=true lets agents sign in with their real logins there.
+  // Then the phone only rings and dials: the app keeps nothing about real calls outside
+  // production (no call log, no caller lookup, no click-to-call from test data).
   let ringcentralClientId = env.RINGCENTRAL_CLIENT_ID || null;
   const ringcentralServer = env.RINGCENTRAL_SERVER || null;
-  if (!isProd && ringcentralClientId && !/devtest|sandbox/i.test(ringcentralServer || '')) {
-    warnings.push('RingCentral disabled: outside production RINGCENTRAL_SERVER must be the RingCentral sandbox (platform.devtest.ringcentral.com).');
-    ringcentralClientId = null;
+  const ringcentralSandbox = /devtest|sandbox/i.test(ringcentralServer || '');
+  let ringcentralRecord = true;
+  if (!isProd && ringcentralClientId && !ringcentralSandbox) {
+    if (truthy(env.RINGCENTRAL_LIVE_OUTSIDE_PROD)) {
+      warnings.push(`RingCentral uses real logins in ${appEnv}: calls ring and can be made, but nothing about them is saved here.`);
+      ringcentralRecord = false;
+    } else {
+      warnings.push('RingCentral disabled: outside production RINGCENTRAL_SERVER must be the RingCentral sandbox (platform.devtest.ringcentral.com), or set RINGCENTRAL_LIVE_OUTSIDE_PROD=true.');
+      ringcentralClientId = null;
+    }
   }
 
   return {
@@ -74,6 +84,7 @@ export function loadConfig(env = process.env) {
     sampleData: !isProd && truthy(env.SAMPLE_DATA),
     ringcentralClientId,
     ringcentralServer,
+    ringcentralRecord,
     workerIntervalMs: Number(env.INBOX_WORKER_INTERVAL_MS || 30_000),
     // QA copy of real data (contact details masked). Production sends (needs the QA URL and the shared
     // token); QA receives (needs the token). Never both: production can't receive one.

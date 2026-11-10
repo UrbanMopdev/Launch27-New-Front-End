@@ -163,7 +163,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       canned: await many(db, 'SELECT * FROM canned_responses ORDER BY shortcut'),
       identities: OUR_IDENTITIES,
       connected_channels: connectedChannels(connectors),
-      ringcentral: config.ringcentralClientId ? { clientId: config.ringcentralClientId, appServer: config.ringcentralServer || null } : null,
+      ringcentral: config.ringcentralClientId ? { clientId: config.ringcentralClientId, appServer: config.ringcentralServer || null, record: config.ringcentralRecord !== false } : null,
       holidays: await many(db, "SELECT to_char(day,'YYYY-MM-DD') AS day, name FROM holidays ORDER BY day"),
     });
   }));
@@ -794,6 +794,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
 
   // Call records from the RingCentral widget in the agent's browser.
   r.post('/calls', wrap(async (req, res) => {
+    // Real RingCentral logins outside production: never store real calls here.
+    if (config.ringcentralClientId && config.ringcentralRecord === false) return res.status(202).json({ saved: false });
     const call = req.body || {};
     const theirs = normalizePhone(call.direction === 'outbound' || call.direction === 'out' ? call.to : call.from);
     if (!theirs) throw new svc.InboxError(400, 'Call needs a phone number');
@@ -804,6 +806,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
 
   // Screen pop: who is calling?
   r.get('/lookup', wrap(async (req, res) => {
+    if (config.ringcentralClientId && config.ringcentralRecord === false) return res.json({ contacts: [], open: [], l27: null });
     const kind = req.query.kind === 'email' ? 'email' : 'phone';
     const value = normalizeIdentity(kind, req.query.value);
     if (!value) return res.json({ contacts: [], l27: null });

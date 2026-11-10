@@ -270,7 +270,7 @@ export interface Meta {
   canned: Canned[];
   identities: { email: string[]; sms: string[] };
   connected_channels: Channel[];
-  ringcentral: { clientId: string; appServer: string | null } | null;
+  ringcentral: { clientId: string; appServer: string | null; record?: boolean } | null;
   holidays: { day: string; name: string }[];
 }
 
