@@ -64,8 +64,12 @@ export function ContactPage() {
     <>
       <header className="page-header">
         <div>
-          <div className="muted small"><Link to="/inbox">Inbox</Link> /</div>
-          <h1>{c.name || 'Unnamed contact'} {c.roles.map((r) => <span key={r} className={`role-badge ${r}`}>{ROLE_LABEL[r]}</span>)}</h1>
+          <div className="muted small"><Link to="/contacts">Contacts</Link> /</div>
+          <h1>
+            {c.name || 'Unnamed contact'} {c.roles.map((r) => <span key={r} className={`role-badge ${r}`}>{ROLE_LABEL[r]}</span>)}
+            {c.lead_stage && !c.l27_customer_id && !c.roles.includes('applicant') && <span className="role-badge lead">Lead · {c.lead_stage}</span>}
+            {c.caller_flag && <span className="role-badge warn">{c.caller_flag === 'spam' ? 'Spam' : 'Wrong number'}</span>}
+          </h1>
         </div>
         <div className="actions">
           <button onClick={() => start('sms')}>New text</button>
@@ -74,6 +78,12 @@ export function ContactPage() {
         </div>
       </header>
       {error && <div className="error">{error}</div>}
+      {c.caller_flag && (
+        <div className="notice small">
+          Calls from this number show "{c.caller_flag === 'spam' ? 'Likely spam' : 'Wrong number before'}" on the call card.{' '}
+          <button className="link small" onClick={() => inbox.updateContact(c.id, { caller_flag: null }).then(() => queryClient.invalidateQueries({ queryKey: ['inbox'] }))}>Remove the label</button>
+        </div>
+      )}
       <div className="grid-2 contact-grid">
         <section className="card">
           <h2>Details</h2>

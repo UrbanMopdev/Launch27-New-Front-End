@@ -297,6 +297,24 @@ describe('/api end to end', () => {
     assert.equal((await as('/api/brands/locations/42', { brand: 'residential' }, 'PUT')).status, 403);
   });
 
+  test('contacts: unlinked contacts are listed as leads, applicants, other, number only or flagged', async () => {
+    const lead = (await api('/api/contacts', { name: 'Lee Lead', roles: [], phone: '613-555-0301' })).body;
+    await api(`/api/contacts/${lead.id}`, { lead_stage: 'New', lead_source: 'Phone call' }, 'PATCH');
+    const job = (await api('/api/contacts', { name: 'Ann Applicant', roles: ['applicant'], phone: '613-555-0302' })).body;
+    const bare = (await api('/api/contacts', { roles: [], phone: '613-555-0303' })).body;
+    const spam = (await api('/api/contacts', { roles: [], phone: '613-555-0304' })).body;
+    assert.equal((await api(`/api/contacts/${spam.id}`, { caller_flag: 'spam' }, 'PATCH')).status, 200);
+    assert.equal((await api(`/api/contacts/${spam.id}`, { caller_flag: 'nonsense' }, 'PATCH')).status, 400);
+    const ids = async (list) => (await api(`/api/contact-list?list=${list}`)).body.rows.map((r) => Number(r.id));
+    assert.ok((await ids('leads')).includes(Number(lead.id)));
+    assert.ok((await ids('applicants')).includes(Number(job.id)));
+    assert.ok((await ids('number_only')).includes(Number(bare.id)));
+    assert.ok((await ids('flagged')).includes(Number(spam.id)));
+    assert.ok(!(await ids('number_only')).includes(Number(spam.id)));
+    const counts = (await api('/api/contact-list?list=leads')).body.counts;
+    assert.ok(counts.leads >= 1 && counts.flagged >= 1);
+  });
+
   test('calls: a hidden caller can be saved by name alone; nothing at all is refused', async () => {
     const made = await api('/api/contacts', { name: 'Hidden caller about a quote', roles: [] });
     assert.equal(made.status, 201);
