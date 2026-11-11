@@ -486,6 +486,19 @@ describe('placement: the app against the synthetic Launch27', () => {
     assert.deepEqual(same, []);
   });
 
+  test('bookings: releasing a hold whose booking is unknown keeps its slot busy', async () => {
+    const flaky = createPlacement({ db, config, fetchImpl: bookingAnswering(502), schedule, writes, log: quiet });
+    const h = await holdFor(flaky, -10);
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'release-after-502-key', 'sales-hub'), (e) => e.status === 502);
+    await flaky.release(h.hold_id, 'sales-hub'); // the Hub cleaning up: accepted, changes nothing
+    assert.equal((await db.query('SELECT released_at FROM placement_holds WHERE id = $1', [h.hold_id])).rows[0].released_at, null);
+    const q = await flaky.quote(quoteRequest, 'sales-hub');
+    const day = h.slot.start.slice(0, 10);
+    const { slots } = await flaky.availability({ quote_id: q.quote_id, from: day, to: day, limit: 200 });
+    assert.deepEqual(slots.filter((x) => x.team.id === h.slot.team.id && x.start < h.slot.end && h.slot.start < x.end), []);
+    await assert.rejects(() => flaky.release('h_nosuchhold', 'sales-hub'), (e) => e.code === 'hold_not_found');
+  });
+
   test('bookings: Launch27 saying "too many requests" frees the key and hold, and is retryable', async () => {
     const busy = createPlacement({ db, config, fetchImpl: bookingAnswering(429), schedule, writes, log: quiet });
     const h = await holdFor(busy, -9);
