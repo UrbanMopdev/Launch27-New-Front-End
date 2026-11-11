@@ -60,6 +60,28 @@ export function loadConfig(env = process.env) {
     }
   }
 
+  // Portal switcher: this portal's name and links to the other brands' portals.
+  // PORTALS="UrbanMop=https://a.example,Clean Bee=https://b.example" (https only).
+  const portalName = (env.PORTAL_NAME || 'UrbanMop').trim().slice(0, 40);
+  const portalLinks = String(env.PORTALS || '')
+    .split(',')
+    .map((part) => {
+      const i = part.indexOf('=');
+      if (i < 1) return null;
+      const name = part.slice(0, i).trim().slice(0, 40);
+      const url = part.slice(i + 1).trim();
+      try {
+        const u = new URL(url);
+        return name && u.protocol === 'https:' ? { name, url: u.origin } : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  if (env.PORTALS && portalLinks.length !== String(env.PORTALS).split(',').filter((x) => x.trim()).length) {
+    warnings.push('Some PORTALS entries were ignored: each must be Name=https://address, separated by commas.');
+  }
+
   return {
     appEnv,
     production: isProd,
@@ -82,6 +104,8 @@ export function loadConfig(env = process.env) {
     simulator: env.INBOX_SIMULATOR === undefined ? !isProd : truthy(env.INBOX_SIMULATOR),
     // Sample inbox conversations on an empty database. Never in production.
     sampleData: !isProd && truthy(env.SAMPLE_DATA),
+    portalName,
+    portalLinks,
     ringcentralClientId,
     ringcentralServer,
     ringcentralRecord,

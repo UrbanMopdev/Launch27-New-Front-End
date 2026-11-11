@@ -163,6 +163,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       canned: await many(db, 'SELECT * FROM canned_responses ORDER BY shortcut'),
       identities: OUR_IDENTITIES,
       connected_channels: connectedChannels(connectors),
+      portal: { name: config.portalName || 'UrbanMop', links: config.portalLinks || [] },
       ringcentral: config.ringcentralClientId ? { clientId: config.ringcentralClientId, appServer: config.ringcentralServer || null, record: config.ringcentralRecord !== false } : null,
       holidays: await many(db, "SELECT to_char(day,'YYYY-MM-DD') AS day, name FROM holidays ORDER BY day"),
     });
