@@ -31,7 +31,8 @@ export function createApp(
   });
 
   // Liveness: the process is up. Never touches the database.
-  app.get('/healthz', (req, res) => res.json({ status: 'ok', env: config.appEnv, version: config.version, uptimeSec: Math.round(process.uptime()) }));
+  // Also read by the sign-in page for its DEV / QA / PROD label and portal name.
+  app.get('/healthz', (req, res) => res.json({ status: 'ok', env: config.appEnv, portal: config.portalName || 'UrbanMop', version: config.version, uptimeSec: Math.round(process.uptime()) }));
 
   // Readiness: can serve traffic (database reachable, migrations applied, worker healthy).
   // Railway's health check uses this, so a deploy only goes live when it passes.
