@@ -822,6 +822,42 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.status(201).json(result);
   }));
 
+  // Calls log (W-5, W-6, V-2 to V-4): every call the portal logged, newest first, with the
+  // callback status of missed calls. Calls in restricted queues are only listed for their members.
+  r.get('/calls', wrap(async (req, res) => {
+    const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 92);
+    const visible = await visibleQueueIds(req.user);
+    const rows = await many(
+      db,
+      `SELECT m.id, m.conversation_id, m.direction, m.from_addr, m.to_addr, m.created_at,
+              COALESCE(m.meta->>'result', 'answered') AS result,
+              NULLIF(m.meta->>'duration_seconds', '')::numeric::int AS duration_seconds,
+              m.meta->>'recording_url' AS recording_url,
+              u.id AS agent_id, COALESCE(u.name, u.email) AS agent_name,
+              k.id AS contact_id, k.name AS contact_name, k.roles AS contact_roles, k.l27_customer_id, k.l27_team_id, k.caller_flag, k.lead_stage,
+              q.name AS queue_name,
+              CASE WHEN m.direction = 'in' AND m.meta->>'result' IN ('missed', 'voicemail') THEN (
+                SELECT CASE
+                  WHEN count(*) FILTER (WHERE (o.direction = 'out' AND COALESCE(o.meta->>'result', '') <> 'no_answer') OR (o.direction = 'in' AND COALESCE(o.meta->>'result', 'answered') = 'answered')) > 0 THEN 'called_back'
+                  WHEN count(*) FILTER (WHERE o.direction = 'out') > 0 THEN 'tried'
+                  ELSE 'open' END
+                FROM messages o JOIN conversations ov ON ov.id = o.conversation_id
+                WHERE o.kind = 'call' AND o.created_at > m.created_at AND ov.contact_id = v.contact_id)
+              END AS callback
+       FROM messages m
+       JOIN conversations v ON v.id = m.conversation_id
+       LEFT JOIN contacts k ON k.id = v.contact_id
+       LEFT JOIN users u ON u.id = COALESCE(m.author_id, NULLIF(m.meta->>'agent_id', '')::numeric::bigint)
+       LEFT JOIN queues q ON q.id = v.queue_id
+       WHERE m.kind = 'call' AND m.created_at >= now() - make_interval(days => $1::int)
+         AND (v.queue_id IS NULL OR v.queue_id = ANY($2::bigint[]) OR v.owner_id = $3)
+       ORDER BY m.created_at DESC
+       LIMIT 1000`,
+      [days, visible, req.user.id],
+    );
+    res.json({ days, rows });
+  }));
+
   // Call records from the RingCentral widget in the agent's browser.
   r.post('/calls', wrap(async (req, res) => {
     // Real RingCentral logins outside production: never store real calls here.
