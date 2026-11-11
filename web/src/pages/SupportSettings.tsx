@@ -11,7 +11,7 @@ import { RulesEditor } from './RoutingRules';
 import { BrandsSettings } from '../brands/BrandsSettings';
 import { AgentsSettings, HoursSettings, PoliciesSettings, QaCopySettings, QueuesSettings, StatusesSettings, TeamsSettings } from './WorkforceSettings';
 
-type Tab = 'rules' | 'queues' | 'sla' | 'hours' | 'policies' | 'agents' | 'teams' | 'statuses' | 'canned' | 'history' | 'writes' | 'qa' | 'brands';
+type Tab = 'rules' | 'queues' | 'sla' | 'hours' | 'policies' | 'agents' | 'teams' | 'statuses' | 'canned' | 'history' | 'writes' | 'qa' | 'brands' | 'placement';
 
 const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }[] }[] = [
   {
@@ -45,6 +45,7 @@ const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }
     items: [
       { id: 'history', label: 'Change history', desc: 'Who changed what, and when' },
       { id: 'writes', label: 'Launch27 changes', desc: 'Every change sent to Launch27 from this app' },
+      { id: 'placement', label: 'Sales Hub API', desc: 'Quotes, holds and bookings from the Sales Hub' },
       { id: 'qa', label: 'QA data', desc: 'Copy of real data for QA (emails and phones masked)' },
     ],
   },
@@ -124,6 +125,7 @@ export function InboxSettingsPage() {
           {tab === 'history' && <HistoryPanel />}
           {tab === 'brands' && <BrandsSettings canEdit={isAdmin} />}
           {tab === 'writes' && (isAdmin ? <WritesLog /> : <div className="muted">Only admins can see the list of changes sent to Launch27.</div>)}
+          {tab === 'placement' && (isAdmin ? <PlacementAudit /> : <div className="muted">Only admins can see the Sales Hub API log.</div>)}
           {tab === 'qa' && <QaCopySettings canEdit={isAdmin} />}
         </div>
       </div>
@@ -378,6 +380,54 @@ function describeWrite(w: L27Write) {
   if (/\/customers/.test(p)) return w.method === 'POST' ? 'Created or changed a customer' : 'Changed a customer';
   if (/\/teams/.test(p)) return 'Changed a cleaner';
   return `${w.method} ${p}`;
+}
+
+// ---------- Sales Hub API (placement) ----------
+const OP_LABEL: Record<string, string> = { getHealth: 'Health check', getCatalog: 'Catalog', createQuote: 'Quote', getAvailability: 'Availability', createHold: 'Hold a slot', releaseHold: 'Release a hold', createBooking: 'Book' };
+
+function PlacementAudit() {
+  const [days, setDays] = useState(7);
+  const q = useQuery({ queryKey: ['inbox', 'placement-audit', days], queryFn: () => inbox.placementAudit(days), refetchInterval: 30_000 });
+  if (q.isLoading) return <div className="muted">Loading…</div>;
+  if (q.isError || !q.data) return <div className="muted">Couldn't load the log.</div>;
+  if (!q.data.enabled) return <div className="muted">The Sales Hub API is off here (no PLACEMENT_TOKENS).</div>;
+  const { rows, booking, callers, allowed_ips } = q.data;
+  const refused = rows.filter((r) => r.status === 401 || r.status === 403 || r.status === 429).length;
+  return (
+    <>
+      <div className="ws-intro">
+        <p className="small">
+          <span className={booking ? 'wl-pill wl-on' : 'wl-pill wl-off'}>{booking ? 'Booking is ON' : 'Booking is OFF'}</span>{' '}
+          {booking ? 'The Sales Hub can quote, hold and book.' : 'The Sales Hub can quote, see slots and hold them; bookings are refused.'}
+        </p>
+        <p className="muted small">
+          Callers: {callers.map((c) => `${c.name} (${c.actions.join(', ')}${c.brands ? ` · ${c.brands.join(', ')}` : ''})`).join('; ') || 'none'}.{' '}
+          {allowed_ips ? `Only ${allowed_ips} allowed address${allowed_ips === 1 ? '' : 'es'} may call.` : 'Any address may call with a valid token.'}{' '}
+          {rows.length} requests in {days} day{days === 1 ? '' : 's'} · {refused} refused.
+        </p>
+        <label className="small">Period <select value={days} onChange={(e) => setDays(Number(e.target.value))}><option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option></select></label>
+      </div>
+      {rows.length === 0 ? (
+        <div className="muted">No requests in this period.</div>
+      ) : (
+        <table className="table wl-table">
+          <thead><tr><th>When</th><th>Caller</th><th>What</th><th>Result</th><th>Reference</th><th>From</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td title={new Date(r.at).toLocaleString('en-CA', { timeZone: 'America/Toronto' })}>{ago(r.at)}</td>
+                <td>{r.caller || <span className="neg">unknown token</span>}</td>
+                <td>{(r.operation && OP_LABEL[r.operation]) || `${r.method} ${r.path}`}</td>
+                <td><span className={r.status < 400 ? '' : 'neg'}>{r.status}{r.code ? ` ${r.code}` : ''}</span> <span className="muted small">{r.ms} ms</span></td>
+                <td className="small">{r.ref || '—'}</td>
+                <td className="muted small">{r.ip || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
 }
 
 function WritesLog() {

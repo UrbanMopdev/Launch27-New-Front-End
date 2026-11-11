@@ -1727,3 +1727,24 @@ i.rep-cell { width: 14px; height: 14px; }
 .call-pop.call-missed .call-pop-title { color: var(--danger); }
 .call-stack { position: fixed; right: 20px; top: 72px; z-index: 30; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
 .call-stack > .call-pop { position: static; pointer-events: auto; }
+.brand-logo { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-logo-img { height: 34px; width: auto; max-width: 170px; object-fit: contain; display: block; }
+.login-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.env-pill { font-size: 12px; font-weight: 700; letter-spacing: .06em; padding: 3px 10px; border-radius: 999px; color: white; }
+.env-pill.env-development { background: #2563eb; }
+.env-pill.env-staging { background: #d97706; }
+.env-pill.env-production { background: #15803d; }
+.env-note { margin: 0; font-size: 12.5px; padding: 6px 10px; border-radius: 8px; }
+.env-note.env-development { background: #dbeafe; color: #1e3a8a; }
+.env-note.env-staging { background: #fef3c7; color: #92400e; }
+.env-note.env-production { background: #dcfce7; color: #14532d; }
+.portal-switch { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 4px 6px; margin: -4px -6px; border: 0; border-radius: 8px; background: transparent; font: inherit; text-align: left; cursor: pointer; color: inherit; }
+.portal-switch:hover, .portal-switch[aria-expanded="true"] { background: var(--bg); }
+.portal-menu { position: absolute; left: 12px; right: 12px; top: 58px; z-index: 40; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.15); padding: 6px; }
+.portal-menu .eyebrow { padding: 6px 10px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.portal-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border-radius: 8px; color: var(--text); text-decoration: none; font-weight: 600; font-size: 14px; }
+.portal-item:hover { background: var(--bg); }
+.portal-item .muted { font-weight: 400; }
+.sidebar-head { position: relative; }
+.portal-wrap { flex: 1; min-width: 0; display: flex; }
+.shell.nav-collapsed .portal-switch > svg { display: none; }

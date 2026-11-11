@@ -34,6 +34,7 @@ real messages; only production touches the real Launch27.
 | [docs/database.md](docs/database.md) | Migrations, failed-migration plan, indexing, backups, restore |
 | [docs/security.md](docs/security.md) | Secrets, sessions, least privilege, log redaction |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Failed deploys, health checks, sign-in problems |
+| [docs/placement.md](docs/placement.md) | The placement API the Sales Hub books through: endpoints, setup, limits |
 
 ## Setup
 
@@ -171,10 +172,17 @@ endpoints).
    (paths are Launch27's own, e.g. `l27('/v1/staff/bookings')`).
 4. Register it in `web/src/App.tsx` and the `NAV` list in `web/src/components/Layout.tsx`.
 
+## Placement API (Sales Hub)
+
+`/api/placement/v1` lets the Sales Hub quote, find open slots, hold and book UrbanMop
+customers through this app's own scheduling rules and Launch27 pricing. It implements the
+shared placement contract (`contracts/placement/`, vendored), uses service tokens rather than
+staff logins, and is off until `PLACEMENT_TOKENS` is set. See [docs/placement.md](docs/placement.md).
+
 ## Tests
 
 ```bash
-npm test             # server (node:test), capture, web (vitest)
+npm test             # server (node:test), capture, web (vitest), placement contract
 npm run lint
 npm run typecheck
 ```
