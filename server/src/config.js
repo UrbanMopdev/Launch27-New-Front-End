@@ -1,5 +1,63 @@
+import { createHash } from 'node:crypto';
+import { brandKey } from './placement/mapping.js';
 // Runtime configuration, with guards that keep non-production environments away from
 // real customers and real data. See docs/environments.md and docs/security.md.
+
+// PLACEMENT_TOKENS: the service tokens the Sales Hub (and any other caller) uses. Three forms:
+//   name:sha256:<64 hex>                 only the token's SHA-256 is stored (required in production)
+//   [{"name","sha256","actions","brands"}] JSON, with each token's scope
+//   name:<raw token, 32+ characters>     development and QA only
+// actions: read (health, catalog, quote, availability), hold (hold, release), book.
+// brands: contract brand keys (urbanmop-residential). Omitted = every action / every served brand.
+// Bad entries are kept as errors so configErrors() refuses to start.
+export const PLACEMENT_ACTIONS = ['read', 'hold', 'book'];
+const sha256Hex = (s) => createHash('sha256').update(String(s)).digest('hex');
+export function parsePlacementTokens(raw) {
+  const tokens = new Map(); // name -> { hash: Buffer, actions: Set, brands: Set | null, raw: boolean }
+  const bad = [];
+  const add = ({ name, hash, actions, brands, raw }) => {
+    const okName = /^[a-z0-9][a-z0-9-]{0,39}$/.test(name || '');
+    const okHash = /^[0-9a-f]{64}$/.test(hash || '');
+    const acts = actions == null ? PLACEMENT_ACTIONS : actions;
+    const okActs = Array.isArray(acts) && acts.length > 0 && acts.every((a) => PLACEMENT_ACTIONS.includes(a));
+    const okBrands = brands == null || (Array.isArray(brands) && brands.length > 0 && brands.every((b) => /^[a-z0-9-]{1,60}$/.test(b)));
+    if (!okName || !okHash || !okActs || !okBrands || tokens.has(name)) return bad.push(name || '(unnamed)');
+    tokens.set(name, { hash: Buffer.from(hash, 'hex'), actions: new Set(acts), brands: brands ? new Set(brands) : null, raw: !!raw, scoped: actions != null && brands != null });
+  };
+  const text = String(raw || '').trim();
+  if (text.startsWith('[')) {
+    let list;
+    try {
+      list = JSON.parse(text);
+    } catch {
+      return { tokens, bad: ['(PLACEMENT_TOKENS is not valid JSON)'] };
+    }
+    for (const t of Array.isArray(list) ? list : []) add({ name: t?.name, hash: String(t?.sha256 || '').toLowerCase(), actions: t?.actions, brands: t?.brands });
+    return { tokens, bad };
+  }
+  for (const entry of text.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const i = entry.indexOf(':');
+    const name = i > 0 ? entry.slice(0, i).trim() : '';
+    const rest = i > 0 ? entry.slice(i + 1).trim() : '';
+    if (rest.startsWith('sha256:')) add({ name, hash: rest.slice(7).toLowerCase() });
+    else if (rest.length >= 32) add({ name, hash: sha256Hex(rest), raw: true });
+    else bad.push(name || '(unnamed)');
+  }
+  return { tokens, bad };
+}
+
+// PLACEMENT_ALLOWED_IPS: optional allowlist of caller addresses (IPv4, IPv4/CIDR or exact IPv6).
+export function parseIpList(raw) {
+  const list = [];
+  const bad = [];
+  for (const e of String(raw || '').split(',').map((x) => x.trim()).filter(Boolean)) {
+    const m = e.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?:\/(\d{1,2}))?$/);
+    if (m && m[1].split('.').every((o) => Number(o) <= 255) && (m[2] === undefined || Number(m[2]) <= 32)) list.push({ v4: m[1], bits: m[2] === undefined ? 32 : Number(m[2]) });
+    else if (/^[0-9a-f:]+$/i.test(e) && e.includes(':')) list.push({ v6: e.toLowerCase() });
+    else bad.push(e);
+  }
+  return { list, bad };
+}
 
 const truthy = (v) => ['1', 'true', 'yes'].includes(String(v ?? '').toLowerCase());
 const ENVS = ['development', 'staging', 'production'];
@@ -60,6 +118,34 @@ export function loadConfig(env = process.env) {
     }
   }
 
+  const placement = parsePlacementTokens(env.PLACEMENT_TOKENS);
+  const placementIps = parseIpList(env.PLACEMENT_ALLOWED_IPS);
+  if (placement.tokens.size && l27Mode === 'live' && !(env.L27_PLACEMENT_EMAIL && env.L27_PLACEMENT_PASSWORD)) {
+    warnings.push('PLACEMENT_TOKENS is set but L27_PLACEMENT_EMAIL / L27_PLACEMENT_PASSWORD are not: the placement API will answer platform_unavailable.');
+  }
+
+  // Portal switcher: this portal's name and links to the other brands' portals.
+  // PORTALS="UrbanMop=https://a.example,Clean Bee=https://b.example" (https only).
+  const portalName = (env.PORTAL_NAME || 'UrbanMop').trim().slice(0, 40);
+  const portalLinks = String(env.PORTALS || '')
+    .split(',')
+    .map((part) => {
+      const i = part.indexOf('=');
+      if (i < 1) return null;
+      const name = part.slice(0, i).trim().slice(0, 40);
+      const url = part.slice(i + 1).trim();
+      try {
+        const u = new URL(url);
+        return name && u.protocol === 'https:' ? { name, url: u.origin } : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  if (env.PORTALS && portalLinks.length !== String(env.PORTALS).split(',').filter((x) => x.trim()).length) {
+    warnings.push('Some PORTALS entries were ignored: each must be Name=https://address, separated by commas.');
+  }
+
   return {
     appEnv,
     production: isProd,
@@ -82,6 +168,8 @@ export function loadConfig(env = process.env) {
     simulator: env.INBOX_SIMULATOR === undefined ? !isProd : truthy(env.INBOX_SIMULATOR),
     // Sample inbox conversations on an empty database. Never in production.
     sampleData: !isProd && truthy(env.SAMPLE_DATA),
+    portalName,
+    portalLinks,
     ringcentralClientId,
     ringcentralServer,
     ringcentralRecord,
@@ -95,6 +183,18 @@ export function loadConfig(env = process.env) {
     // (production only; dev and QA use their synthetic Launch27).
     l27SyncEmail: l27Mode === 'live' ? env.L27_SYNC_EMAIL || null : null,
     l27SyncPassword: l27Mode === 'live' ? env.L27_SYNC_PASSWORD || null : null,
+    // Placement API for the Sales Hub (docs/placement.md). Off until PLACEMENT_TOKENS is set.
+    placementTokens: placement.tokens,
+    placementBadTokens: placement.bad,
+    placementBrands: String(env.PLACEMENT_BRANDS || 'residential').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    placementPaymentMethod: env.PLACEMENT_PAYMENT_METHOD || 'check',
+    // Production bookings need this switch, separate from L27_ALLOW_WRITES (staff screens).
+    placementBookingEnabled: isProd ? truthy(env.PLACEMENT_BOOKING_ENABLED) : null,
+    placementAllowedIps: placementIps.list,
+    placementBadIps: placementIps.bad,
+    // Bookings from placement are written as this Launch27 staff user (live only; mock signs in itself).
+    l27PlacementEmail: l27Mode === 'live' ? env.L27_PLACEMENT_EMAIL || null : null,
+    l27PlacementPassword: l27Mode === 'live' ? env.L27_PLACEMENT_PASSWORD || null : null,
     warnings,
   };
 }
@@ -111,5 +211,18 @@ export function configErrors(config) {
   if (config.onRailway && !config.production && !config.databaseUrl) errors.push(`DATABASE_URL must be set in the hosted ${config.appEnv} environment.`);
   if (config.l27Mode === 'mock' && !config.mockPassword) errors.push('MOCK_PASSWORD must be set when L27_MODE=mock.');
   if (config.qaSnapshotToken && config.qaSnapshotToken.length < 32) errors.push('QA_SNAPSHOT_TOKEN must be at least 32 characters.');
+  if (config.placementBadTokens?.length) errors.push(`PLACEMENT_TOKENS: check ${config.placementBadTokens.join(', ')}. Each entry needs a lowercase name and name:sha256:<64 hex> (or, outside production, a token of 32+ characters); scopes must use actions read, hold, book.`);
+  const placementTokens = [...(config.placementTokens?.entries() || [])];
+  if (config.production && placementTokens.some(([, t]) => t.raw)) errors.push('PLACEMENT_TOKENS: production stores only token hashes (name:sha256:<64 hex>). Run `npm run placement-token` to make one.');
+  // Production tokens say exactly what they may do: no implicit "everything".
+  const unscoped = placementTokens.filter(([, t]) => !t.scoped).map(([n]) => n);
+  if (config.production && unscoped.length) errors.push(`PLACEMENT_TOKENS: in production every token lists its actions and brands (JSON form). Check ${unscoped.join(', ')}.`);
+  // A token's brands must be brands this app serves (PLACEMENT_BRANDS), written as brand keys.
+  const served = new Set((config.placementBrands || []).map(brandKey));
+  const wrongBrands = placementTokens.flatMap(([n, t]) => [...(t.brands || [])].filter((b) => !served.has(b)).map((b) => `${n}: ${b}`));
+  if (wrongBrands.length) errors.push(`PLACEMENT_TOKENS: brands must be served brand keys (${[...served].join(', ') || 'none served'}). Check ${wrongBrands.join(', ')}.`);
+  // Slot tokens are signed with SESSION_SECRET: hosted environments serving placement need a real one.
+  if (placementTokens.length && config.onRailway && (!process.env.SESSION_SECRET || config.sessionSecret.length < 32)) errors.push('SESSION_SECRET must be a random value of at least 32 characters wherever the placement API is served.');
+  if (config.placementBadIps?.length) errors.push(`PLACEMENT_ALLOWED_IPS: not an IP address or IPv4 range: ${config.placementBadIps.join(', ')}.`);
   return errors;
 }
