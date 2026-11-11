@@ -439,7 +439,7 @@ describe('placement: the app against the synthetic Launch27', () => {
   // after the booking was made, a 422 refusal before it was).
   const bookingAnswering = (status) => async (url, init = {}) => {
     if (String(url).includes('/v1/staff/bookings') && init.method === 'POST' && !String(url).includes('/assign')) {
-      if (status === 422) return new Response(JSON.stringify({ message: 'Invalid frequency', internal_trace: 'x'.repeat(5000) }), { status: 422, headers: { 'content-type': 'application/json' } });
+      if (status === 422 || status === 429) return new Response(JSON.stringify({ message: status === 422 ? 'Invalid frequency' : 'Slow down', internal_trace: 'x'.repeat(5000) }), { status, headers: { 'content-type': 'application/json' } });
       const real = await mock(url, init);
       return status === 200 ? real : new Response('<html>Bad gateway</html>', { status });
     }
@@ -473,6 +473,25 @@ describe('placement: the app against the synthetic Launch27', () => {
     // New key, same hold: the hold stays used.
     await assert.rejects(() => flaky.book(req(h.hold_id), 'after-502-key-2', 'sales-hub'), (e) => e.code === 'hold_not_found');
     assert.equal((await writes.list()).rows.filter((r) => r.source === 'placement').length - posted, 1);
+  });
+
+  test('bookings: a slot whose booking is in flight or unknown is not offered or held again', async () => {
+    const flaky = createPlacement({ db, config, fetchImpl: bookingAnswering(502), schedule, writes, log: quiet });
+    const h = await holdFor(flaky, -8);
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'unknown-slot-key-1', 'sales-hub'), (e) => e.status === 502);
+    const q = await flaky.quote(quoteRequest, 'sales-hub');
+    const day = h.slot.start.slice(0, 10);
+    const { slots } = await flaky.availability({ quote_id: q.quote_id, from: day, to: day, limit: 200 });
+    const same = slots.filter((x) => x.team.id === h.slot.team.id && x.start < h.slot.end && h.slot.start < x.end);
+    assert.deepEqual(same, []);
+  });
+
+  test('bookings: Launch27 saying "too many requests" frees the key and hold, and is retryable', async () => {
+    const busy = createPlacement({ db, config, fetchImpl: bookingAnswering(429), schedule, writes, log: quiet });
+    const h = await holdFor(busy, -9);
+    await assert.rejects(() => busy.book(req(h.hold_id), 'throttled-key-1', 'sales-hub'), (e) => e.status === 503 && e.retryable === true);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM placement_bookings WHERE key = 'sales-hub:throttled-key-1'")).rows[0].n, 0);
+    await busy.release(h.hold_id);
   });
 
   test('bookings: a Launch27 refusal frees the key and the hold; only a short message comes back', async () => {

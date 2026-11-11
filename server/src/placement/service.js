@@ -216,8 +216,13 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
   }
 
   // ---------- availability ----------
+  // Busy holds: open ones, and claimed ones (booking in flight, made, or outcome unknown) for a
+  // day after the claim: the schedule snapshot may not show that booking yet, and an unknown one
+  // may exist. Counting a booking that's also in the snapshot twice is harmless.
+  const BUSY = 'released_at IS NULL AND ((used_at IS NULL AND expires_at > $1) OR (used_at IS NOT NULL AND used_at > $2))';
+  const busyArgs = () => [new Date(now()), new Date(now() - 24 * 60 * 60_000)];
   async function openHolds(exceptId = null) {
-    const rows = (await db.query("SELECT id, cleaner_id, to_char(day, 'YYYY-MM-DD') AS day, start_min, end_min FROM placement_holds WHERE released_at IS NULL AND used_at IS NULL AND expires_at > $1", [new Date(now())])).rows;
+    const rows = (await db.query(`SELECT id, cleaner_id, to_char(day, 'YYYY-MM-DD') AS day, start_min, end_min FROM placement_holds WHERE ${BUSY}`, busyArgs())).rows;
     return rows.filter((r) => r.id !== exceptId).map((r) => ({ cleaner_id: Number(r.cleaner_id), date: r.day, start: r.start_min, end: r.end_min }));
   }
 
@@ -285,7 +290,7 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     const taken = await db.tx(async (tx) => {
       // One hold at a time per cleaner and day (no-op on PGlite, which runs one statement at a time).
       if (db.kind === 'postgres') await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`placement:${t.cleaner_id}:${t.date}`]);
-      const clash = (await tx.query('SELECT 1 FROM placement_holds WHERE cleaner_id = $1 AND day = $2 AND released_at IS NULL AND used_at IS NULL AND expires_at > $3 AND start_min < $4 AND $5 < end_min LIMIT 1', [t.cleaner_id, t.date, new Date(now()), t.end, t.start])).rows.length;
+      const clash = (await tx.query(`SELECT 1 FROM placement_holds WHERE ${BUSY} AND cleaner_id = $3 AND day = $4 AND start_min < $5 AND $6 < end_min LIMIT 1`, [...busyArgs(), t.cleaner_id, t.date, t.end, t.start])).rows.length;
       if (clash) return true;
       await tx.query('INSERT INTO placement_holds (id, quote_id, cleaner_id, day, start_min, end_min, slot, lead_ref, placed_by, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10)', [id, q.id, t.cleaner_id, t.date, t.start, t.end, JSON.stringify(slot), lead_ref, JSON.stringify(placed_by), expires]);
       return false;
@@ -344,7 +349,10 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     if (seen) {
       if (seen.fingerprint !== fp) fail(409, 'idempotency_conflict', 'That Idempotency-Key was already used with a different request.');
       if (seen.state === 'done') return { replay: true, booking: typeof seen.response === 'string' ? JSON.parse(seen.response) : seen.response };
-      if (seen.state === 'pending') fail(409, 'idempotency_conflict', 'A booking with that Idempotency-Key is still in progress.', { retryable: true });
+      // A request still running answers within a minute or so; one stuck longer (a crash, a failed
+      // final write) may or may not have reached Launch27: report it as unknown, never retryable.
+      if (seen.state === 'pending' && now() - new Date(seen.created_at).getTime() < 2 * 60_000) fail(409, 'idempotency_conflict', 'A booking with that Idempotency-Key is still in progress.', { retryable: true });
+      if (seen.state === 'pending') fail(502, 'platform_unavailable', `An earlier attempt with this key didn't finish${seen.booking_id ? ` (Launch27 booking ${seen.booking_id})` : ''}. Check Launch27 before trying again with a new key.`);
       const r = typeof seen.response === 'string' ? JSON.parse(seen.response) : seen.response;
       fail(seen.status || 502, r?.error?.code || 'platform_unavailable', r?.error?.message || 'The earlier attempt with this key did not finish.');
     }
@@ -417,6 +425,7 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
         staffNotes: staffNotesFor({ accessNotes: body.access_notes, placedBy: body.placed_by, caller, leadRef: body.lead_ref || h.lead_ref, source: body.source }),
       });
 
+      await token(); // a login failure happens before anything leaves this app
       sent = true;
       let res;
       try {
@@ -433,6 +442,7 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
       if (res.status >= 400 && res.status < 500) {
         // Launch27 refused it: nothing was made, so the key and the hold are free again.
         sent = false;
+        if ([401, 403, 429].includes(res.status)) fail(503, 'platform_unavailable', `Launch27 is not accepting bookings from this app right now (${res.status}). Try again shortly.`, { retryable: true, details: launch27Says(res) });
         fail(400, 'invalid_request', `Launch27 refused the booking (${res.status}).`, { details: launch27Says(res) });
       }
       if (!res.ok || !res.body?.id) throw await unknown(502, 'platform_unavailable', `Launch27 answered ${res.status} without a booking id, so the booking may or may not exist. Check Launch27 before trying again with a new key.`);
@@ -453,7 +463,11 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
         price: q.data.price.first_visit,
         status: 'confirmed',
       };
-      await db.query("UPDATE placement_bookings SET state = 'done', status = 201, response = $2::jsonb, booking_id = $3, finished_at = now() WHERE key = $1", [key, JSON.stringify(booking), bookingId]);
+      const finish = () => db.query("UPDATE placement_bookings SET state = 'done', status = 201, response = $2::jsonb, booking_id = $3, finished_at = now() WHERE key = $1", [key, JSON.stringify(booking), bookingId]);
+      await finish().catch(() => finish()).catch(async (err) => {
+        log.error('placement booking made but not recorded', { caller, booking_id: bookingId, error: err.message });
+        await db.query('UPDATE placement_bookings SET booking_id = $2 WHERE key = $1', [key, bookingId]).catch(() => {});
+      });
       schedule.soon?.(await token().catch(() => null));
       log.info('placement booked', { caller, booking_id: bookingId, brand: q.brand, customer_created: !existing });
       return { replay: false, booking };

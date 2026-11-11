@@ -167,6 +167,17 @@ export function createPlacementRouter({ placement, config, log = { warn() {}, in
     next();
   });
 
+  // Once per start: how Railway's edge reaches us, to confirm the one-trusted-hop assumption
+  // (docs/placement.md, "Trust boundary") before tightening 'trust proxy'.
+  let firstSeen = false;
+  r.use((req, res, next) => {
+    if (!firstSeen) {
+      firstSeen = true;
+      log.info('placement: first request', { socket: req.socket?.remoteAddress || null, ips: req.ips, ip: req.ip });
+    }
+    next();
+  });
+
   // 2. Address allowlist, before anything else is looked at.
   r.use((req, res, next) => {
     if (!ipAllowed(config.placementAllowedIps, req.ip)) return error(res, 403, 'forbidden', 'This address may not use the placement API.');

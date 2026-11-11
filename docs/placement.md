@@ -67,7 +67,14 @@ Rotating a token: add the new entry next to the old one, switch the Hub over, re
 service inside the same Railway project could reach the app directly and set that header itself,
 so the address allowlist and lockout assume nothing else in the project is hostile (today the
 project holds only this app and its database). The token, scopes and ownership checks don't
-depend on addresses.
+depend on addresses. The first placement request after each start logs the socket address the
+edge connects from; once confirmed it isn't a private-network address, `trust proxy` can be
+narrowed to refuse forwarded addresses from private-network neighbours.
+
+**Unfinished attempts.** A booking attempt still running answers `409` (retryable) for up to two
+minutes; one stuck longer (a crash, a failed final write) answers `502` "check Launch27 first",
+never retryable with the same key. Launch27 answering 401, 403 or 429 means it made nothing: the
+key and hold are freed and the answer is a retryable `503`.
 
 Check a running environment (read-only, then with a hold):
 

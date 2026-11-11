@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { brandKey } from './placement/mapping.js';
 // Runtime configuration, with guards that keep non-production environments away from
 // real customers and real data. See docs/environments.md and docs/security.md.
 
@@ -217,7 +218,7 @@ export function configErrors(config) {
   const unscoped = placementTokens.filter(([, t]) => !t.scoped).map(([n]) => n);
   if (config.production && unscoped.length) errors.push(`PLACEMENT_TOKENS: in production every token lists its actions and brands (JSON form). Check ${unscoped.join(', ')}.`);
   // A token's brands must be brands this app serves (PLACEMENT_BRANDS), written as brand keys.
-  const served = new Set((config.placementBrands || []).map((b) => `urbanmop-${b}`));
+  const served = new Set((config.placementBrands || []).map(brandKey));
   const wrongBrands = placementTokens.flatMap(([n, t]) => [...(t.brands || [])].filter((b) => !served.has(b)).map((b) => `${n}: ${b}`));
   if (wrongBrands.length) errors.push(`PLACEMENT_TOKENS: brands must be served brand keys (${[...served].join(', ') || 'none served'}). Check ${wrongBrands.join(', ')}.`);
   // Slot tokens are signed with SESSION_SECRET: hosted environments serving placement need a real one.
