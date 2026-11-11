@@ -286,7 +286,7 @@ export function RingCentralPhone() {
               {m.name || (isHidden(m.phone) ? 'Hidden number' : displayIdentity(m.phone))} {m.badge && !isHidden(m.phone) && <span className="role-badge">{m.badge}</span>}
             </div>
             {m.name && <div className="muted small">{displayIdentity(m.phone)}</div>}
-            {m.conversationId ? <div className="small">Callback task added to the Operations queue.</div> : m.note && <div className="small muted">{m.note}</div>}
+            {m.conversationId ? <div className="small">Added to Calls › Waiting for a callback.</div> : m.note && <div className="small muted">{m.note}</div>}
             <div className="actions">
               {m.conversationId && (
                 <button onClick={() => { setMissed((x) => x.filter((y) => y.key !== m.key)); openPage(`/inbox/${m.conversationId}`); }}>Open callback</button>

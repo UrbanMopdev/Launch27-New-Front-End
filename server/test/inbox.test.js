@@ -421,6 +421,25 @@ describe('/api end to end', () => {
     assert.equal((await api('/api/admin/rules', { rules }, 'PUT')).status, 200);
     await api('/api/admin/settings', { settings_editors: 'everyone' }, 'PUT');
   });
+  test('calls log: lists calls; a missed call is open until it is called back', async () => {
+    const at = (min) => new Date(Date.now() - min * 60_000).toISOString();
+    await api('/api/calls', { call_id: 'log-1', direction: 'inbound', from: '613-555-0411', to: '613-691-9880', result: 'missed', started_at: at(30) });
+    await api('/api/calls', { call_id: 'log-2', direction: 'inbound', from: '613-555-0412', to: '613-691-9880', result: 'missed', started_at: at(20) });
+    await api('/api/calls', { call_id: 'log-3', direction: 'outbound', from: '613-691-9880', to: '613-555-0412', result: 'no_answer', started_at: at(10) });
+    await api('/api/calls', { call_id: 'log-4', direction: 'inbound', from: '613-555-0413', to: '613-691-9880', result: 'missed', started_at: at(9) });
+    await api('/api/calls', { call_id: 'log-5', direction: 'outbound', from: '613-691-9880', to: '613-555-0413', result: 'answered', duration_seconds: 95, started_at: at(5) });
+    const log = await api('/api/calls?days=1');
+    assert.equal(log.status, 200);
+    const missedFrom = (n) => log.body.rows.find((r) => r.direction === 'in' && r.from_addr.endsWith(n));
+    assert.equal(missedFrom('5550411').callback, 'open');
+    assert.equal(missedFrom('5550412').callback, 'tried');
+    assert.equal(missedFrom('5550413').callback, 'called_back');
+    const out = log.body.rows.find((r) => r.direction === 'out' && r.to_addr.endsWith('5550413'));
+    assert.equal(out.result, 'answered');
+    assert.equal(out.duration_seconds, 95);
+    assert.ok(out.agent_name);
+  });
+
   test('calls: a hidden number is accepted but not logged (nothing to call back)', async () => {
     const res = await api('/api/calls', { call_id: 'hid-1', direction: 'inbound', from: 'Anonymous', to: '613-691-9880', result: 'missed' });
     assert.equal(res.status, 202);

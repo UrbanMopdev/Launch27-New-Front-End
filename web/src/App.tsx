@@ -32,6 +32,7 @@ import { ApiCatalogPage } from './pages/ApiCatalog';
 import { InboxPage } from './pages/Inbox';
 import { ContactPage, InboxSettingsPage, SimulatorPage, SupervisorPage, CleanerRedirectPage } from './pages/SupportPages';
 import { ContactsPage } from './pages/Contacts';
+import { CallsPage } from './pages/Calls';
 
 // The map library is large, so the Routes page loads on demand.
 const RoutesPage = lazy(() => import('./pages/Routes').then((m) => ({ default: m.RoutesPage })));
@@ -56,6 +57,7 @@ export function App() {
         <Route index element={<Navigate to="/inbox" replace />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="inbox/:id" element={<InboxPage />} />
+        <Route path="calls" element={<CallsPage />} />
         <Route path="contacts" element={<ContactsPage />} />
         <Route path="contacts/:id" element={<ContactPage />} />
         <Route path="supervisor" element={<SupervisorPage />} />
