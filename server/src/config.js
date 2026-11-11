@@ -1,6 +1,21 @@
 // Runtime configuration, with guards that keep non-production environments away from
 // real customers and real data. See docs/environments.md and docs/security.md.
 
+// PLACEMENT_TOKENS: "name:token,name2:token2" -> Map(name -> token). Bad entries are kept as
+// errors so configErrors() can refuse to start.
+export function parsePlacementTokens(raw) {
+  const tokens = new Map();
+  const bad = [];
+  for (const entry of String(raw || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const i = entry.indexOf(':');
+    const name = i > 0 ? entry.slice(0, i).trim() : '';
+    const token = i > 0 ? entry.slice(i + 1).trim() : '';
+    if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(name) || token.length < 32) bad.push(name || '(unnamed)');
+    else tokens.set(name, token);
+  }
+  return { tokens, bad };
+}
+
 const truthy = (v) => ['1', 'true', 'yes'].includes(String(v ?? '').toLowerCase());
 const ENVS = ['development', 'staging', 'production'];
 
@@ -60,6 +75,11 @@ export function loadConfig(env = process.env) {
     }
   }
 
+  const placement = parsePlacementTokens(env.PLACEMENT_TOKENS);
+  if (placement.tokens.size && l27Mode === 'live' && !(env.L27_PLACEMENT_EMAIL && env.L27_PLACEMENT_PASSWORD)) {
+    warnings.push('PLACEMENT_TOKENS is set but L27_PLACEMENT_EMAIL / L27_PLACEMENT_PASSWORD are not: the placement API will answer platform_unavailable.');
+  }
+
   return {
     appEnv,
     production: isProd,
@@ -95,6 +115,14 @@ export function loadConfig(env = process.env) {
     // (production only; dev and QA use their synthetic Launch27).
     l27SyncEmail: l27Mode === 'live' ? env.L27_SYNC_EMAIL || null : null,
     l27SyncPassword: l27Mode === 'live' ? env.L27_SYNC_PASSWORD || null : null,
+    // Placement API for the Sales Hub (docs/placement.md). Off until PLACEMENT_TOKENS is set.
+    placementTokens: placement.tokens,
+    placementBadTokens: placement.bad,
+    placementBrands: String(env.PLACEMENT_BRANDS || 'residential').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    placementPaymentMethod: env.PLACEMENT_PAYMENT_METHOD || 'check',
+    // Bookings from placement are written as this Launch27 staff user (live only; mock signs in itself).
+    l27PlacementEmail: l27Mode === 'live' ? env.L27_PLACEMENT_EMAIL || null : null,
+    l27PlacementPassword: l27Mode === 'live' ? env.L27_PLACEMENT_PASSWORD || null : null,
     warnings,
   };
 }
@@ -111,5 +139,6 @@ export function configErrors(config) {
   if (config.onRailway && !config.production && !config.databaseUrl) errors.push(`DATABASE_URL must be set in the hosted ${config.appEnv} environment.`);
   if (config.l27Mode === 'mock' && !config.mockPassword) errors.push('MOCK_PASSWORD must be set when L27_MODE=mock.');
   if (config.qaSnapshotToken && config.qaSnapshotToken.length < 32) errors.push('QA_SNAPSHOT_TOKEN must be at least 32 characters.');
+  if (config.placementBadTokens?.length) errors.push(`PLACEMENT_TOKENS: each entry must be name:token with a lowercase name and a token of at least 32 characters (check ${config.placementBadTokens.join(', ')}).`);
   return errors;
 }

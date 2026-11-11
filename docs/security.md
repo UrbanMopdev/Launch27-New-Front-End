@@ -86,6 +86,15 @@ time. Query strings (which can contain search text) are never logged.
 `X-Frame-Options: SAMEORIGIN`, `x-powered-by` off, request bodies capped, Railway
 terminates TLS.
 
+## Placement API
+
+`/api/placement/v1` (docs/placement.md) is called by the Sales Hub with a service token from
+`PLACEMENT_TOKENS`, compared by hash in constant time. A token only reaches the placement
+endpoints: it can't sign in, read the inbox or use `/l27`. Bookings are written with a
+dedicated Launch27 login (`L27_PLACEMENT_*`), only where Launch27 writes are allowed, and every
+attempt is in the write log with the caller and the rep. Slot tokens handed to the Hub are
+signed, so a forged one is refused. Quotes keep the address for 30 days, then are deleted.
+
 ## Known gaps / follow-ups
 
 - **This repository is public.** It contains no customer data or secrets, but it does
