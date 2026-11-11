@@ -11,6 +11,7 @@ import { SupportStatus } from '../inbox/SupportStatus';
 import { CommandBar } from '../inbox/CommandBar';
 import { RingCentralPhone } from '../inbox/RingCentralPhone';
 import { useCounts } from '../inbox/util';
+import { PortalSwitcher } from './PortalSwitcher';
 
 // Sidebar sections. Add a line here for each page rebuilt from docs/API.md.
 // `icon` is a name from components/Icon.tsx.
@@ -137,16 +138,7 @@ export function Layout({ email }: { email: string }) {
       {menuOpen && <div className="drawer-backdrop" onClick={() => setMenuOpen(false)} />}
       <aside className={menuOpen ? 'sidebar open' : 'sidebar'} aria-label="Main menu">
         <div className="sidebar-head">
-          <div className="brand-mark" aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z" />
-              <path d="M18.5 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" />
-            </svg>
-          </div>
-          <div className="brand-text">
-            <div className="brand-name">UrbanMop</div>
-            <div className="brand-sub">Operations</div>
-          </div>
+          <PortalSwitcher />
           <button className="icon-button rail-toggle" aria-label={rail ? 'Expand sidebar' : 'Collapse sidebar'} title={rail ? 'Expand sidebar' : 'Collapse sidebar'} onClick={toggleRail}>
             <Icon name={rail ? 'panel-open' : 'panel-close'} size={18} />
           </button>

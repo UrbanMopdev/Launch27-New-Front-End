@@ -1,0 +1,741 @@
+openapi: 3.1.0
+info:
+  title: Placement contract
+  version: 1.1.0
+  summary: How the Sales Hub (and the public booking forms) place a customer through a brand's front end app.
+  description: |
+    Every front end app (Launch27, MaidCentral, BookingKoala) implements this API. The app
+    owns its scheduling rules, pricing and the write into its booking platform; callers
+    only see this contract. Rules and examples are in docs/placement.md.
+
+    Versioning: the path carries the major version. Within v1 changes are additive only
+    (new optional fields, new endpoints, new error codes). Callers must ignore unknown fields.
+
+    Money is integer cents. Times are RFC 3339 with an offset; dates are YYYY-MM-DD in the
+    brand's time zone. All example data is fake.
+
+    1.1.0 (additive): hourly services (catalog `hourly`, quote `minutes`) and booking
+    questions (catalog `questions`, booking `answers`).
+servers:
+  - url: https://{app-host}/api/placement/v1
+    variables:
+      app-host:
+        default: example.invalid
+security:
+  - serviceToken: []
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Whether the app and its booking platform are reachable, and what it supports
+      responses:
+        '200':
+          description: Status. Returned even when degraded or down, so callers can show it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+              examples:
+                ok: { $ref: '#/components/examples/HealthOk' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /catalog:
+    get:
+      operationId: getCatalog
+      summary: The services, frequencies, home details and extras a brand sells, to build the quote form
+      parameters:
+        - $ref: '#/components/parameters/Brand'
+      responses:
+        '200':
+          description: The brand's catalog
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Catalog' }
+              examples:
+                residential: { $ref: '#/components/examples/Catalog' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /quote:
+    post:
+      operationId: createQuote
+      summary: Check the address is served and price the visit, using the app's own pricing rules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuoteRequest' }
+            examples:
+              biweekly: { $ref: '#/components/examples/QuoteRequest' }
+      responses:
+        '200':
+          description: |
+            A quote, or serviceable=false with a reason. An address outside the service
+            area is a normal answer, not an error.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Quote' }
+              examples:
+                serviceable: { $ref: '#/components/examples/Quote' }
+                notServiceable: { $ref: '#/components/examples/QuoteNotServiceable' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /availability:
+    get:
+      operationId: getAvailability
+      summary: Open slots for a quote, after the app's scheduling rules are applied
+      parameters:
+        - name: quote_id
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: from
+          in: query
+          required: true
+          description: First date, inclusive, in the brand's time zone
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          description: Last date, inclusive. At most 31 days after `from`.
+          schema: { type: string, format: date }
+        - name: limit
+          in: query
+          required: false
+          description: Most slots to return, best first. Default 50.
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200':
+          description: Open slots, best first. An empty list is a normal answer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Availability' }
+              examples:
+                twoSlots: { $ref: '#/components/examples/Availability' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /holds:
+    post:
+      operationId: createHold
+      summary: Reserve a slot for a short time while the rep finishes the booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HoldRequest' }
+            examples:
+              hold: { $ref: '#/components/examples/HoldRequest' }
+      responses:
+        '201':
+          description: The slot is held until expires_at
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hold' }
+              examples:
+                hold: { $ref: '#/components/examples/Hold' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /holds/{hold_id}:
+    delete:
+      operationId: releaseHold
+      summary: Release a hold. Releasing one that already expired or was used also returns 204.
+      parameters:
+        - name: hold_id
+          in: path
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        '204':
+          description: Released (or already gone)
+        default: { $ref: '#/components/responses/Error' }
+
+  /bookings:
+    post:
+      operationId: createBooking
+      summary: Turn a hold into a customer and booking in the brand's booking platform
+      description: |
+        The app re-checks its scheduling rules before writing, because the platform's admin
+        may have changed the schedule since the hold. If the slot is gone it returns 409
+        slot_unavailable and writes nothing.
+
+        Retries are safe: the same Idempotency-Key with the same body returns the original
+        result (200) without booking again. The same key with a different body is 409
+        idempotency_conflict.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Unique per booking attempt. Keep it for at least 24 hours.
+          schema: { type: string, minLength: 8, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BookingRequest' }
+            examples:
+              booking: { $ref: '#/components/examples/BookingRequest' }
+      responses:
+        '201':
+          description: Booked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+              examples:
+                booked: { $ref: '#/components/examples/Booking' }
+        '200':
+          description: A replay of an earlier request with the same Idempotency-Key; nothing new was written
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+        default: { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    serviceToken:
+      type: http
+      scheme: bearer
+      description: |
+        A service credential issued by the app to one caller (the Sales Hub, or the app's own
+        booking form). It only grants /api/placement/v1. It is not a staff login.
+
+  parameters:
+    Brand:
+      name: brand
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/BrandKey' }
+
+  responses:
+    Error:
+      description: |
+        Every error uses this body. Status codes: 400 invalid_request, 401 unauthorized,
+        403 forbidden, 404 not_found / hold_not_found / quote_not_found,
+        409 slot_unavailable / idempotency_conflict, 410 quote_expired / hold_expired,
+        422 brand_not_served, 502/503 platform_unavailable, 500 internal.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            slotGone: { $ref: '#/components/examples/ErrorSlotUnavailable' }
+
+  schemas:
+    BrandKey:
+      type: string
+      description: The brand's key, shared by the hub and the apps (e.g. "urbanmop", "cleanbee")
+      pattern: '^[a-z0-9][a-z0-9-]{1,39}$'
+
+    Platform:
+      type: string
+      enum: [launch27, maidcentral, bookingkoala]
+
+    Money:
+      type: object
+      required: [amount_cents, currency]
+      additionalProperties: false
+      properties:
+        amount_cents: { type: integer }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+
+    Address:
+      type: object
+      required: [line1, city, region, postal_code, country]
+      additionalProperties: false
+      properties:
+        line1: { type: string, minLength: 1 }
+        line2: { type: string }
+        city: { type: string, minLength: 1 }
+        region: { type: string, minLength: 1, description: Province or state code }
+        postal_code: { type: string, minLength: 3 }
+        country: { type: string, pattern: '^[A-Z]{2}$' }
+
+    Frequency:
+      type: string
+      enum: [one_time, weekly, biweekly, every_4_weeks, monthly]
+
+    PlacedBy:
+      type: object
+      description: Who is acting, recorded in the app's audit log. Not used for authorization.
+      required: [kind, id]
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [sales_rep, customer, system] }
+        id: { type: string, minLength: 1, description: The caller's own user id (e.g. the hub's rep id) }
+        display_name: { type: string }
+
+    Health:
+      type: object
+      required: [status, platform, contract_version, brands, capabilities, checked_at]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+          description: degraded = reads work but booking may fail; down = the platform is unreachable
+        platform: { $ref: '#/components/schemas/Platform' }
+        contract_version: { type: string, pattern: '^1\.\d+\.\d+$' }
+        brands:
+          type: array
+          items: { $ref: '#/components/schemas/BrandKey' }
+          minItems: 1
+        capabilities:
+          type: object
+          required: [holds]
+          additionalProperties: false
+          properties:
+            holds:
+              type: string
+              enum: [platform, local]
+              description: |
+                platform = the booking platform itself reserves the slot.
+                local = the app keeps the hold in its own database and hides held slots from its
+                own availability; bookings made directly in the platform's admin can still take it.
+        checked_at: { type: string, format: date-time }
+        message: { type: string }
+
+    Catalog:
+      type: object
+      required: [brand, currency, timezone, services, frequencies]
+      additionalProperties: false
+      properties:
+        brand: { $ref: '#/components/schemas/BrandKey' }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        timezone: { type: string, description: "IANA time zone, e.g. America/Toronto" }
+        services:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [code, name, home_fields, extras]
+            additionalProperties: false
+            properties:
+              code: { type: string, minLength: 1 }
+              name: { type: string, minLength: 1 }
+              description: { type: string }
+              hourly:
+                type: object
+                description: Present when the service is sold by time. The quote must then send `minutes`.
+                required: [min_minutes, max_minutes, step_minutes]
+                additionalProperties: false
+                properties:
+                  min_minutes: { type: integer, minimum: 1 }
+                  max_minutes: { type: integer, minimum: 1 }
+                  step_minutes: { type: integer, minimum: 1 }
+              home_fields:
+                type: array
+                description: The home details this service is priced on
+                items:
+                  type: object
+                  required: [key, label, required]
+                  additionalProperties: false
+                  properties:
+                    key: { type: string, enum: [bedrooms, bathrooms, square_feet, half_bathrooms, pets] }
+                    label: { type: string }
+                    required: { type: boolean }
+                    min: { type: number }
+                    max: { type: number }
+              extras:
+                type: array
+                items:
+                  type: object
+                  required: [code, name, max_quantity]
+                  additionalProperties: false
+                  properties:
+                    code: { type: string, minLength: 1 }
+                    name: { type: string, minLength: 1 }
+                    max_quantity: { type: integer, minimum: 1 }
+        frequencies:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/Frequency' }
+        questions:
+          type: array
+          description: |
+            Questions the brand asks on every booking (parking, pets, how they heard about us,
+            terms). Required ones must be answered in POST /bookings or it fails with
+            400 invalid_request and `details.questions` listing the ids.
+          items: { $ref: '#/components/schemas/Question' }
+
+    Question:
+      type: object
+      required: [id, label, type, required]
+      additionalProperties: false
+      properties:
+        id: { type: string, minLength: 1 }
+        label: { type: string, minLength: 1, description: "Plain text, no markup" }
+        type:
+          type: string
+          enum: [single_choice, multi_choice, checkbox, text]
+          description: A required checkbox must be answered true (e.g. the customer accepted the terms)
+        required: { type: boolean }
+        url: { type: string, format: uri, description: "A page the question refers to, e.g. the terms of service" }
+        options:
+          type: array
+          description: For single_choice and multi_choice
+          items:
+            type: object
+            required: [id, label]
+            additionalProperties: false
+            properties:
+              id: { type: string, minLength: 1 }
+              label: { type: string }
+
+    Answer:
+      type: object
+      required: [question_id]
+      additionalProperties: false
+      properties:
+        question_id: { type: string, minLength: 1 }
+        option_ids:
+          type: array
+          description: For single_choice (one id) and multi_choice
+          items: { type: string, minLength: 1 }
+        value:
+          description: true/false for checkbox, text for text
+          type: [string, boolean]
+
+    QuoteRequest:
+      type: object
+      required: [brand, address, service_code, frequency]
+      additionalProperties: false
+      properties:
+        brand: { $ref: '#/components/schemas/BrandKey' }
+        address: { $ref: '#/components/schemas/Address' }
+        service_code: { type: string, minLength: 1 }
+        frequency: { $ref: '#/components/schemas/Frequency' }
+        minutes:
+          type: integer
+          minimum: 1
+          description: Length of the visit, for services sold by time (catalog `hourly`)
+        home:
+          type: object
+          additionalProperties: false
+          properties:
+            bedrooms: { type: number, minimum: 0 }
+            bathrooms: { type: number, minimum: 0 }
+            half_bathrooms: { type: number, minimum: 0 }
+            square_feet: { type: integer, minimum: 0 }
+            pets: { type: boolean }
+        extras:
+          type: array
+          items:
+            type: object
+            required: [code, quantity]
+            additionalProperties: false
+            properties:
+              code: { type: string, minLength: 1 }
+              quantity: { type: integer, minimum: 1 }
+        lead_ref: { type: string, description: "The hub's lead id, for the app's logs" }
+
+    Quote:
+      type: object
+      required: [brand, serviceable]
+      additionalProperties: false
+      properties:
+        brand: { $ref: '#/components/schemas/BrandKey' }
+        serviceable: { type: boolean }
+        not_serviceable_reason:
+          type: string
+          enum: [outside_service_area, service_not_offered, home_too_large, other]
+        message: { type: string, description: Shown to the rep }
+        quote_id: { type: string, minLength: 1 }
+        expires_at: { type: string, format: date-time }
+        service_area: { type: string, description: The app's name for the zone or territory }
+        duration_minutes: { type: integer, minimum: 1 }
+        price:
+          type: object
+          required: [first_visit, lines, taxes_included]
+          additionalProperties: false
+          properties:
+            first_visit: { $ref: '#/components/schemas/Money' }
+            recurring_visit: { $ref: '#/components/schemas/Money' }
+            lines:
+              type: array
+              items:
+                type: object
+                required: [label, amount]
+                additionalProperties: false
+                properties:
+                  label: { type: string }
+                  amount: { $ref: '#/components/schemas/Money' }
+            taxes_included: { type: boolean }
+      if:
+        properties: { serviceable: { const: true } }
+      then:
+        required: [quote_id, expires_at, duration_minutes, price]
+      else:
+        required: [not_serviceable_reason]
+
+    Slot:
+      type: object
+      required: [slot_token, start, end]
+      additionalProperties: false
+      properties:
+        slot_token:
+          type: string
+          minLength: 1
+          description: Opaque to callers. Only valid with the quote it came from.
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        arrival_window:
+          type: object
+          required: [start, end]
+          additionalProperties: false
+          properties:
+            start: { type: string, format: date-time }
+            end: { type: string, format: date-time }
+        team:
+          type: object
+          required: [id]
+          additionalProperties: false
+          properties:
+            id: { type: string }
+            name: { type: string }
+        notes:
+          type: array
+          description: Why the app ranked this slot where it did, for the rep (e.g. "Team already nearby")
+          items: { type: string }
+
+    Availability:
+      type: object
+      required: [quote_id, timezone, slots, generated_at]
+      additionalProperties: false
+      properties:
+        quote_id: { type: string }
+        timezone: { type: string }
+        slots:
+          type: array
+          items: { $ref: '#/components/schemas/Slot' }
+        generated_at: { type: string, format: date-time }
+
+    HoldRequest:
+      type: object
+      required: [slot_token, placed_by]
+      additionalProperties: false
+      properties:
+        slot_token: { type: string, minLength: 1 }
+        lead_ref: { type: string }
+        placed_by: { $ref: '#/components/schemas/PlacedBy' }
+
+    Hold:
+      type: object
+      required: [hold_id, slot, expires_at, kind]
+      additionalProperties: false
+      properties:
+        hold_id: { type: string, minLength: 1 }
+        slot: { $ref: '#/components/schemas/Slot' }
+        expires_at: { type: string, format: date-time }
+        kind: { type: string, enum: [platform, local] }
+
+    Customer:
+      type: object
+      required: [first_name, last_name, phone]
+      additionalProperties: false
+      properties:
+        first_name: { type: string, minLength: 1 }
+        last_name: { type: string, minLength: 1 }
+        email: { type: string, format: email }
+        phone: { type: string, minLength: 7 }
+        address:
+          $ref: '#/components/schemas/Address'
+          description: Defaults to the quote's address
+
+    BookingRequest:
+      type: object
+      required: [hold_id, customer, placed_by]
+      additionalProperties: false
+      properties:
+        hold_id: { type: string, minLength: 1 }
+        customer: { $ref: '#/components/schemas/Customer' }
+        access_notes: { type: string, description: "Entry instructions, parking, pets" }
+        answers:
+          type: array
+          description: Answers to the catalog's booking questions
+          items: { $ref: '#/components/schemas/Answer' }
+        lead_ref: { type: string }
+        placed_by: { $ref: '#/components/schemas/PlacedBy' }
+        source:
+          type: object
+          description: Attribution, copied from the hub's lead so the platform can report on it
+          additionalProperties: false
+          properties:
+            channel: { type: string, enum: [web_form, phone, email, cart_abandonment, manual, other] }
+            campaign: { type: string }
+
+    Booking:
+      type: object
+      required: [booking_id, customer_id, customer_created, platform, brand, start, end, price, status]
+      additionalProperties: false
+      properties:
+        booking_id: { type: string, minLength: 1, description: The booking platform's id }
+        customer_id: { type: string, minLength: 1, description: The booking platform's id }
+        customer_created:
+          type: boolean
+          description: false when the app matched an existing customer (by email or phone) instead of creating one
+        platform: { $ref: '#/components/schemas/Platform' }
+        brand: { $ref: '#/components/schemas/BrandKey' }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        price: { $ref: '#/components/schemas/Money' }
+        status: { type: string, enum: [confirmed, pending] }
+        admin_url: { type: string, format: uri, description: Link to the booking in the app's admin }
+
+    Error:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              enum:
+                - invalid_request
+                - unauthorized
+                - forbidden
+                - not_found
+                - brand_not_served
+                - quote_not_found
+                - quote_expired
+                - slot_unavailable
+                - hold_not_found
+                - hold_expired
+                - idempotency_conflict
+                - platform_unavailable
+                - internal
+            message: { type: string }
+            retryable: { type: boolean }
+            details: { type: object }
+
+  examples:
+    HealthOk:
+      value:
+        status: ok
+        platform: launch27
+        contract_version: 1.1.0
+        brands: [urbanmop]
+        capabilities: { holds: local }
+        checked_at: '2026-11-11T15:00:00Z'
+    Catalog:
+      value:
+        brand: urbanmop
+        currency: CAD
+        timezone: America/Toronto
+        frequencies: [one_time, weekly, biweekly, every_4_weeks]
+        services:
+          - code: standard
+            name: Standard clean
+            home_fields:
+              - { key: bedrooms, label: Bedrooms, required: true, min: 0, max: 8 }
+              - { key: bathrooms, label: Bathrooms, required: true, min: 1, max: 6 }
+            extras:
+              - { code: inside_fridge, name: Inside fridge, max_quantity: 1 }
+              - { code: interior_windows, name: Interior windows, max_quantity: 30 }
+          - code: hourly
+            name: Hourly cleaning
+            hourly: { min_minutes: 180, max_minutes: 720, step_minutes: 30 }
+            home_fields: []
+            extras: []
+        questions:
+          - id: parking
+            label: Parking on premises?
+            type: single_choice
+            required: true
+            options: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }]
+          - id: terms
+            label: The customer accepts the terms of service
+            type: checkbox
+            required: true
+            url: https://example.com/terms
+    QuoteRequest:
+      value:
+        brand: urbanmop
+        address: { line1: 100 Example Street, city: Ottawa, region: 'ON', postal_code: K1A 0A1, country: CA }
+        service_code: standard
+        frequency: biweekly
+        home: { bedrooms: 3, bathrooms: 2 }
+        extras: [{ code: inside_fridge, quantity: 1 }]
+        lead_ref: lead_123
+    Quote:
+      value:
+        brand: urbanmop
+        serviceable: true
+        quote_id: q_8f2c
+        expires_at: '2026-11-11T16:00:00Z'
+        service_area: Ottawa Central
+        duration_minutes: 180
+        price:
+          first_visit: { amount_cents: 24900, currency: CAD }
+          recurring_visit: { amount_cents: 16900, currency: CAD }
+          lines:
+            - { label: "Standard clean, 3 bed / 2 bath", amount: { amount_cents: 22900, currency: CAD } }
+            - { label: Inside fridge, amount: { amount_cents: 2000, currency: CAD } }
+          taxes_included: false
+    QuoteNotServiceable:
+      value:
+        brand: urbanmop
+        serviceable: false
+        not_serviceable_reason: outside_service_area
+        message: This postal code is outside our service area.
+    Availability:
+      value:
+        quote_id: q_8f2c
+        timezone: America/Toronto
+        generated_at: '2026-11-11T15:01:00Z'
+        slots:
+          - slot_token: s_1
+            start: '2026-11-13T09:00:00-05:00'
+            end: '2026-11-13T12:00:00-05:00'
+            arrival_window: { start: '2026-11-13T09:00:00-05:00', end: '2026-11-13T10:00:00-05:00' }
+            team: { id: t_4, name: Team 4 }
+            notes: [Team already working nearby that morning]
+          - slot_token: s_2
+            start: '2026-11-14T13:00:00-05:00'
+            end: '2026-11-14T16:00:00-05:00'
+    HoldRequest:
+      value:
+        slot_token: s_1
+        lead_ref: lead_123
+        placed_by: { kind: sales_rep, id: rep_7, display_name: Sales rep 7 }
+    Hold:
+      value:
+        hold_id: h_51
+        kind: local
+        expires_at: '2026-11-11T15:11:00Z'
+        slot:
+          slot_token: s_1
+          start: '2026-11-13T09:00:00-05:00'
+          end: '2026-11-13T12:00:00-05:00'
+    BookingRequest:
+      value:
+        hold_id: h_51
+        customer:
+          first_name: Test
+          last_name: Customer
+          email: test.customer@example.com
+          phone: 613-555-0100
+        access_notes: Key under the mat. One friendly dog.
+        answers:
+          - { question_id: parking, option_ids: ['yes'] }
+          - { question_id: terms, value: true }
+        lead_ref: lead_123
+        placed_by: { kind: sales_rep, id: rep_7 }
+        source: { channel: web_form, campaign: fall-promo }
+    Booking:
+      value:
+        booking_id: '90211'
+        customer_id: '5531'
+        customer_created: true
+        platform: launch27
+        brand: urbanmop
+        start: '2026-11-13T09:00:00-05:00'
+        end: '2026-11-13T12:00:00-05:00'
+        price: { amount_cents: 24900, currency: CAD }
+        status: confirmed
+    ErrorSlotUnavailable:
+      value:
+        error:
+          code: slot_unavailable
+          message: That slot was taken. Pick another one.
+          retryable: false

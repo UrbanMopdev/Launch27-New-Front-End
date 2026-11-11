@@ -7,6 +7,7 @@ import { guardConnectors } from './inbox/channels.js';
 import { createL27Client } from './inbox/lookup.js';
 import { createLogger, requestLogger } from './log.js';
 import { migrationStatus } from './db/migrate.js';
+import { createPlacementRouter } from './placement/api.js';
 
 const COOKIE = 'l27_session';
 const UPSTREAM_TIMEOUT_MS = 30_000;
@@ -15,7 +16,7 @@ const FORWARD_HEADERS = ['accept', 'content-type'];
 
 export function createApp(
   config,
-  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null } = {},
+  { fetchImpl = fetch, sessions = new SessionStore({ secret: config.sessionSecret }), db = null, connectors = {}, log = createLogger({ level: 'warn' }), jobs = null, qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null, placement = null } = {},
 ) {
   const app = express();
   // Behind Railway's (or any) HTTPS proxy: trust X-Forwarded-* so secure cookies work.
@@ -30,7 +31,8 @@ export function createApp(
   });
 
   // Liveness: the process is up. Never touches the database.
-  app.get('/healthz', (req, res) => res.json({ status: 'ok', env: config.appEnv, version: config.version, uptimeSec: Math.round(process.uptime()) }));
+  // Also read by the sign-in page for its DEV / QA / PROD label and portal name.
+  app.get('/healthz', (req, res) => res.json({ status: 'ok', env: config.appEnv, portal: config.portalName || 'UrbanMop', version: config.version, uptimeSec: Math.round(process.uptime()) }));
 
   // Readiness: can serve traffic (database reachable, migrations applied, worker healthy).
   // Railway's health check uses this, so a deploy only goes live when it passes.
@@ -192,10 +194,14 @@ export function createApp(
     });
   }
 
+  // Placement API for the Sales Hub (service tokens, not staff logins). Mounted before the
+  // workspace's /api routes, which need a signed-in person.
+  if (placement && config.placementTokens?.size) app.use('/api/placement/v1', createPlacementRouter({ placement, config, log, limits: config.placementLimits }));
+
   // The support workspace (conversations, contacts, routing). Needs a database.
   if (db) {
     const l27 = createL27Client({ baseUrl: config.l27BaseUrl, fetchImpl });
-    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule, reports, writes, commercial }));
+    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule, reports, writes, commercial, placement }));
   }
 
   // Last-resort error handler: log it (without personal data), answer generically.

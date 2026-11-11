@@ -10,7 +10,7 @@ const unused = ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', cau
 export default tseslint.config(
   { ignores: ['**/node_modules/**', '**/dist/**', 'capture/output/**', 'capture/vendor/**', '.data/**', '**/*.tsbuildinfo'] },
   {
-    files: ['server/**/*.js', 'capture/**/*.js', 'scripts/**/*.mjs', 'eslint.config.js'],
+    files: ['server/**/*.js', 'capture/**/*.js', 'contracts/**/*.js', 'scripts/**/*.mjs', 'eslint.config.js'],
     extends: [js.configs.recommended],
     languageOptions: { ecmaVersion: 2024, sourceType: 'module', globals: { ...globals.node } },
     rules: { 'no-unused-vars': unused, 'no-empty': ['error', { allowEmptyCatch: true }] },

@@ -86,6 +86,22 @@ time. Query strings (which can contain search text) are never logged.
 `X-Frame-Options: SAMEORIGIN`, `x-powered-by` off, request bodies capped, Railway
 terminates TLS.
 
+## Placement API
+
+`/api/placement/v1` (docs/placement.md, "Security") is called by the Sales Hub with a service
+token. Layers, in order: no-cache/no-sniff/no-frame headers and HSTS; an optional caller address
+allowlist (`PLACEMENT_ALLOWED_IPS`); a 15-minute lockout after 10 bad tokens from one address;
+the token, stored only as its SHA-256 in production and compared in constant time; per-caller
+rate limits (bookings 20/min, holds 60/min, all 300/min); the token's scope (actions read / hold /
+book, brands); the request checked against the contract, JSON only, 64 kB; quotes and holds
+usable only by the caller that made them. A token only reaches the placement endpoints: it can't
+sign in, read the inbox or use `/l27`. Production bookings need `PLACEMENT_BOOKING_ENABLED`
+(separate from `L27_ALLOW_WRITES`), are written with a dedicated Launch27 login
+(`L27_PLACEMENT_*`), and the placement client refuses any other Launch27 write. Every request is
+audited (`placement_audit`, 180 days, no customer details; Support settings → Sales Hub API) and
+every booking attempt is in the write log. Slot tokens are signed. Quotes keep the address for
+30 days, then are deleted.
+
 ## Known gaps / follow-ups
 
 - **This repository is public.** It contains no customer data or secrets, but it does

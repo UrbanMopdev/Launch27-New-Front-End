@@ -1,0 +1,24 @@
+{
+  "name": "placement-contract",
+  "version": "1.1.0",
+  "description": "The API every front end app implements so the Sales Hub can quote, find slots, hold and book",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./conformance": "./conformance.js",
+    "./openapi.yaml": "./openapi.yaml"
+  },
+  "bin": {
+    "placement-conformance": "./cli.js"
+  },
+  "scripts": {
+    "test": "node --test 'test/*.test.js'",
+    "conformance": "node --env-file-if-exists=../../.env cli.js"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "yaml": "2.9.1"
+  }
+}
