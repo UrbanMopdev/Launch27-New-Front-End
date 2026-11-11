@@ -421,6 +421,12 @@ describe('/api end to end', () => {
     assert.equal((await api('/api/admin/rules', { rules }, 'PUT')).status, 200);
     await api('/api/admin/settings', { settings_editors: 'everyone' }, 'PUT');
   });
+  test('calls: a hidden number is accepted but not logged (nothing to call back)', async () => {
+    const res = await api('/api/calls', { call_id: 'hid-1', direction: 'inbound', from: 'Anonymous', to: '613-691-9880', result: 'missed' });
+    assert.equal(res.status, 202);
+    assert.deepEqual(res.body, { saved: false, hidden: true });
+  });
+
   test('calls: test calls from the simulator are saved (missed calls get a callback conversation)', async () => {
     const res = await api('/api/calls', { call_id: 'sim-1', simulated: true, direction: 'inbound', from: '613-555-0177', to: '613-691-9880', result: 'missed', started_at: new Date().toISOString() });
     assert.equal(res.status, 201);
