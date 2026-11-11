@@ -37,6 +37,14 @@ describe('environment guards', () => {
     assert.equal(loadConfig({ APP_ENV: 'staging', RINGCENTRAL_CLIENT_ID: 'abc', RINGCENTRAL_SERVER: 'https://platform.devtest.ringcentral.com' }).ringcentralRecord, true);
   });
 
+  test('portal switcher: name and https links to the other portals', () => {
+    const c = loadConfig({ PORTAL_NAME: 'Clean Bee', PORTALS: 'UrbanMop=https://web-production-27677.up.railway.app/, Clean Bee=https://web-production-cce4d.up.railway.app,Bad=http://x.example,nonsense' });
+    assert.equal(c.portalName, 'Clean Bee');
+    assert.deepEqual(c.portalLinks, [{ name: 'UrbanMop', url: 'https://web-production-27677.up.railway.app' }, { name: 'Clean Bee', url: 'https://web-production-cce4d.up.railway.app' }]);
+    assert.equal(loadConfig({}).portalName, 'UrbanMop');
+    assert.deepEqual(loadConfig({}).portalLinks, []);
+  });
+
   test('real RingCentral logins outside production only with the switch, and nothing is saved', () => {
     const off = loadConfig({ APP_ENV: 'development', RINGCENTRAL_CLIENT_ID: 'abc' });
     assert.equal(off.ringcentralClientId, null);
