@@ -230,6 +230,43 @@ export interface Identity {
   opted_out: boolean;
 }
 
+export interface CallLogRow {
+  id: number;
+  conversation_id: number;
+  direction: 'in' | 'out';
+  from_addr: string | null;
+  to_addr: string | null;
+  created_at: string;
+  result: 'answered' | 'missed' | 'voicemail' | 'no_answer' | string;
+  duration_seconds: number | null;
+  recording_url: string | null;
+  agent_id: number | null;
+  agent_name: string | null;
+  contact_id: number | null;
+  contact_name: string | null;
+  contact_roles: Role[] | null;
+  l27_customer_id: number | null;
+  l27_team_id: number | null;
+  caller_flag: 'spam' | 'wrong_number' | null;
+  lead_stage: string | null;
+  queue_name: string | null;
+  callback: 'open' | 'tried' | 'called_back' | null;
+}
+
+export type ContactList = 'leads' | 'applicants' | 'other' | 'number_only' | 'flagged';
+export interface ContactListRow {
+  id: number;
+  name: string | null;
+  roles: Role[];
+  lead_stage: string | null;
+  lead_source: string | null;
+  caller_flag: 'spam' | 'wrong_number' | null;
+  notes: string | null;
+  created_at: string;
+  last_activity: string | null;
+  identities: { kind: 'phone' | 'email'; value: string }[];
+}
+
 export interface Contact {
   id: number;
   name: string | null;
@@ -240,6 +277,7 @@ export interface Contact {
   lead_source: string | null;
   communication_preference: string | null;
   notes: string | null;
+  caller_flag?: 'spam' | 'wrong_number' | null;
   identities: Identity[];
   conversations?: (Pick<Conversation, 'id' | 'channel' | 'status' | 'subject' | 'l27_booking_id' | 'disposition' | 'complaint'> & { last_preview: string | null; last_message_at: string })[];
 }
@@ -373,6 +411,10 @@ export const inbox = {
   history: () => call<HistoryEntry[]>('GET', '/admin/history'),
   saveSla: (id: number, patch: { first_response_minutes: number; warn_minutes?: number; business_hours?: boolean }) => call<SlaPolicy>('PUT', `/admin/sla/${id}`, patch),
   simulate: (body: { channel: Channel; from: string; to?: string; subject?: string; body: string; from_name?: string; thread_key?: string }) => call<{ conversationId: number; isNew: boolean; reopened: boolean }>('POST', '/simulate/inbound', body),
-  logCall: (body: Record<string, unknown>) => call<{ conversationId: number }>('POST', '/calls', body),
-  lookup: (kind: 'phone' | 'email', value: string) => call<{ contacts: Contact[]; open: { id: number; channel: Channel; subject: string | null }[]; l27: { name: string; roles: Role[]; l27_customer_id?: number | null; l27_team_id?: number | null } | null }>('GET', `/lookup${qs({ kind, value })}`),
+  logCall: (body: Record<string, unknown>) => call<{ conversationId?: number; saved?: boolean; hidden?: boolean }>('POST', '/calls', body),
+  callLog: (days: number) => call<{ days: number; rows: CallLogRow[] }>('GET', `/calls${qs({ days })}`),
+  contactList: (list: ContactList) => call<{ rows: ContactListRow[]; counts: Record<ContactList, number> }>('GET', `/contact-list${qs({ list })}`),
+  callerChoice: (phone: string) => call<{ l27_customer_id: number | null }>('GET', `/caller-choice${qs({ phone })}`),
+  rememberCallerChoice: (phone: string, customerId: number) => call<{ saved: boolean }>('PUT', '/caller-choice', { phone, l27_customer_id: customerId }),
+  lookup: (kind: 'phone' | 'email', value: string, simulated = false) => call<{ contacts: Contact[]; open: { id: number; channel: Channel; subject: string | null }[]; l27: { name: string; roles: Role[]; l27_customer_id?: number | null; l27_team_id?: number | null } | null }>('GET', `/lookup${qs({ kind, value, ...(simulated ? { simulated: '1' } : {}) })}`),
 };

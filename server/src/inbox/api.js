@@ -322,6 +322,34 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json(rows);
   }));
 
+  // Contacts that are not (yet) a Launch27 customer or cleaner: leads, job applicants, others,
+  // numbers nobody named, and numbers marked spam or wrong number.
+  const CONTACT_LISTS = {
+    leads: "c.lead_stage IS NOT NULL AND c.caller_flag IS NULL AND NOT c.roles ? 'applicant'",
+    applicants: "c.roles ? 'applicant' AND c.caller_flag IS NULL",
+    other: "c.name IS NOT NULL AND c.lead_stage IS NULL AND NOT c.roles ? 'applicant' AND c.caller_flag IS NULL",
+    number_only: "c.name IS NULL AND c.lead_stage IS NULL AND NOT c.roles ? 'applicant' AND c.caller_flag IS NULL",
+    flagged: 'c.caller_flag IS NOT NULL',
+  };
+  r.get('/contact-list', wrap(async (req, res) => {
+    const where = CONTACT_LISTS[req.query.list] || CONTACT_LISTS.leads;
+    const rows = await many(
+      db,
+      `SELECT c.id, c.name, c.roles, c.lead_stage, c.lead_source, c.caller_flag, c.notes, c.created_at,
+              COALESCE((SELECT json_agg(json_build_object('kind', i.kind, 'value', i.value) ORDER BY i.kind) FROM contact_identities i WHERE i.contact_id = c.id), '[]') AS identities,
+              (SELECT max(v.last_message_at) FROM conversations v WHERE v.contact_id = c.id) AS last_activity
+       FROM contacts c
+       WHERE c.l27_customer_id IS NULL AND c.l27_team_id IS NULL AND NOT c.roles ? 'system' AND ${where}
+       ORDER BY COALESCE((SELECT max(v.last_message_at) FROM conversations v WHERE v.contact_id = c.id), c.created_at) DESC
+       LIMIT 300`,
+    );
+    const counts = {};
+    for (const [k, w] of Object.entries(CONTACT_LISTS)) {
+      counts[k] = Number((await one(db, `SELECT count(*)::int AS n FROM contacts c WHERE c.l27_customer_id IS NULL AND c.l27_team_id IS NULL AND NOT c.roles ? 'system' AND ${w}`)).n);
+    }
+    res.json({ rows, counts });
+  }));
+
   r.get('/contacts/:id', wrap(async (req, res) => {
     const contact = await one(db, 'SELECT * FROM contacts WHERE id = $1', [req.params.id]);
     if (!contact) throw new svc.InboxError(404, 'Contact not found');
@@ -336,7 +364,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   r.post('/contacts', wrap(async (req, res) => {
     const { name, roles = ['customer'], email, phone } = req.body || {};
     const identities = [email && { kind: 'email', value: email }, phone && { kind: 'phone', value: phone }].filter(Boolean);
-    if (!identities.length) throw new svc.InboxError(400, 'Add an email or phone number');
+    // A caller with a hidden number can be saved by name alone.
+    if (!identities.length && !String(name || '').trim()) throw new svc.InboxError(400, 'Add a name, email or phone number');
     const contact = await db.tx(async (q) => {
       const c = await svc.createContact(q, { name, roles, identities });
       await svc.audit(q, req.user.id, 'contact.created', 'contact', c.id, { name, roles });
@@ -346,7 +375,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   }));
 
   r.patch('/contacts/:id', wrap(async (req, res) => {
-    const allowed = ['name', 'roles', 'lead_stage', 'lead_source', 'communication_preference', 'notes', 'l27_customer_id', 'l27_team_id'];
+    const allowed = ['name', 'roles', 'lead_stage', 'lead_source', 'communication_preference', 'notes', 'l27_customer_id', 'l27_team_id', 'caller_flag'];
+    if (req.body?.caller_flag !== undefined && ![null, 'spam', 'wrong_number'].includes(req.body.caller_flag)) throw new svc.InboxError(400, 'caller_flag must be spam, wrong_number or null');
     const sets = [];
     const params = [req.params.id];
     for (const k of allowed) {
@@ -792,21 +822,80 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.status(201).json(result);
   }));
 
+  // Calls log (W-5, W-6, V-2 to V-4): every call the portal logged, newest first, with the
+  // callback status of missed calls. Calls in restricted queues are only listed for their members.
+  r.get('/calls', wrap(async (req, res) => {
+    const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 92);
+    const visible = await visibleQueueIds(req.user);
+    const rows = await many(
+      db,
+      `SELECT m.id, m.conversation_id, m.direction, m.from_addr, m.to_addr, m.created_at,
+              COALESCE(m.meta->>'result', 'answered') AS result,
+              NULLIF(m.meta->>'duration_seconds', '')::numeric::int AS duration_seconds,
+              m.meta->>'recording_url' AS recording_url,
+              u.id AS agent_id, COALESCE(u.name, u.email) AS agent_name,
+              k.id AS contact_id, k.name AS contact_name, k.roles AS contact_roles, k.l27_customer_id, k.l27_team_id, k.caller_flag, k.lead_stage,
+              q.name AS queue_name,
+              CASE WHEN m.direction = 'in' AND m.meta->>'result' IN ('missed', 'voicemail') THEN (
+                SELECT CASE
+                  WHEN count(*) FILTER (WHERE (o.direction = 'out' AND COALESCE(o.meta->>'result', '') <> 'no_answer') OR (o.direction = 'in' AND COALESCE(o.meta->>'result', 'answered') = 'answered')) > 0 THEN 'called_back'
+                  WHEN count(*) FILTER (WHERE o.direction = 'out') > 0 THEN 'tried'
+                  ELSE 'open' END
+                FROM messages o JOIN conversations ov ON ov.id = o.conversation_id
+                WHERE o.kind = 'call' AND o.created_at > m.created_at AND ov.contact_id = v.contact_id)
+              END AS callback
+       FROM messages m
+       JOIN conversations v ON v.id = m.conversation_id
+       LEFT JOIN contacts k ON k.id = v.contact_id
+       LEFT JOIN users u ON u.id = COALESCE(m.author_id, NULLIF(m.meta->>'agent_id', '')::numeric::bigint)
+       LEFT JOIN queues q ON q.id = v.queue_id
+       WHERE m.kind = 'call' AND m.created_at >= now() - make_interval(days => $1::int)
+         AND (v.queue_id IS NULL OR v.queue_id = ANY($2::bigint[]) OR v.owner_id = $3)
+       ORDER BY m.created_at DESC
+       LIMIT 1000`,
+      [days, visible, req.user.id],
+    );
+    res.json({ days, rows });
+  }));
+
   // Call records from the RingCentral widget in the agent's browser.
   r.post('/calls', wrap(async (req, res) => {
     // Real RingCentral logins outside production: never store real calls here.
-    if (config.ringcentralClientId && config.ringcentralRecord === false) return res.status(202).json({ saved: false });
+    // Test calls from the Channel simulator (test numbers) are saved wherever the simulator is
+    // on, so missed-call follow-up can be tried on dev and QA; never in production.
+    if (req.body?.simulated === true && config.simulator === false) throw new svc.InboxError(403, 'The simulator is turned off');
+    if (config.ringcentralClientId && config.ringcentralRecord === false && req.body?.simulated !== true) return res.status(202).json({ saved: false });
     const call = req.body || {};
     const theirs = normalizePhone(call.direction === 'outbound' || call.direction === 'out' ? call.to : call.from);
-    if (!theirs) throw new svc.InboxError(400, 'Call needs a phone number');
+    // A hidden or blocked number can't be matched or called back: nothing to log it against.
+    if (!theirs) return res.status(202).json({ saved: false, hidden: true });
     const known = await svc.contactsByIdentity(db, 'phone', theirs);
     const lookup = !known.length ? await l27.identify(req.bearer, 'phone', theirs) : null;
     res.status(201).json(await db.tx((q) => svc.logCall(q, req.user, call, { lookup })));
   }));
 
+  // Shared numbers: the customer last picked for this number (pre-selected next time).
+  const callsSaved = () => !(config.ringcentralClientId && config.ringcentralRecord === false);
+  r.get('/caller-choice', wrap(async (req, res) => {
+    const phone = normalizePhone(req.query.phone);
+    if (!phone || !callsSaved()) return res.json({ l27_customer_id: null });
+    const row = await one(db, 'SELECT l27_customer_id FROM caller_choices WHERE phone = $1', [phone]);
+    res.json({ l27_customer_id: row ? Number(row.l27_customer_id) : null });
+  }));
+  r.put('/caller-choice', wrap(async (req, res) => {
+    const phone = normalizePhone(req.body?.phone);
+    const id = Number(req.body?.l27_customer_id);
+    if (!phone || !Number.isInteger(id) || id <= 0) throw new svc.InboxError(400, 'Pick a customer for this number');
+    if (!callsSaved()) return res.status(202).json({ saved: false });
+    await db.query('INSERT INTO caller_choices (phone, l27_customer_id, chosen_by) VALUES ($1, $2, $3) ON CONFLICT (phone) DO UPDATE SET l27_customer_id = EXCLUDED.l27_customer_id, chosen_by = EXCLUDED.chosen_by, chosen_at = now()', [phone, id, req.user?.id ?? null]);
+    res.json({ saved: true });
+  }));
+
   // Screen pop: who is calling?
   r.get('/lookup', wrap(async (req, res) => {
-    if (config.ringcentralClientId && config.ringcentralRecord === false) return res.json({ contacts: [], open: [], l27: null });
+    // Real logins outside production: no real caller's number is looked up here. Test calls
+    // from the Channel simulator (test data) still are.
+    if (config.ringcentralClientId && config.ringcentralRecord === false && req.query.simulated !== '1') return res.json({ contacts: [], open: [], l27: null });
     const kind = req.query.kind === 'email' ? 'email' : 'phone';
     const value = normalizeIdentity(kind, req.query.value);
     if (!value) return res.json({ contacts: [], l27: null });

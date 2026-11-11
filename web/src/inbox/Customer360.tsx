@@ -10,6 +10,7 @@ import { Icon } from '../components/Icon';
 import { CallButton } from '../components/CallButton';
 import { insights, rhythmLabel, summarySentence, visitStatus, type Insights, type Stage } from '../lib/customer360';
 import { inbox, type Contact } from './api';
+import { linkToCustomer } from './caller';
 import { ago, displayIdentity } from './util';
 import { segmentsApi, type CustomerSegment } from '../segments/api';
 import { SEGMENT_LABEL, SegmentPill, TraitTag, shortDate } from '../segments/ui';
@@ -813,8 +814,9 @@ function LinkToLaunch27({ contact }: { contact: Contact }) {
   const seed = contact.identities.find((i) => i.kind === 'email')?.value || contact.identities[0]?.value.slice(-10) || contact.name || '';
   const [query, setQuery] = useState(seed);
   const results = useQuery({ queryKey: ['l27-customer-search', query], queryFn: () => l27<Customer[]>('/v1/staff/customers', { query, limit: 8 }), enabled: query.length >= 3 });
-  const link = async (customerId: number, roles = contact.roles) => {
-    await inbox.updateContact(contact.id, { l27_customer_id: customerId, roles: [...new Set([...roles, 'customer' as const])] });
+  // Linking a lead to the customer they became also moves an open lead to "Booked".
+  const link = async (customerId: number) => {
+    await linkToCustomer(contact, customerId);
     queryClient.invalidateQueries({ queryKey: ['inbox'] });
   };
   const label = contact.name || displayIdentity(contact.identities[0]?.value) || 'Unknown';

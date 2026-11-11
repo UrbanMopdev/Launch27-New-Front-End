@@ -297,6 +297,38 @@ describe('/api end to end', () => {
     assert.equal((await as('/api/brands/locations/42', { brand: 'residential' }, 'PUT')).status, 403);
   });
 
+  test('contacts: unlinked contacts are listed as leads, applicants, other, number only or flagged', async () => {
+    const lead = (await api('/api/contacts', { name: 'Lee Lead', roles: [], phone: '613-555-0301' })).body;
+    await api(`/api/contacts/${lead.id}`, { lead_stage: 'New', lead_source: 'Phone call' }, 'PATCH');
+    const job = (await api('/api/contacts', { name: 'Ann Applicant', roles: ['applicant'], phone: '613-555-0302' })).body;
+    const bare = (await api('/api/contacts', { roles: [], phone: '613-555-0303' })).body;
+    const spam = (await api('/api/contacts', { roles: [], phone: '613-555-0304' })).body;
+    assert.equal((await api(`/api/contacts/${spam.id}`, { caller_flag: 'spam' }, 'PATCH')).status, 200);
+    assert.equal((await api(`/api/contacts/${spam.id}`, { caller_flag: 'nonsense' }, 'PATCH')).status, 400);
+    const ids = async (list) => (await api(`/api/contact-list?list=${list}`)).body.rows.map((r) => Number(r.id));
+    assert.ok((await ids('leads')).includes(Number(lead.id)));
+    assert.ok((await ids('applicants')).includes(Number(job.id)));
+    assert.ok((await ids('number_only')).includes(Number(bare.id)));
+    assert.ok((await ids('flagged')).includes(Number(spam.id)));
+    assert.ok(!(await ids('number_only')).includes(Number(spam.id)));
+    const counts = (await api('/api/contact-list?list=leads')).body.counts;
+    assert.ok(counts.leads >= 1 && counts.flagged >= 1);
+  });
+
+  test('calls: a hidden caller can be saved by name alone; nothing at all is refused', async () => {
+    const made = await api('/api/contacts', { name: 'Hidden caller about a quote', roles: [] });
+    assert.equal(made.status, 201);
+    assert.equal(made.body.name, 'Hidden caller about a quote');
+    assert.equal((await api('/api/contacts', { roles: [] })).status, 400);
+  });
+
+  test('calls: the last customer picked for a shared number is remembered', async () => {
+    assert.deepEqual((await api('/api/caller-choice?phone=613-555-0199')).body, { l27_customer_id: null });
+    assert.equal((await api('/api/caller-choice', { phone: '(613) 555-0199', l27_customer_id: 77 }, 'PUT')).status, 200);
+    assert.deepEqual((await api('/api/caller-choice?phone=+16135550199')).body, { l27_customer_id: 77 });
+    assert.equal((await api('/api/caller-choice', { phone: '613-555-0199', l27_customer_id: 'x' }, 'PUT')).status, 400);
+  });
+
   test('requires login', async () => {
     assert.equal((await fetch(`${base}/api/me`)).status, 401);
   });
@@ -388,5 +420,35 @@ describe('/api end to end', () => {
     assert.equal((await as('/api/admin/rules', { rules }, 'PUT')).status, 403);
     assert.equal((await api('/api/admin/rules', { rules }, 'PUT')).status, 200);
     await api('/api/admin/settings', { settings_editors: 'everyone' }, 'PUT');
+  });
+  test('calls log: lists calls; a missed call is open until it is called back', async () => {
+    const at = (min) => new Date(Date.now() - min * 60_000).toISOString();
+    await api('/api/calls', { call_id: 'log-1', direction: 'inbound', from: '613-555-0411', to: '613-691-9880', result: 'missed', started_at: at(30) });
+    await api('/api/calls', { call_id: 'log-2', direction: 'inbound', from: '613-555-0412', to: '613-691-9880', result: 'missed', started_at: at(20) });
+    await api('/api/calls', { call_id: 'log-3', direction: 'outbound', from: '613-691-9880', to: '613-555-0412', result: 'no_answer', started_at: at(10) });
+    await api('/api/calls', { call_id: 'log-4', direction: 'inbound', from: '613-555-0413', to: '613-691-9880', result: 'missed', started_at: at(9) });
+    await api('/api/calls', { call_id: 'log-5', direction: 'outbound', from: '613-691-9880', to: '613-555-0413', result: 'answered', duration_seconds: 95, started_at: at(5) });
+    const log = await api('/api/calls?days=1');
+    assert.equal(log.status, 200);
+    const missedFrom = (n) => log.body.rows.find((r) => r.direction === 'in' && r.from_addr.endsWith(n));
+    assert.equal(missedFrom('5550411').callback, 'open');
+    assert.equal(missedFrom('5550412').callback, 'tried');
+    assert.equal(missedFrom('5550413').callback, 'called_back');
+    const out = log.body.rows.find((r) => r.direction === 'out' && r.to_addr.endsWith('5550413'));
+    assert.equal(out.result, 'answered');
+    assert.equal(out.duration_seconds, 95);
+    assert.ok(out.agent_name);
+  });
+
+  test('calls: a hidden number is accepted but not logged (nothing to call back)', async () => {
+    const res = await api('/api/calls', { call_id: 'hid-1', direction: 'inbound', from: 'Anonymous', to: '613-691-9880', result: 'missed' });
+    assert.equal(res.status, 202);
+    assert.deepEqual(res.body, { saved: false, hidden: true });
+  });
+
+  test('calls: test calls from the simulator are saved (missed calls get a callback conversation)', async () => {
+    const res = await api('/api/calls', { call_id: 'sim-1', simulated: true, direction: 'inbound', from: '613-555-0177', to: '613-691-9880', result: 'missed', started_at: new Date().toISOString() });
+    assert.equal(res.status, 201);
+    assert.ok(res.body.conversationId);
   });
 });
