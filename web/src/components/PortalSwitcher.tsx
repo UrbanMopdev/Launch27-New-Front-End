@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMeta } from '../inbox/util';
 import { BrandLogo } from './BrandLogo';
 import { Icon } from './Icon';
+import { PortalLogo } from './PortalLogo';
 
 // The brand name at the top of the sidebar. When other brands' portals are set up
 // (the PORTALS setting on the server), it opens a menu to switch to them.
@@ -39,11 +40,11 @@ export function PortalSwitcher() {
         <div className="portal-menu" role="menu">
           <div className="eyebrow">Portals</div>
           <div className="portal-item" aria-current="true">
-            {name} <span className="muted small">this portal</span>
+            <span className="portal-item-name"><PortalLogo name={name} />{name}</span> <span className="muted small">this portal</span>
           </div>
           {others.map((l) => (
             <a key={l.url} role="menuitem" className="portal-item" href={l.url}>
-              {l.name} <span className="muted small">open</span>
+              <span className="portal-item-name"><PortalLogo name={l.name} />{l.name}</span> <span className="muted small">open</span>
             </a>
           ))}
         </div>

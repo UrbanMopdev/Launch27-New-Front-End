@@ -1745,6 +1745,10 @@ i.rep-cell { width: 14px; height: 14px; }
 .portal-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border-radius: 8px; color: var(--text); text-decoration: none; font-weight: 600; font-size: 14px; }
 .portal-item:hover { background: var(--bg); }
 .portal-item .muted { font-weight: 400; }
+.portal-item[aria-current="true"] { background: var(--accent-wash); }
+.portal-item-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.portal-logo { flex: none; border-radius: 7px; object-fit: contain; }
+.portal-logo-badge { display: inline-grid; place-items: center; color: #fff; font-weight: 700; letter-spacing: .02em; line-height: 1; }
 .sidebar-head { position: relative; }
 .portal-wrap { flex: 1; min-width: 0; display: flex; }
 .shell.nav-collapsed .portal-switch > svg { display: none; }
