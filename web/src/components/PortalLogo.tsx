@@ -1,14 +1,14 @@
-// A portal's logo in the portal menu. Known brands have a logo file (web/public/brand/<slug>.png)
-// once one is added below; until then, and for any other portal, a badge with the brand's
-// initials in its colour.
+// A portal's logo in the portal menu: the brand's square icon (web/public/brand/<slug>.png) where
+// there is one; otherwise, and if it fails to load, a badge with the brand's initials in its colour.
+// Icons come from the brands' logos (Luxoclean's icon; UrbanMop's "M" mark from its logo).
 import { useState } from 'react';
 
 interface Known { initials: string; color: string; logo?: string }
 // Add `logo: '/brand/<slug>.png'` here when the brand's logo file is in web/public/brand/.
 const KNOWN: Record<string, Known> = {
-  urbanmop: { initials: 'UM', color: '#2f7d4f' },
+  urbanmop: { initials: 'UM', color: '#f2295b', logo: '/brand/urbanmop.png' },
   cleanbee: { initials: 'CB', color: '#c58b00' },
-  luxoclean: { initials: 'LC', color: '#1f4e79' },
+  luxoclean: { initials: 'LC', color: '#63dce6', logo: '/brand/luxoclean.png' },
   saleshub: { initials: 'SH', color: '#6b4fa3' },
 };
 
