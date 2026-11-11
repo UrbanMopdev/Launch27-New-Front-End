@@ -48,18 +48,26 @@ export function ipAllowed(list, ip) {
 }
 
 // ---------- fixed-window counters (one app instance) ----------
-export function createLimiter({ limit, windowMs, now = () => Date.now() }) {
+// maxKeys bounds memory: when that many keys are being counted, a NEW key is treated as over
+// the limit (fail closed). Only unknown callers are keyed by address, and a valid token never
+// waits on an address limit, so this can't lock the Sales Hub out.
+export function createLimiter({ limit, windowMs, now = () => Date.now(), maxKeys = 50_000 }) {
   const hits = new Map(); // key -> { n, reset }
   let sweep = 0;
+  const prune = (t) => {
+    for (const [k, v] of hits) if (v.reset <= t) hits.delete(k);
+    sweep = t;
+  };
   return {
     /** Counts one hit. Returns seconds to wait when over the limit, else 0. */
     hit(key) {
       const t = now();
-      if (t - sweep > windowMs) {
-        for (const [k, v] of hits) if (v.reset <= t) hits.delete(k);
-        sweep = t;
-      }
+      if (t - sweep > windowMs) prune(t);
       const cur = hits.get(key);
+      if (!cur && hits.size >= maxKeys) {
+        prune(t);
+        if (hits.size >= maxKeys) return Math.ceil(windowMs / 1000);
+      }
       if (!cur || cur.reset <= t) {
         hits.set(key, { n: 1, reset: t + windowMs });
         return 0;
@@ -88,8 +96,12 @@ const ACTION_OF = { getHealth: 'read', getCatalog: 'read', createQuote: 'read', 
 export function createPlacementRouter({ placement, config, log = { warn() {}, info() {}, error() {} }, limits = DEFAULT_LIMITS, now = () => Date.now() }) {
   const r = express.Router();
   const badTokens = createLimiter({ ...limits.badTokens, now });
-  // Refused requests from unknown callers are audited at most 5 a minute per address.
-  const anonAudit = createLimiter({ limit: 5, windowMs: 60_000, now });
+  // Refused requests from unknown callers are audited at most 5 a minute per address and 60 a
+  // minute in all; past that only a count is kept, logged once a minute.
+  const anonAudit = createLimiter({ limit: 5, windowMs: 60_000, now, maxKeys: 10_000 });
+  const anonAuditAll = createLimiter({ limit: 60, windowMs: 60_000, now });
+  let anonDropped = 0;
+  let anonDroppedAt = now();
   const perCaller = { all: createLimiter({ ...limits.all, now }), hold: createLimiter({ ...limits.hold, now }), book: createLimiter({ ...limits.book, now }) };
 
   const error = (res, status, code, message, { retryable = false, details } = {}) =>
@@ -130,7 +142,16 @@ export function createPlacementRouter({ placement, config, log = { warn() {}, in
         ms: now() - started,
         ref: res.locals.ref || null,
       };
-      if (!entry.caller && anonAudit.hit(`ip:${entry.ip}`)) return; // a flood of bad requests can't fill the table
+      if (!entry.caller && (anonAudit.hit(`ip:${entry.ip}`) || anonAuditAll.hit('all'))) {
+        // A flood of bad requests can't fill the table or the logs: count it instead.
+        anonDropped += 1;
+        if (now() - anonDroppedAt > 60_000) {
+          log.warn('placement: refused requests from unknown callers not audited', { count: anonDropped });
+          anonDropped = 0;
+          anonDroppedAt = now();
+        }
+        return;
+      }
       placement.audit?.(entry).catch((err) => log.warn('placement audit failed', { error: err.message }));
       if (res.statusCode === 401 || res.statusCode === 403 || res.statusCode === 429) log.warn('placement request refused', { ...entry });
     });
@@ -152,15 +173,14 @@ export function createPlacementRouter({ placement, config, log = { warn() {}, in
     next();
   });
 
-  // 3 + 4. Lockout, then the service token.
+  // 3 + 4. The service token; an address sending bad tokens is locked out. A valid token is
+  // never refused by the lockout, so someone sharing the Hub's address can't lock the Hub out.
   r.use((req, res, next) => {
     const ipKey = `ip:${req.ip}`;
-    const wait = badTokens.blocked(ipKey);
-    if (wait) return tooMany(res, wait);
     const caller = callerFor(config.placementTokens, req.headers.authorization);
     if (!caller) {
-      const w = badTokens.hit(ipKey);
-      if (w) return tooMany(res, w);
+      const wait = badTokens.blocked(ipKey) || badTokens.hit(ipKey);
+      if (wait) return tooMany(res, wait);
       res.set('WWW-Authenticate', 'Bearer realm="placement"');
       return error(res, 401, 'unauthorized', 'Missing or unknown service token.');
     }
@@ -211,7 +231,13 @@ export function createPlacementRouter({ placement, config, log = { warn() {}, in
     }
   };
 
-  const DATE = /^\d{4}-\d{2}-\d{2}$/;
+  // A real calendar date (2026-13-01 and 2026-02-30 are not).
+  const isDate = (v) => {
+    const s = String(v || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const d = new Date(`${s}T12:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  };
   const ID = /^[A-Za-z0-9_-]{1,64}$/;
   // 6. Scope: the brand named in the request (quotes and holds carry theirs; see the service).
   const brandOk = (caller, brand) => {
@@ -236,7 +262,7 @@ export function createPlacementRouter({ placement, config, log = { warn() {}, in
 
   r.get('/availability', handle('getAvailability', async (req, res) => {
     const { quote_id: quoteId, from, to } = req.query;
-    if (typeof quoteId !== 'string' || !ID.test(quoteId) || !DATE.test(String(from || '')) || !DATE.test(String(to || ''))) throw new PlacementError(400, 'invalid_request', 'quote_id, from and to (YYYY-MM-DD) are required.');
+    if (typeof quoteId !== 'string' || !ID.test(quoteId) || !isDate(from) || !isDate(to)) throw new PlacementError(400, 'invalid_request', 'quote_id, from and to (YYYY-MM-DD) are required.');
     const limit = req.query.limit === undefined ? 50 : Number(req.query.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new PlacementError(400, 'invalid_request', 'limit must be 1 to 200.');
     res.locals.ref = quoteId;

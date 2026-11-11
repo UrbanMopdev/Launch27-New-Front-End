@@ -174,7 +174,12 @@ describe('placement: config and auth', () => {
   test('production refuses raw tokens and bad address lists', () => {
     const prod = (extra) => configErrors(loadConfig({ APP_ENV: 'production', L27_MODE: 'live', SESSION_SECRET: 'x'.repeat(40), DATABASE_URL: 'postgres://x', ...extra }));
     assert.ok(prod({ PLACEMENT_TOKENS: `hub:${TOKEN}` }).some((e) => /only token hashes/.test(e)));
-    assert.ok(!prod({ PLACEMENT_TOKENS: `hub:sha256:${sha(TOKEN)}` }).some((e) => /PLACEMENT/.test(e)));
+    // Production tokens must say what they may do and for which brands; those brands must be served.
+    assert.ok(prod({ PLACEMENT_TOKENS: `hub:sha256:${sha(TOKEN)}` }).some((e) => /lists its actions and brands/.test(e)));
+    const scopedToken = (brands) => JSON.stringify([{ name: 'hub', sha256: sha(TOKEN), actions: ['read'], brands }]);
+    assert.ok(!prod({ PLACEMENT_TOKENS: scopedToken(['urbanmop-residential']) }).some((e) => /PLACEMENT/.test(e)));
+    assert.ok(prod({ PLACEMENT_TOKENS: scopedToken(['residential']) }).some((e) => /served brand keys/.test(e)));
+    assert.ok(prod({ PLACEMENT_TOKENS: scopedToken(['urbanmop-commercial']) }).some((e) => /served brand keys/.test(e)));
     assert.ok(prod({ PLACEMENT_ALLOWED_IPS: '1.2.3.4,nope' }).some((e) => /PLACEMENT_ALLOWED_IPS/.test(e)));
     // Booking in production needs its own switch, whatever L27_ALLOW_WRITES says.
     assert.equal(loadConfig({ APP_ENV: 'production', L27_MODE: 'live', L27_ALLOW_WRITES: 'true' }).placementBookingEnabled, false);
@@ -367,8 +372,10 @@ describe('placement: the app against the synthetic Launch27', () => {
     const locked = await h.req('GET', '/health', { token: 'z'.repeat(40) });
     assert.equal(locked.status, 429);
     assert.ok(Number(locked.headers.get('retry-after')) > 0);
-    // Locked out: even the right token from that address waits.
-    assert.equal((await h.req('GET', '/health')).status, 429);
+    // Locked out for bad tokens, but a valid token from the same address still works, so someone
+    // sharing the Hub's address can't lock the Hub out.
+    assert.equal((await h.req('GET', '/health', { token: 'w'.repeat(40) })).status, 429);
+    assert.equal((await h.req('GET', '/health')).status, 200);
     h.close();
   });
 
@@ -393,6 +400,9 @@ describe('placement: the app against the synthetic Launch27', () => {
     // A reader can't release it either (no hold scope); a well-formed but unknown id is "not found".
     assert.equal((await h.req('DELETE', `/holds/${hold.body.hold_id}`, { token: h.READER })).status, 403);
     assert.equal((await h.req('DELETE', '/holds/h_doesnotexist')).status, 404);
+    // Impossible dates are a 400, not a crash.
+    assert.equal((await h.req('GET', `/availability?quote_id=${q.body.quote_id}&from=2026-13-01&to=2026-13-05`)).status, 400);
+    assert.equal((await h.req('GET', `/availability?quote_id=${q.body.quote_id}&from=2026-02-30&to=2026-03-02`)).status, 400);
     // Bodies must be JSON.
     assert.equal((await h.req('POST', '/quote', { body: 'brand=x', headers: { 'content-type': 'text/plain' } })).status, 415);
     assert.equal((await h.req('DELETE', `/holds/${hold.body.hold_id}`)).status, 204);
@@ -423,6 +433,71 @@ describe('placement: the app against the synthetic Launch27', () => {
     await assert.rejects(() => prod.book({ hold_id: hd.hold_id, customer, answers, placed_by: { kind: 'system', id: 't' } }, 'prod-switch-key-1', 'sales-hub'), (e) => e.code === 'forbidden' && /PLACEMENT_BOOKING_ENABLED/.test(e.message));
     assert.equal((await prod.health()).status, 'degraded');
     await prod.release(hd.hold_id);
+  });
+
+  // A Launch27 stand-in that makes the booking, then answers as told (a 502 from a load balancer
+  // after the booking was made, a 422 refusal before it was).
+  const bookingAnswering = (status) => async (url, init = {}) => {
+    if (String(url).includes('/v1/staff/bookings') && init.method === 'POST' && !String(url).includes('/assign')) {
+      if (status === 422) return new Response(JSON.stringify({ message: 'Invalid frequency', internal_trace: 'x'.repeat(5000) }), { status: 422, headers: { 'content-type': 'application/json' } });
+      const real = await mock(url, init);
+      return status === 200 ? real : new Response('<html>Bad gateway</html>', { status });
+    }
+    return mock(url, init);
+  };
+  const holdFor = async (svc, nth) => {
+    const q = await svc.quote(quoteRequest, 'sales-hub');
+    const from = svc._addDays(svc._today(), 2);
+    const { slots } = await svc.availability({ quote_id: q.quote_id, from, to: svc._addDays(from, 6) });
+    return svc.hold({ slot_token: slots.at(nth).slot_token, placed_by: { kind: 'system', id: 't' } });
+  };
+  const bookingsMade = async () => (await writes.list()).rows.filter((r) => r.source === 'placement' && r.outcome === 'done').length;
+  const req = (holdId) => ({ hold_id: holdId, customer, answers, placed_by: { kind: 'system', id: 't' } });
+
+  test('bookings: one hold books once, even with two keys at the same moment', async () => {
+    const before = await bookingsMade();
+    const h = await holdFor(placement, -4);
+    const results = await Promise.allSettled([placement.book(req(h.hold_id), 'race-key-aaaa-1', 'sales-hub'), placement.book(req(h.hold_id), 'race-key-bbbb-2', 'sales-hub')]);
+    assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+    assert.equal(results.find((r) => r.status === 'rejected').reason.code, 'hold_not_found');
+    assert.equal((await bookingsMade()) - before, 1);
+  });
+
+  test('bookings: after Launch27 took it but answered 502, neither a retry nor a new key books again', async () => {
+    const flaky = createPlacement({ db, config, fetchImpl: bookingAnswering(502), schedule, writes, log: quiet });
+    const h = await holdFor(flaky, -5);
+    const posted = (await writes.list()).rows.filter((r) => r.source === 'placement').length;
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'after-502-key-1', 'sales-hub'), (e) => e.status === 502 && e.retryable === false);
+    // Same key: the stored answer, no second request to Launch27.
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'after-502-key-1', 'sales-hub'), (e) => e.status === 502);
+    // New key, same hold: the hold stays used.
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'after-502-key-2', 'sales-hub'), (e) => e.code === 'hold_not_found');
+    assert.equal((await writes.list()).rows.filter((r) => r.source === 'placement').length - posted, 1);
+  });
+
+  test('bookings: a Launch27 refusal frees the key and the hold; only a short message comes back', async () => {
+    const refusing = createPlacement({ db, config, fetchImpl: bookingAnswering(422), schedule, writes, log: quiet });
+    const h = await holdFor(refusing, -6);
+    let err;
+    await refusing.book(req(h.hold_id), 'refused-key-1', 'sales-hub').catch((e) => (err = e));
+    assert.equal(err.code, 'invalid_request');
+    assert.deepEqual(err.details, { launch27_status: 422, launch27_message: 'Invalid frequency' });
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM placement_bookings WHERE key = 'sales-hub:refused-key-1'")).rows[0].n, 0);
+    assert.equal((await db.query('SELECT used_at FROM placement_holds WHERE id = $1', [h.hold_id])).rows[0].used_at, null);
+    await refusing.release(h.hold_id);
+  });
+
+  test('bookings: a matching phone alone does not attach the visit to someone else', async () => {
+    const someone = (await mock(`${config.l27BaseUrl}/v1/staff/customers?limit=1`, { headers: { authorization: `Bearer ${(await (await mock(`${config.l27BaseUrl}/latest/login`, { method: 'POST', body: JSON.stringify({ email: 'x@example.com', password: 'demo' }), headers: { 'content-type': 'application/json' } })).json()).bearer}` } }).then((r) => r.json()))[0];
+    const h = await holdFor(placement, -7);
+    const stranger = { first_name: 'Pat', last_name: 'Different', email: 'pat-different@example.com', phone: someone.phone };
+    const { booking } = await placement.book({ ...req(h.hold_id), customer: stranger }, 'phone-only-key-1', 'sales-hub');
+    assert.equal(booking.customer_created, true);
+    // What went to Launch27: a new customer (no existing id), with the caller's own name and email.
+    const sent = (await writes.list()).rows.find((r) => r.source === 'placement' && r.outcome === 'done' && Number(r.booking_id || 0) === Number(booking.booking_id))?.request
+      || (await writes.list()).rows.filter((r) => r.source === 'placement' && r.outcome === 'done')[0].request;
+    assert.equal(sent.user.id, undefined);
+    assert.equal(sent.user.email, stranger.email);
   });
 
   test('security: every request is audited without customer details', async () => {

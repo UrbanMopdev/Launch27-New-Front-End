@@ -303,12 +303,16 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
   }
 
   // ---------- bookings ----------
+  // An existing Launch27 customer: the same email, or the same phone AND last name. A phone
+  // alone isn't enough (mistyped or recycled numbers would put a stranger's visit on someone
+  // else's account); without a confident match a new customer is created.
   async function findCustomer(customer) {
     const email = normalizeEmail(customer.email);
     const phone = normalizePhone(customer.phone);
+    const last = String(customer.last_name || '').trim().toLowerCase();
     for (const [query, match] of [
       [email, (c) => normalizeEmail(c.email) === email],
-      [phone ? phone.slice(-10) : null, (c) => normalizePhone(c.phone) === phone],
+      [phone && last ? phone.slice(-10) : null, (c) => normalizePhone(c.phone) === phone && String(c.last_name || '').trim().toLowerCase() === last],
     ]) {
       if (!query) continue;
       const rows = await l27Get('/v1/staff/customers', { query, limit: 20 });
@@ -318,6 +322,20 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     return null;
   }
 
+  // What Launch27 said, safe to hand back: its status and a short message, nothing else.
+  const launch27Says = (res) => {
+    const m = res.body && typeof res.body === 'object' ? res.body.message || res.body.error || res.body.errors : null;
+    const text = typeof m === 'string' ? m : m ? JSON.stringify(m) : '';
+    return { launch27_status: res.status, ...(text ? { launch27_message: text.slice(0, 300) } : {}) };
+  };
+
+  // Booking, with two guarantees:
+  //   - one hold books at most once: the hold is claimed atomically before Launch27 is called
+  //     and only freed again when Launch27 certainly made nothing;
+  //   - one Idempotency-Key books at most once: once the request has gone to Launch27, the key
+  //     is never forgotten. A 4xx from Launch27 means it made nothing; anything else after
+  //     sending (no answer, 5xx, an answer without an id, our own failure afterwards) leaves the
+  //     key and the hold blocked as "unknown": check Launch27 before trying again.
   async function book(body, idemKey, callerIn) {
     const caller = nameOf(callerIn);
     const key = `${caller}:${idemKey}`;
@@ -334,27 +352,55 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     const { custom_fields, missing } = customFieldsFrom(await fields(), body.answers || []);
     if (missing.length) fail(400, 'invalid_request', 'Answer the required booking questions.', { details: { questions: missing } });
 
+    const gone = () => fail(404, 'hold_not_found', 'No such hold, or it was already used or released.');
     const h = (await db.query("SELECT *, to_char(day, 'YYYY-MM-DD') AS day FROM placement_holds WHERE id = $1", [String(body.hold_id)])).rows[0];
-    if (!h || h.used_at || h.released_at) fail(404, 'hold_not_found', 'No such hold, or it was already used or released.');
-    if (new Date(h.expires_at).getTime() <= now()) fail(410, 'hold_expired', 'The hold expired: hold the slot again.');
-    // Another caller's hold looks exactly like one that doesn't exist.
+    if (!h) gone();
+    // Ownership first: another caller's hold looks exactly like one that doesn't exist.
     const q = await loadQuote(h.quote_id, { allowExpired: true, caller: typeof callerIn === 'object' ? callerIn : null }).catch((err) => {
-      if (err.code === 'quote_not_found') fail(404, 'hold_not_found', 'No such hold, or it was already used or released.');
+      if (err.code === 'quote_not_found') gone();
       throw err;
     });
+    if (h.used_at || h.released_at) gone();
+    if (new Date(h.expires_at).getTime() <= now()) fail(410, 'hold_expired', 'The hold expired: hold the slot again.');
     const date = h.day;
     const slot = { date, start: h.start_min, end: h.end_min, cleaner_id: Number(h.cleaner_id), arrival_window: ARRIVAL_WINDOW };
-
-    const inserted = (await db.query("INSERT INTO placement_bookings (key, fingerprint, hold_id, state) VALUES ($1, $2, $3, 'pending') ON CONFLICT (key) DO NOTHING RETURNING key", [key, fp, h.id])).rows[0];
-    if (!inserted) fail(409, 'idempotency_conflict', 'A booking with that Idempotency-Key is already in progress.', { retryable: true });
-    const forget = () => db.query('DELETE FROM placement_bookings WHERE key = $1', [key]);
     const actor = `${caller} / ${body.placed_by.kind} ${body.placed_by.id}`;
 
-    try {
-      if (!bookingOn()) {
-        await writes?.record({ email: actor, source: 'placement', method: 'POST', path: '/v1/staff/bookings', body: null, outcome: 'blocked', status: 403 });
-        fail(403, 'forbidden', config.production ? 'Booking through the placement API is turned off (PLACEMENT_BOOKING_ENABLED).' : `Writes to the live Launch27 are blocked in ${config.appEnv}.`);
+    if (!bookingOn()) {
+      await writes?.record({ email: actor, source: 'placement', method: 'POST', path: '/v1/staff/bookings', body: null, outcome: 'blocked', status: 403 });
+      fail(403, 'forbidden', config.production ? 'Booking through the placement API is turned off (PLACEMENT_BOOKING_ENABLED).' : `Writes to the live Launch27 are blocked in ${config.appEnv}.`);
+    }
+
+    // Claim the key and the hold together, atomically. Losing either race = someone else has it.
+    const claimed = await db.tx(async (tx) => {
+      const k = (await tx.query("INSERT INTO placement_bookings (key, fingerprint, hold_id, state) VALUES ($1, $2, $3, 'pending') ON CONFLICT DO NOTHING RETURNING key", [key, fp, h.id])).rows[0];
+      if (!k) return 'key';
+      const got = (await tx.query('UPDATE placement_holds SET used_at = now() WHERE id = $1 AND used_at IS NULL AND released_at IS NULL AND expires_at > $2 RETURNING id', [h.id, new Date(now())])).rows[0];
+      if (!got) {
+        await tx.query('DELETE FROM placement_bookings WHERE key = $1', [key]);
+        return 'hold';
       }
+      return 'ok';
+    });
+    if (claimed === 'key') {
+      const other = (await db.query('SELECT 1 FROM placement_bookings WHERE key = $1', [key])).rows[0];
+      if (other) fail(409, 'idempotency_conflict', 'A booking with that Idempotency-Key is already in progress.', { retryable: true });
+      gone(); // the hold is already being booked with another key
+    }
+    if (claimed === 'hold') gone();
+
+    let sent = false; // once true, the key and the hold are never freed
+    const unclaim = async () => {
+      await db.query('DELETE FROM placement_bookings WHERE key = $1', [key]);
+      await db.query('UPDATE placement_holds SET used_at = NULL WHERE id = $1 AND booking_id IS NULL', [h.id]);
+    };
+    const unknown = async (status, code, message) => {
+      const out = { error: { code, message, retryable: false } };
+      await db.query("UPDATE placement_bookings SET state = 'unknown', status = $2, response = $3::jsonb, finished_at = now() WHERE key = $1", [key, status, JSON.stringify(out)]).catch(() => {});
+      return new PlacementError(status, code, message);
+    };
+
+    try {
       const check = await planner(async () => schedule.checkSlot({ cleaner_id: slot.cleaner_id, date, start: slot.start, duration: slot.end - slot.start, kind: q.data.kind, held: await openHolds(h.id) }));
       if (!check.ok) {
         await db.query('UPDATE placement_holds SET released_at = now() WHERE id = $1', [h.id]);
@@ -370,24 +416,32 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
         paymentMethod: config.placementPaymentMethod,
         staffNotes: staffNotesFor({ accessNotes: body.access_notes, placedBy: body.placed_by, caller, leadRef: body.lead_ref || h.lead_ref, source: body.source }),
       });
+
+      sent = true;
       let res;
       try {
         res = await l27('POST', '/v1/staff/bookings', { body: request });
       } catch (err) {
-        // No answer: Launch27 may or may not have made it. Never guess; keep the key blocked.
+        if (err instanceof PlacementError && !err.network && err.code === 'forbidden') {
+          sent = false; // refused before leaving this app
+          throw err;
+        }
         await writes?.record({ email: actor, source: 'placement', method: 'POST', path: '/v1/staff/bookings', body: request, outcome: 'failed', error: err.message });
-        const out = { error: { code: 'platform_unavailable', message: 'Launch27 did not answer, so the booking may or may not exist. Check Launch27 before trying again with a new key.', retryable: false } };
-        await db.query("UPDATE placement_bookings SET state = 'unknown', status = 502, response = $2::jsonb, finished_at = now() WHERE key = $1", [key, JSON.stringify(out)]);
-        throw new PlacementError(502, out.error.code, out.error.message);
+        throw await unknown(502, 'platform_unavailable', 'Launch27 did not answer, so the booking may or may not exist. Check Launch27 before trying again with a new key.');
       }
       await writes?.record({ email: actor, source: 'placement', method: 'POST', path: '/v1/staff/bookings', body: request, outcome: res.ok ? 'done' : 'refused', status: res.status, error: res.ok ? null : res.text.slice(0, 500) });
-      if (!res.ok || !res.body?.id) {
-        const detail = res.body && typeof res.body === 'object' ? res.body : undefined;
-        fail(res.status === 422 ? 400 : 503, res.status === 422 ? 'invalid_request' : 'platform_unavailable', `Launch27 refused the booking (${res.status}).`, { retryable: res.status >= 500, details: detail ? { launch27: detail } : undefined });
+      if (res.status >= 400 && res.status < 500) {
+        // Launch27 refused it: nothing was made, so the key and the hold are free again.
+        sent = false;
+        fail(400, 'invalid_request', `Launch27 refused the booking (${res.status}).`, { details: launch27Says(res) });
       }
+      if (!res.ok || !res.body?.id) throw await unknown(502, 'platform_unavailable', `Launch27 answered ${res.status} without a booking id, so the booking may or may not exist. Check Launch27 before trying again with a new key.`);
+
       const bookingId = Number(res.body.id);
+      // From here the booking exists: nothing below may free the key or the hold.
+      await db.query('UPDATE placement_holds SET booking_id = $2 WHERE id = $1', [h.id, bookingId]).catch(() => {});
       let customerId = existing;
-      if (!customerId) customerId = Number((await l27Get(`/v1/staff/bookings/${bookingId}`))?.user?.id) || null;
+      if (!customerId) customerId = Number((await l27Get(`/v1/staff/bookings/${bookingId}`).catch(() => null))?.user?.id) || null;
       const booking = {
         booking_id: String(bookingId),
         customer_id: String(customerId ?? 'unknown'),
@@ -399,17 +453,16 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
         price: q.data.price.first_visit,
         status: 'confirmed',
       };
-      await db.tx(async (tx) => {
-        await tx.query('UPDATE placement_holds SET used_at = now(), booking_id = $2 WHERE id = $1', [h.id, bookingId]);
-        await tx.query("UPDATE placement_bookings SET state = 'done', status = 201, response = $2::jsonb, booking_id = $3, finished_at = now() WHERE key = $1", [key, JSON.stringify(booking), bookingId]);
-      });
-      schedule.soon?.(await token());
+      await db.query("UPDATE placement_bookings SET state = 'done', status = 201, response = $2::jsonb, booking_id = $3, finished_at = now() WHERE key = $1", [key, JSON.stringify(booking), bookingId]);
+      schedule.soon?.(await token().catch(() => null));
       log.info('placement booked', { caller, booking_id: bookingId, brand: q.brand, customer_created: !existing });
       return { replay: false, booking };
     } catch (err) {
-      // Nothing was written to Launch27 (or it refused): free the key so a corrected retry works.
-      const row = (await db.query('SELECT state FROM placement_bookings WHERE key = $1', [key])).rows[0];
-      if (row?.state === 'pending') await forget();
+      // Only when Launch27 certainly made nothing: free the key (and the hold) for a corrected retry.
+      if (!sent) {
+        const row = (await db.query('SELECT state FROM placement_bookings WHERE key = $1', [key])).rows[0];
+        if (row?.state === 'pending') await unclaim();
+      }
       throw err;
     }
   }

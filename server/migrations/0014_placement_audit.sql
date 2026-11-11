@@ -15,3 +15,6 @@ CREATE TABLE IF NOT EXISTS placement_audit (
   ref text                           -- quote, hold or booking it concerned
 );
 CREATE INDEX IF NOT EXISTS placement_audit_at ON placement_audit (at);
+
+-- One hold books at most once, whatever Idempotency-Keys are used (src/placement/service.js).
+CREATE UNIQUE INDEX IF NOT EXISTS placement_bookings_hold ON placement_bookings (hold_id) WHERE hold_id IS NOT NULL;

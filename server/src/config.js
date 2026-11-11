@@ -21,7 +21,7 @@ export function parsePlacementTokens(raw) {
     const okActs = Array.isArray(acts) && acts.length > 0 && acts.every((a) => PLACEMENT_ACTIONS.includes(a));
     const okBrands = brands == null || (Array.isArray(brands) && brands.length > 0 && brands.every((b) => /^[a-z0-9-]{1,60}$/.test(b)));
     if (!okName || !okHash || !okActs || !okBrands || tokens.has(name)) return bad.push(name || '(unnamed)');
-    tokens.set(name, { hash: Buffer.from(hash, 'hex'), actions: new Set(acts), brands: brands ? new Set(brands) : null, raw: !!raw });
+    tokens.set(name, { hash: Buffer.from(hash, 'hex'), actions: new Set(acts), brands: brands ? new Set(brands) : null, raw: !!raw, scoped: actions != null && brands != null });
   };
   const text = String(raw || '').trim();
   if (text.startsWith('[')) {
@@ -211,7 +211,17 @@ export function configErrors(config) {
   if (config.l27Mode === 'mock' && !config.mockPassword) errors.push('MOCK_PASSWORD must be set when L27_MODE=mock.');
   if (config.qaSnapshotToken && config.qaSnapshotToken.length < 32) errors.push('QA_SNAPSHOT_TOKEN must be at least 32 characters.');
   if (config.placementBadTokens?.length) errors.push(`PLACEMENT_TOKENS: check ${config.placementBadTokens.join(', ')}. Each entry needs a lowercase name and name:sha256:<64 hex> (or, outside production, a token of 32+ characters); scopes must use actions read, hold, book.`);
-  if (config.production && [...(config.placementTokens?.values() || [])].some((t) => t.raw)) errors.push('PLACEMENT_TOKENS: production stores only token hashes (name:sha256:<64 hex>). Run `npm run placement-token` to make one.');
+  const placementTokens = [...(config.placementTokens?.entries() || [])];
+  if (config.production && placementTokens.some(([, t]) => t.raw)) errors.push('PLACEMENT_TOKENS: production stores only token hashes (name:sha256:<64 hex>). Run `npm run placement-token` to make one.');
+  // Production tokens say exactly what they may do: no implicit "everything".
+  const unscoped = placementTokens.filter(([, t]) => !t.scoped).map(([n]) => n);
+  if (config.production && unscoped.length) errors.push(`PLACEMENT_TOKENS: in production every token lists its actions and brands (JSON form). Check ${unscoped.join(', ')}.`);
+  // A token's brands must be brands this app serves (PLACEMENT_BRANDS), written as brand keys.
+  const served = new Set((config.placementBrands || []).map((b) => `urbanmop-${b}`));
+  const wrongBrands = placementTokens.flatMap(([n, t]) => [...(t.brands || [])].filter((b) => !served.has(b)).map((b) => `${n}: ${b}`));
+  if (wrongBrands.length) errors.push(`PLACEMENT_TOKENS: brands must be served brand keys (${[...served].join(', ') || 'none served'}). Check ${wrongBrands.join(', ')}.`);
+  // Slot tokens are signed with SESSION_SECRET: hosted environments serving placement need a real one.
+  if (placementTokens.length && config.onRailway && (!process.env.SESSION_SECRET || config.sessionSecret.length < 32)) errors.push('SESSION_SECRET must be a random value of at least 32 characters wherever the placement API is served.');
   if (config.placementBadIps?.length) errors.push(`PLACEMENT_ALLOWED_IPS: not an IP address or IPv4 range: ${config.placementBadIps.join(', ')}.`);
   return errors;
 }
