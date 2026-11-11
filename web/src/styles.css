@@ -1723,3 +1723,7 @@ i.rep-cell { width: 14px; height: 14px; }
 .new-caller-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
 .notice { background: var(--warn-soft); color: var(--warn-ink); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
 .contact-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.call-pop.call-missed { border-left-color: var(--danger); }
+.call-pop.call-missed .call-pop-title { color: var(--danger); }
+.call-stack { position: fixed; right: 20px; top: 72px; z-index: 30; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+.call-stack > .call-pop { position: static; pointer-events: auto; }

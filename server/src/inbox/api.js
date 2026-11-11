@@ -831,7 +831,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     if (config.ringcentralClientId && config.ringcentralRecord === false && req.body?.simulated !== true) return res.status(202).json({ saved: false });
     const call = req.body || {};
     const theirs = normalizePhone(call.direction === 'outbound' || call.direction === 'out' ? call.to : call.from);
-    if (!theirs) throw new svc.InboxError(400, 'Call needs a phone number');
+    // A hidden or blocked number can't be matched or called back: nothing to log it against.
+    if (!theirs) return res.status(202).json({ saved: false, hidden: true });
     const known = await svc.contactsByIdentity(db, 'phone', theirs);
     const lookup = !known.length ? await l27.identify(req.bearer, 'phone', theirs) : null;
     res.status(201).json(await db.tx((q) => svc.logCall(q, req.user, call, { lookup })));

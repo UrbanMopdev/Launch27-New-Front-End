@@ -8,7 +8,7 @@ import { inbox } from './api';
 import { displayIdentity, useMeta } from './util';
 import { alertPermission, askForAlerts, callAlertText, flashTitle, showCallAlert } from './callAlerts';
 import { NewCaller } from './NewCaller';
-import { badgeFor, blankCaller, hasUnsavedWork, identifyCaller, pageFor, rememberChoice, type Caller } from './caller';
+import { badgeFor, blankCaller, hasUnsavedWork, identifyCaller, isHidden, pageFor, rememberChoice, type Caller } from './caller';
 
 // RingCentral Embeddable: RingCentral's own softphone widget, loaded into the workspace.
 // Agents sign in with their RingCentral login inside the widget, and calls ring in the
@@ -47,6 +47,7 @@ type RcCall = {
 const num = (v: RcCall['from'], alt?: string) => (typeof v === 'string' ? v : v?.phoneNumber) || alt || '';
 const keyOf = (c?: RcCall) => c?.telephonySessionId || c?.sessionId || c?.id || '';
 
+type Missed = { key: string; phone: string; name: string | null; badge: string | null; conversationId: number | null; note: string | null };
 type Pop = { key: string; caller: Caller; loading: boolean; answered: boolean; simulated: boolean };
 
 export function RingCentralPhone() {
@@ -55,6 +56,7 @@ export function RingCentralPhone() {
   const queryClient = useQueryClient();
   const [pop, setPop] = useState<Pop | null>(null);
   const [picker, setPicker] = useState<Caller | null>(null);
+  const [missed, setMissed] = useState<Missed[]>([]);
   const [newCaller, setNewCaller] = useState<{ caller: Caller; canSave: boolean; simulated: boolean } | null>(null);
   const ringing = useRef(new Map<string, Caller | null>()); // call key -> caller (null while looking up)
   const answered = useRef(new Set<string>());
@@ -171,16 +173,26 @@ export function RingCentralPhone() {
       if (data.type === 'rc-call-end-notify' && call) {
         const k = ringing.current.has(key) ? key : ringing.current.has(num(call.from, call.fromNumber)) ? num(call.from, call.fromNumber) : key;
         const wasAnswered = answered.current.has(k) || /connected|answered|accepted/i.test(call.callStatus || call.result || '');
+        const rang = ringing.current.has(k);
+        const known = ringing.current.get(k) || null;
         ringing.current.delete(k);
         simulatedKeys.current.delete(k);
         answered.current.delete(k);
         setPop((p) => (p && p.key === k ? null : p));
-        // Real calls are saved only where calls are recorded; test calls from the simulator always.
-        if (!saving && !call.simulated) return;
         const inbound = /in/i.test(call.direction || '');
+        const phone = num(call.from, call.fromNumber);
+        // A missed call leaves a card until dismissed, pointing at its callback (V-1).
+        const showMissed = (conversationId: number | null, note: string | null) =>
+          rang && inbound && !wasAnswered &&
+          setMissed((m) => [{ key: k, phone, name: known?.kind === 'several' ? null : known?.name || null, badge: known ? badgeFor(known) : null, conversationId, note }, ...m.filter((x) => x.key !== k)].slice(0, 3));
+        // Real calls are saved only where calls are recorded; test calls from the simulator always.
+        if (!saving && !call.simulated) {
+          showMissed(null, 'Not saved on this test site.');
+          return;
+        }
         const start = call.startTime ? Number(new Date(call.startTime)) : Date.now();
         const end = call.endTime || call.callEndTime ? Number(new Date((call.endTime || call.callEndTime)!)) : Date.now();
-        await inbox
+        const res = await inbox
           .logCall({
             call_id: key || undefined,
             ...(call.simulated ? { simulated: true } : {}),
@@ -193,6 +205,7 @@ export function RingCentralPhone() {
             recording_url: call.recording?.link || call.recording?.contentUri || null,
           })
           .catch(() => null);
+        showMissed(res?.conversationId ?? null, res?.hidden ? 'Hidden number: no way to call back.' : res?.conversationId ? null : 'Could not log this call.');
         queryClient.invalidateQueries({ queryKey: ['inbox'] });
       }
     };
@@ -250,6 +263,7 @@ export function RingCentralPhone() {
           />
         </CallSafe>
       )}
+      <div className="call-stack">
       {pop ? (
         <CallSafe key={pop.key}>
           <CallCard pop={pop} onOpen={openPage} onDismiss={() => setPop(null)} onPick={() => setPicker(pop.caller)} onAdd={() => setNewCaller({ caller: pop.caller, canSave: cfg?.record !== false || pop.simulated, simulated: pop.simulated })} />
@@ -264,6 +278,25 @@ export function RingCentralPhone() {
           </div>
         </div>
       ) : null}
+      {missed.map((m) => (
+        <CallSafe key={`missed-${m.key}`}>
+          <div className="call-pop call-missed" role="status">
+            <div className="call-pop-title">☎ Missed call</div>
+            <div className="call-pop-who">
+              {m.name || (isHidden(m.phone) ? 'Hidden number' : displayIdentity(m.phone))} {m.badge && !isHidden(m.phone) && <span className="role-badge">{m.badge}</span>}
+            </div>
+            {m.name && <div className="muted small">{displayIdentity(m.phone)}</div>}
+            {m.conversationId ? <div className="small">Callback task added to the Operations queue.</div> : m.note && <div className="small muted">{m.note}</div>}
+            <div className="actions">
+              {m.conversationId && (
+                <button onClick={() => { setMissed((x) => x.filter((y) => y.key !== m.key)); openPage(`/inbox/${m.conversationId}`); }}>Open callback</button>
+              )}
+              <button className="secondary" onClick={() => setMissed((x) => x.filter((y) => y.key !== m.key))}>Dismiss</button>
+            </div>
+          </div>
+        </CallSafe>
+      ))}
+      </div>
     </>
   );
 }
