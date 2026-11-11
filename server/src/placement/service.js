@@ -299,13 +299,15 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     return { hold_id: id, slot, expires_at: expires.toISOString(), kind: 'local' };
   }
 
+  // Releasing frees an open hold. A hold already claimed by a booking (in flight, made, or
+  // unknown) is left as it is, so its slot stays busy; the answer is the same either way.
   async function release(holdId, caller = null) {
-    const r = (await db.query(
-      'UPDATE placement_holds h SET released_at = coalesce(h.released_at, now()) FROM placement_quotes q WHERE h.id = $1 AND q.id = h.quote_id AND ($2::text IS NULL OR q.caller = $2) RETURNING h.id',
-      [String(holdId), caller ? nameOf(caller) : null],
-    )).rows[0];
-    if (!r) fail(404, 'hold_not_found', 'No such hold.');
+    const h = (await db.query('SELECT h.id, h.used_at, q.caller FROM placement_holds h JOIN placement_quotes q ON q.id = h.quote_id WHERE h.id = $1', [String(holdId)])).rows[0];
+    if (!h || (caller && h.caller !== nameOf(caller))) fail(404, 'hold_not_found', 'No such hold.');
+    if (h.used_at) return;
+    await db.query('UPDATE placement_holds SET released_at = coalesce(released_at, now()) WHERE id = $1 AND used_at IS NULL', [h.id]);
   }
+
 
   // ---------- bookings ----------
   // An existing Launch27 customer: the same email, or the same phone AND last name. A phone
