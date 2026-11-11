@@ -1,6 +1,6 @@
 // The brand mark and name at the top of the sidebar and the sign-in page.
-// The UrbanMop logo image goes in web/public/brand/logo.png; until it's there (or if it
-// fails to load) the name is shown in text.
+// The UrbanMop logo is web/public/brand/logo.png (from UrbanMop's Drive); if it
+// fails to load, the name is shown in text.
 import { useState } from 'react';
 
 export function BrandLogo({ name, sub }: { name: string; sub?: string }) {
