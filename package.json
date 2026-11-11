@@ -21,7 +21,8 @@
     "migrate:status": "npm run migrate:status -w server",
     "smoke": "node scripts/smoke.mjs",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
-    "conformance": "npm run conformance -w contracts/placement --"
+    "conformance": "npm run conformance -w contracts/placement --",
+    "placement-token": "node scripts/placement-token.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

@@ -196,12 +196,12 @@ export function createApp(
 
   // Placement API for the Sales Hub (service tokens, not staff logins). Mounted before the
   // workspace's /api routes, which need a signed-in person.
-  if (placement && config.placementTokens?.size) app.use('/api/placement/v1', createPlacementRouter({ placement, config, log }));
+  if (placement && config.placementTokens?.size) app.use('/api/placement/v1', createPlacementRouter({ placement, config, log, limits: config.placementLimits }));
 
   // The support workspace (conversations, contacts, routing). Needs a database.
   if (db) {
     const l27 = createL27Client({ baseUrl: config.l27BaseUrl, fetchImpl });
-    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule, reports, writes, commercial }));
+    app.use('/api', createInboxRouter({ db, sessions, cookieName: COOKIE, config, l27, connectors: guardConnectors(connectors, config.notificationsMode), log, qa, segments, schedule, reports, writes, commercial, placement }));
   }
 
   // Last-resort error handler: log it (without personal data), answer generically.

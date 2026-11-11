@@ -376,6 +376,7 @@ export const inbox = {
   saveTeams: (teams: Team[]) => call<void>('PUT', '/admin/teams', { teams }),
   createQueue: (name: string, description?: string) => call<QueueSettings>('POST', '/admin/queues', { name, description }),
   updateQueue: (id: number, patch: Partial<QueueSettings>) => call<QueueSettings>('PATCH', `/admin/queues/${id}`, patch),
+  placementAudit: (days: number) => call<{ enabled: boolean; booking?: boolean; callers: { name: string; actions: string[]; brands: string[] | null }[]; allowed_ips?: number; rows: { id: number; at: string; caller: string | null; ip: string | null; method: string; operation: string | null; path: string; status: number; code: string | null; ms: number; ref: string | null }[] }>('GET', `/admin/placement-audit?days=${days}`),
   l27Writes: (before?: number) => call<L27Writes>('GET', `/admin/l27-writes?limit=100${before ? `&before=${before}` : ''}`),
   qaCopy: () => call<QaCopyStatus>('GET', '/admin/qa-copy'),
   sendQaCopy: () => call<{ job: QaCopyStatus['job'] }>('POST', '/admin/qa-copy'),

@@ -6,7 +6,8 @@ import {
   bookingBody, catalogService, customFieldsFrom, frequencyMap, homeKeyOf, locationFor, priceQuote, questionsOf, quotableServices, staffNotesFor, suggestBrand, taxPercentFor,
 } from '../src/placement/mapping.js';
 import { createPlacement, torontoIso } from '../src/placement/service.js';
-import { callerFor } from '../src/placement/api.js';
+import { callerFor, createLimiter, ipAllowed } from '../src/placement/api.js';
+import { createHash } from 'node:crypto';
 import { configErrors, loadConfig, parsePlacementTokens } from '../src/config.js';
 import { openDb } from '../src/db/index.js';
 import { createApp } from '../src/app.js';
@@ -16,6 +17,7 @@ import { createWriteLog } from '../src/writes.js';
 
 const quiet = Object.assign(() => {}, { info() {}, warn() {}, error() {} }); // the app also calls log(level, ...)
 const TOKEN = 'hub-token-0123456789abcdefghijklmnopqrstuvwxyz';
+const sha = (s) => createHash('sha256').update(s).digest('hex');
 
 describe('placement: mapping Launch27 onto the contract', () => {
   test('brands by location name, as on the web side', () => {
@@ -150,14 +152,56 @@ describe('placement: mapping Launch27 onto the contract', () => {
 });
 
 describe('placement: config and auth', () => {
-  test('tokens are name:token pairs of 32+ characters', () => {
-    const { tokens, bad } = parsePlacementTokens(`sales-hub:${TOKEN}, booking-form:${TOKEN}x,short:abc,:${TOKEN}`);
-    assert.deepEqual([...tokens.keys()], ['sales-hub', 'booking-form']);
-    assert.deepEqual(bad, ['short', '(unnamed)']);
+  test('tokens: name:token (dev and QA), name:sha256:<hex>, or JSON with scopes', () => {
+    const { tokens, bad } = parsePlacementTokens(`sales-hub:${TOKEN}, booking-form:${TOKEN}x,short:abc,:${TOKEN},hashed:sha256:${sha(TOKEN + 'h')},nothex:sha256:zz`);
+    assert.deepEqual([...tokens.keys()], ['sales-hub', 'booking-form', 'hashed']);
+    assert.deepEqual(bad, ['short', '(unnamed)', 'nothex']);
     assert.ok(configErrors(loadConfig({ L27_MODE: 'mock', PLACEMENT_TOKENS: 'hub:short' })).some((e) => e.startsWith('PLACEMENT_TOKENS')));
-    assert.equal(callerFor(tokens, `Bearer ${TOKEN}`), 'sales-hub');
+    assert.equal(callerFor(tokens, `Bearer ${TOKEN}`).name, 'sales-hub');
+    assert.equal(callerFor(tokens, `Bearer ${TOKEN}h`).name, 'hashed');
     assert.equal(callerFor(tokens, `Bearer ${TOKEN}y`), null);
     assert.equal(callerFor(tokens, ''), null);
+    assert.equal(callerFor(tokens, `Basic ${TOKEN}`), null);
+    assert.equal(callerFor(tokens, `Bearer ${TOKEN} extra`), null);
+    const scoped = parsePlacementTokens(JSON.stringify([{ name: 'sales-hub', sha256: sha(TOKEN), actions: ['read', 'hold'], brands: ['urbanmop-residential'] }]));
+    assert.deepEqual(scoped.bad, []);
+    const c = callerFor(scoped.tokens, `Bearer ${TOKEN}`);
+    assert.deepEqual([[...c.actions], [...c.brands]], [['read', 'hold'], ['urbanmop-residential']]);
+    assert.deepEqual(parsePlacementTokens(JSON.stringify([{ name: 'x', sha256: sha(TOKEN), actions: ['delete'] }])).bad, ['x']);
+    assert.deepEqual(parsePlacementTokens('[not json').bad.length, 1);
+  });
+
+  test('production refuses raw tokens and bad address lists', () => {
+    const prod = (extra) => configErrors(loadConfig({ APP_ENV: 'production', L27_MODE: 'live', SESSION_SECRET: 'x'.repeat(40), DATABASE_URL: 'postgres://x', ...extra }));
+    assert.ok(prod({ PLACEMENT_TOKENS: `hub:${TOKEN}` }).some((e) => /only token hashes/.test(e)));
+    assert.ok(!prod({ PLACEMENT_TOKENS: `hub:sha256:${sha(TOKEN)}` }).some((e) => /PLACEMENT/.test(e)));
+    assert.ok(prod({ PLACEMENT_ALLOWED_IPS: '1.2.3.4,nope' }).some((e) => /PLACEMENT_ALLOWED_IPS/.test(e)));
+    // Booking in production needs its own switch, whatever L27_ALLOW_WRITES says.
+    assert.equal(loadConfig({ APP_ENV: 'production', L27_MODE: 'live', L27_ALLOW_WRITES: 'true' }).placementBookingEnabled, false);
+    assert.equal(loadConfig({ APP_ENV: 'production', L27_MODE: 'live', PLACEMENT_BOOKING_ENABLED: 'true' }).placementBookingEnabled, true);
+  });
+
+  test('address allowlist: exact addresses and IPv4 ranges', () => {
+    const list = [{ v4: '10.1.0.0', bits: 16 }, { v4: '203.0.113.7', bits: 32 }, { v6: '2001:db8::1' }];
+    assert.ok(ipAllowed([], '1.2.3.4'));
+    assert.ok(ipAllowed(list, '10.1.200.3'));
+    assert.ok(ipAllowed(list, '::ffff:203.0.113.7'));
+    assert.ok(ipAllowed(list, '2001:db8::1'));
+    assert.ok(!ipAllowed(list, '10.2.0.1'));
+    assert.ok(!ipAllowed(list, '203.0.113.8'));
+    assert.ok(!ipAllowed(list, undefined));
+  });
+
+  test('rate limiter: counts per key and window', () => {
+    let t = 0;
+    const lim = createLimiter({ limit: 2, windowMs: 1000, now: () => t });
+    assert.equal(lim.hit('a'), 0);
+    assert.equal(lim.hit('a'), 0);
+    assert.equal(lim.hit('a'), 1);
+    assert.equal(lim.hit('b'), 0);
+    assert.equal(lim.blocked('a'), 1);
+    t = 1001;
+    assert.equal(lim.hit('a'), 0);
   });
 
   test('placement login is only read for the live Launch27', () => {
@@ -284,7 +328,112 @@ describe('placement: the app against the synthetic Launch27', () => {
   });
 
   test('every answer matched the contract, and nothing failed on our side', () => {
-    assert.deepEqual(problems, []);
+    assert.deepEqual(problems.filter(([msg]) => msg !== 'placement request refused'), []);
+  });
+
+  // A second app on the same data, with two callers and small limits, to attack it.
+  async function hardened(extra = {}) {
+    const READER = 'reader-token-0123456789abcdefghijklmnopqrstuvw';
+    const cfg = {
+      ...config,
+      placementTokens: parsePlacementTokens(JSON.stringify([
+        { name: 'sales-hub', sha256: sha(TOKEN) },
+        { name: 'reader', sha256: sha(READER), actions: ['read'], brands: ['urbanmop-residential'] },
+      ])).tokens,
+      placementLimits: { badTokens: { limit: 3, windowMs: 60_000 }, all: { limit: 100, windowMs: 60_000 }, hold: { limit: 100, windowMs: 60_000 }, book: { limit: 1, windowMs: 60_000 } },
+      ...extra,
+    };
+    const app = createApp(cfg, { db, fetchImpl: mock, placement, schedule, writes, log: quiet }).listen(0);
+    await new Promise((r) => app.once('listening', r));
+    const url = `http://127.0.0.1:${app.address().port}/api/placement/v1`;
+    const req = async (method, path, { token = TOKEN, body, headers = {} } = {}) => {
+      const res = await fetch(`${url}${path}`, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined });
+      const text = await res.text();
+      return { status: res.status, headers: res.headers, body: text ? JSON.parse(text) : null };
+    };
+    return { req, READER, close: () => (app.closeAllConnections(), app.close()) };
+  }
+
+  test('security: headers on every answer, 401 with a challenge, lockout after repeated bad tokens', async () => {
+    const h = await hardened();
+    const none = await h.req('GET', '/health', { token: null });
+    assert.equal(none.status, 401);
+    assert.equal(none.headers.get('www-authenticate'), 'Bearer realm="placement"');
+    assert.equal(none.headers.get('cache-control'), 'no-store');
+    assert.equal(none.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(none.headers.get('x-frame-options'), 'DENY');
+    assert.equal((await h.req('GET', '/health', { token: 'x'.repeat(40) })).status, 401);
+    assert.equal((await h.req('GET', '/health', { token: 'y'.repeat(40) })).status, 401);
+    const locked = await h.req('GET', '/health', { token: 'z'.repeat(40) });
+    assert.equal(locked.status, 429);
+    assert.ok(Number(locked.headers.get('retry-after')) > 0);
+    // Locked out: even the right token from that address waits.
+    assert.equal((await h.req('GET', '/health')).status, 429);
+    h.close();
+  });
+
+  test('security: scopes (actions and brands), ownership of quotes and holds, JSON only', async () => {
+    const h = await hardened();
+    const q = await h.req('POST', '/quote', { body: quoteRequest });
+    assert.equal(q.status, 200);
+    // The read-only token can quote but not hold, and not for another brand.
+    assert.equal((await h.req('POST', '/quote', { token: h.READER, body: quoteRequest })).status, 200);
+    assert.equal((await h.req('GET', '/catalog?brand=urbanmop-commercial', { token: h.READER })).body.error.code, 'forbidden');
+    // Another caller's quote looks like no quote at all.
+    const from = placement._addDays(placement._today(), 1);
+    const theirs = await h.req('GET', `/availability?quote_id=${q.body.quote_id}&from=${from}&to=${placement._addDays(from, 6)}`, { token: h.READER });
+    assert.equal(theirs.status, 404);
+    assert.equal(theirs.body.error.code, 'quote_not_found');
+    const mine = await h.req('GET', `/availability?quote_id=${q.body.quote_id}&from=${from}&to=${placement._addDays(from, 6)}`);
+    assert.equal(mine.status, 200);
+    const slot = mine.body.slots.at(-2).slot_token;
+    assert.equal((await h.req('POST', '/holds', { token: h.READER, body: { slot_token: slot, placed_by: { kind: 'system', id: 't' } } })).body.error.code, 'forbidden');
+    const hold = await h.req('POST', '/holds', { body: { slot_token: slot, placed_by: { kind: 'system', id: 't' } } });
+    assert.equal(hold.status, 201);
+    // A reader can't release it either (no hold scope); a well-formed but unknown id is "not found".
+    assert.equal((await h.req('DELETE', `/holds/${hold.body.hold_id}`, { token: h.READER })).status, 403);
+    assert.equal((await h.req('DELETE', '/holds/h_doesnotexist')).status, 404);
+    // Bodies must be JSON.
+    assert.equal((await h.req('POST', '/quote', { body: 'brand=x', headers: { 'content-type': 'text/plain' } })).status, 415);
+    assert.equal((await h.req('DELETE', `/holds/${hold.body.hold_id}`)).status, 204);
+    h.close();
+  });
+
+  test('security: bookings are rate limited per caller, and an address outside the allowlist is refused', async () => {
+    const h = await hardened();
+    const body = { hold_id: 'h_none', customer, answers, placed_by: { kind: 'system', id: 't' } };
+    assert.equal((await h.req('POST', '/bookings', { body, headers: { 'idempotency-key': 'rate-limit-key-1' } })).status, 404);
+    const second = await h.req('POST', '/bookings', { body, headers: { 'idempotency-key': 'rate-limit-key-2' } });
+    assert.equal(second.status, 429);
+    assert.equal(second.body.error.retryable, true);
+    h.close();
+    const fenced = await hardened({ placementAllowedIps: [{ v4: '203.0.113.7', bits: 32 }] });
+    const out = await fenced.req('GET', '/health');
+    assert.equal(out.status, 403);
+    assert.equal(out.body.error.code, 'forbidden');
+    fenced.close();
+  });
+
+  test('security: production books only with PLACEMENT_BOOKING_ENABLED, whatever L27_ALLOW_WRITES says', async () => {
+    const prod = createPlacement({ db, config: { ...config, production: true, allowWrites: true, placementBookingEnabled: false }, fetchImpl: mock, schedule, writes, log: quiet });
+    const q = await prod.quote(quoteRequest, 'sales-hub');
+    const from = prod._addDays(prod._today(), 1);
+    const { slots } = await prod.availability({ quote_id: q.quote_id, from, to: prod._addDays(from, 6) });
+    const hd = await prod.hold({ slot_token: slots.at(-3).slot_token, placed_by: { kind: 'system', id: 't' } });
+    await assert.rejects(() => prod.book({ hold_id: hd.hold_id, customer, answers, placed_by: { kind: 'system', id: 't' } }, 'prod-switch-key-1', 'sales-hub'), (e) => e.code === 'forbidden' && /PLACEMENT_BOOKING_ENABLED/.test(e.message));
+    assert.equal((await prod.health()).status, 'degraded');
+    await prod.release(hd.hold_id);
+  });
+
+  test('security: every request is audited without customer details', async () => {
+    await new Promise((r) => setTimeout(r, 50)); // audit rows are written after each answer
+    const log = await placement.auditLog({ days: 1 });
+    assert.ok(log.rows.some((r) => r.caller === 'sales-hub' && r.operation === 'createQuote' && r.status === 200 && /^q_/.test(r.ref)));
+    assert.ok(log.rows.some((r) => r.caller === null && r.status === 401 && r.code === 'unauthorized'));
+    assert.ok(log.rows.some((r) => r.caller === 'reader' && r.code === 'forbidden'));
+    const text = JSON.stringify(log.rows);
+    assert.ok(!text.includes(customer.email) && !text.includes('Example Street'));
+    assert.deepEqual(log.callers.map((c) => c.name).sort(), ['sales-hub']);
   });
 
   test('without PLACEMENT_TOKENS the API is not served', async () => {

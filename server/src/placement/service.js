@@ -15,6 +15,7 @@ const QUOTE_MS = 60 * 60_000;
 const HOLD_MS = 10 * 60_000;
 const REF_MS = 5 * 60_000; // reference data (services, locations, questions) cache
 const KEEP_DAYS = 30;
+const AUDIT_DAYS = 180;
 const ARRIVAL_WINDOW = 60;
 const UPSTREAM_TIMEOUT_MS = 30_000;
 
@@ -54,6 +55,10 @@ const fingerprint = (body) => createHash('sha256').update(stable(body)).digest('
 export function createPlacement({ db, config, fetchImpl = fetch, schedule, writes = null, log = { info() {}, warn() {}, error() {} }, now = () => Date.now() }) {
   const slotKey = createHash('sha256').update(`placement-slot:${config.sessionSecret}`).digest();
   const today = () => localDate(now());
+  // Bookings: in production only with PLACEMENT_BOOKING_ENABLED (separate from L27_ALLOW_WRITES,
+  // which governs staff screens); elsewhere wherever writes are allowed (the synthetic Launch27).
+  const bookingOn = () => (config.production ? config.placementBookingEnabled === true : !!config.allowWrites);
+  const nameOf = (caller) => (typeof caller === 'string' ? caller : caller?.name || 'unknown');
 
   // ---------- Launch27, signed in as the placement user ----------
   let bearer = null; // { token, at }
@@ -78,6 +83,9 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
   const token = async () => (bearer && now() - bearer.at < 30 * 60_000 ? bearer.token : login());
 
   async function l27(method, path, { query, body } = {}, retried = false) {
+    // Defence in depth: the only write placement ever sends is creating a booking, and only
+    // while booking is on. Anything else is a bug and never reaches Launch27.
+    if (method !== 'GET' && !(method === 'POST' && path === '/v1/staff/bookings' && bookingOn())) fail(403, 'forbidden', 'Placement may not change Launch27 here.');
     const u = new URL(config.l27BaseUrl + path);
     for (const [k, v] of Object.entries(query || {})) if (v != null) u.searchParams.set(k, String(v));
     let res;
@@ -149,7 +157,7 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
       await token();
       const sched = await schedule.status();
       const age = sched.taken_at ? now() - Date.parse(sched.taken_at) : Infinity;
-      if (!config.allowWrites) [status, message] = ['degraded', 'Writes to Launch27 are turned off here: quotes and availability work, bookings are refused.'];
+      if (!bookingOn()) [status, message] = ['degraded', config.production ? 'Booking is turned off (PLACEMENT_BOOKING_ENABLED): quotes, availability and holds work, bookings are refused.' : 'Writes to Launch27 are turned off here: quotes and availability work, bookings are refused.'];
       else if (!sched.taken_at) [status, message] = ['degraded', 'The schedule has not loaded yet: no availability until it does.'];
       else if (age > 30 * 60_000) [status, message] = ['degraded', `The schedule is ${Math.round(age / 60_000)} minutes old.`];
     } catch (err) {
@@ -193,13 +201,16 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     const id = newId('q');
     const expires = new Date(now() + QUOTE_MS);
     const data = { frequency_id: freq.id, kind: CONTRACT_TO_KIND[req.frequency], duration: priced.duration_minutes, l27_line: priced.l27_line, price: priced.price };
-    await db.query('INSERT INTO placement_quotes (id, caller, brand, location_id, request, data, expires_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)', [id, caller, slug, loc.id, JSON.stringify(req), JSON.stringify(data), expires]);
+    await db.query('INSERT INTO placement_quotes (id, caller, brand, location_id, request, data, expires_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)', [id, nameOf(caller), slug, loc.id, JSON.stringify(req), JSON.stringify(data), expires]);
     return { brand: req.brand, serviceable: true, quote_id: id, expires_at: expires.toISOString(), service_area: loc.name, duration_minutes: priced.duration_minutes, price: priced.price };
   }
 
-  async function loadQuote(id, { allowExpired = false } = {}) {
+  // A quote (and its holds) belongs to the caller that made it: another caller gets "not found",
+  // never a hint that it exists. A token limited to some brands can't use another brand's quote.
+  async function loadQuote(id, { allowExpired = false, caller = null } = {}) {
     const q = (await db.query('SELECT * FROM placement_quotes WHERE id = $1', [String(id)])).rows[0];
-    if (!q) fail(404, 'quote_not_found', 'No such quote.');
+    if (!q || (caller && q.caller !== nameOf(caller))) fail(404, 'quote_not_found', 'No such quote.');
+    if (caller?.brands && !caller.brands.has(brandKey(q.brand))) fail(403, 'forbidden', `This token may not place customers for ${brandKey(q.brand)}.`);
     if (!allowExpired && new Date(q.expires_at).getTime() <= now()) fail(410, 'quote_expired', 'The quote expired: quote again.');
     return { ...q, location_id: Number(q.location_id), request: typeof q.request === 'string' ? JSON.parse(q.request) : q.request, data: typeof q.data === 'string' ? JSON.parse(q.data) : q.data };
   }
@@ -244,10 +255,10 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     };
   }
 
-  async function availability({ quote_id, from, to, limit = 50 }) {
+  async function availability({ quote_id, from, to, limit = 50 }, caller = null) {
     const span = daysBetween(from, to);
     if (span < 0 || span > 31) fail(400, 'invalid_request', '"to" must be on or up to 31 days after "from".');
-    const q = await loadQuote(quote_id);
+    const q = await loadQuote(quote_id, { caller });
     const found = await planner(() =>
       schedule.findSlots({ duration: q.data.duration, kind: q.data.kind, from, days: span + 1, limit: Math.min(Number(limit) || 50, 200), locations: [q.location_id], held: [] }),
     );
@@ -262,9 +273,9 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
   }
 
   // ---------- holds ----------
-  async function hold({ slot_token, lead_ref = null, placed_by }) {
+  async function hold({ slot_token, lead_ref = null, placed_by }, caller = null) {
     const t = readSlotToken(slot_token);
-    const q = await loadQuote(t.quote_id);
+    const q = await loadQuote(t.quote_id, { caller });
     if (t.date <= today()) fail(409, 'slot_unavailable', 'That slot is in the past.');
     const check = await planner(async () => schedule.checkSlot({ cleaner_id: t.cleaner_id, date: t.date, start: t.start, duration: t.end - t.start, kind: q.data.kind, held: await openHolds() }));
     if (!check.ok) fail(409, 'slot_unavailable', `That slot was taken (${check.reason}). Pick another one.`);
@@ -283,8 +294,11 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     return { hold_id: id, slot, expires_at: expires.toISOString(), kind: 'local' };
   }
 
-  async function release(holdId) {
-    const r = (await db.query('UPDATE placement_holds SET released_at = coalesce(released_at, now()) WHERE id = $1 RETURNING id', [String(holdId)])).rows[0];
+  async function release(holdId, caller = null) {
+    const r = (await db.query(
+      'UPDATE placement_holds h SET released_at = coalesce(h.released_at, now()) FROM placement_quotes q WHERE h.id = $1 AND q.id = h.quote_id AND ($2::text IS NULL OR q.caller = $2) RETURNING h.id',
+      [String(holdId), caller ? nameOf(caller) : null],
+    )).rows[0];
     if (!r) fail(404, 'hold_not_found', 'No such hold.');
   }
 
@@ -304,7 +318,8 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     return null;
   }
 
-  async function book(body, idemKey, caller) {
+  async function book(body, idemKey, callerIn) {
+    const caller = nameOf(callerIn);
     const key = `${caller}:${idemKey}`;
     const fp = fingerprint(body);
     const seen = (await db.query('SELECT * FROM placement_bookings WHERE key = $1', [key])).rows[0];
@@ -322,7 +337,11 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     const h = (await db.query("SELECT *, to_char(day, 'YYYY-MM-DD') AS day FROM placement_holds WHERE id = $1", [String(body.hold_id)])).rows[0];
     if (!h || h.used_at || h.released_at) fail(404, 'hold_not_found', 'No such hold, or it was already used or released.');
     if (new Date(h.expires_at).getTime() <= now()) fail(410, 'hold_expired', 'The hold expired: hold the slot again.');
-    const q = await loadQuote(h.quote_id, { allowExpired: true });
+    // Another caller's hold looks exactly like one that doesn't exist.
+    const q = await loadQuote(h.quote_id, { allowExpired: true, caller: typeof callerIn === 'object' ? callerIn : null }).catch((err) => {
+      if (err.code === 'quote_not_found') fail(404, 'hold_not_found', 'No such hold, or it was already used or released.');
+      throw err;
+    });
     const date = h.day;
     const slot = { date, start: h.start_min, end: h.end_min, cleaner_id: Number(h.cleaner_id), arrival_window: ARRIVAL_WINDOW };
 
@@ -332,9 +351,9 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     const actor = `${caller} / ${body.placed_by.kind} ${body.placed_by.id}`;
 
     try {
-      if (!config.allowWrites) {
+      if (!bookingOn()) {
         await writes?.record({ email: actor, source: 'placement', method: 'POST', path: '/v1/staff/bookings', body: null, outcome: 'blocked', status: 403 });
-        fail(403, 'forbidden', config.production ? 'Writes to Launch27 are turned off (L27_ALLOW_WRITES).' : `Writes to the live Launch27 are blocked in ${config.appEnv}.`);
+        fail(403, 'forbidden', config.production ? 'Booking through the placement API is turned off (PLACEMENT_BOOKING_ENABLED).' : `Writes to the live Launch27 are blocked in ${config.appEnv}.`);
       }
       const check = await planner(async () => schedule.checkSlot({ cleaner_id: slot.cleaner_id, date, start: slot.start, duration: slot.end - slot.start, kind: q.data.kind, held: await openHolds(h.id) }));
       if (!check.ok) {
@@ -395,6 +414,19 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     }
   }
 
+  // One row per request (src/placement/api.js): who, what, result. No customer details.
+  async function audit(e) {
+    await db.query(
+      'INSERT INTO placement_audit (caller, ip, method, operation, path, status, code, ms, ref) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [e.caller, e.ip ? String(e.ip).slice(0, 64) : null, e.method, e.operation, e.path, e.status, e.code, Math.round(e.ms || 0), e.ref ? String(e.ref).slice(0, 80) : null],
+    );
+  }
+  async function auditLog({ days = 7, limit = 500 } = {}) {
+    const since = new Date(now() - Math.min(Math.max(days, 1), 180) * 86_400_000);
+    const rows = (await db.query('SELECT id, at, caller, ip, method, operation, path, status, code, ms, ref FROM placement_audit WHERE at >= $1 ORDER BY at DESC LIMIT $2', [since, Math.min(Math.max(limit, 1), 2000)])).rows;
+    return { booking: bookingOn(), callers: [...(config.placementTokens?.entries() || [])].map(([name, t]) => ({ name, actions: [...(t.actions || [])], brands: t.brands ? [...t.brands] : null })), allowed_ips: (config.placementAllowedIps || []).length, rows };
+  }
+
   let lastPurge = 0;
   async function purge() {
     if (now() - lastPurge < 60 * 60_000) return;
@@ -402,7 +434,8 @@ export function createPlacement({ db, config, fetchImpl = fetch, schedule, write
     const cutoff = new Date(now() - KEEP_DAYS * 86_400_000);
     await db.query('DELETE FROM placement_quotes WHERE created_at < $1', [cutoff]);
     await db.query('DELETE FROM placement_bookings WHERE created_at < $1', [cutoff]);
+    await db.query('DELETE FROM placement_audit WHERE at < $1', [new Date(now() - AUDIT_DAYS * 86_400_000)]);
   }
 
-  return { health, catalog, quote, availability, hold, release, book, purge, _today: today, _addDays: addDays };
+  return { health, catalog, quote, availability, hold, release, book, purge, audit, auditLog, _today: today, _addDays: addDays };
 }
