@@ -749,7 +749,9 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
   // Best slots for a new or rescheduled booking.
   // cleaner: 'any' (default) or 'same' = only the client's usual cleaner (asked when a client
   // reschedules). With 'same' and nothing free, any_count says how many slots other cleaners have.
-  async function findSlots({ customer_id, lat, lng, duration = 180, kind = 'one', from, days = 14, weekdays = null, earliest = 0, latest = 24 * 60, limit = 12, cleaner = 'any', booking_id = null } = {}) {
+  // locations: only cleaners working in these Launch27 locations (one brand); null = all.
+  // held: slots reserved but not booked yet [{ cleaner_id, date, start, end }]; they count as busy.
+  async function findSlots({ customer_id, lat, lng, duration = 180, kind = 'one', from, days = 14, weekdays = null, earliest = 0, latest = 24 * 60, limit = 12, cleaner = 'any', booking_id = null, locations = null, held = [] } = {}) {
     const s = await need();
     const ctx = ctxFor(s);
     const cu = customer_id ? s.customers.get(Number(customer_id)) : null;
@@ -765,14 +767,15 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const main = cu?.main ? s.byId.get(cu.main.id) || null : null;
     const wantSame = cleaner === 'same';
     const sameApplies = wantSame && !!main;
-    const pool = sameApplies ? [main] : s.cleaners;
+    const locSet = Array.isArray(locations) ? new Set(locations.map(Number)) : null;
+    const pool = (sameApplies ? [main] : s.cleaners).filter((c) => !locSet || (c.location_ids || []).some((id) => locSet.has(Number(id))));
     // Rescheduling: the booking being moved (and its projected repeats) doesn't block its own new time.
     const moving = booking_id ? String(booking_id) : null;
     const ignore = moving ? new Set(s.future.filter((v) => v.key === moving || v.key.startsWith(`f${moving}-`)).map((v) => v.key)) : null;
-    const busyAt = (id, d) => { const b = busyFor(s)(id, d); return ignore ? b.filter((v) => !ignore.has(v.key)) : b; };
-    const rankCtx = ignore ? { ...ctx, busyFor: busyAt } : ctx;
+    const busyAt = withHeld(held, (id, d) => { const b = busyFor(s)(id, d); return ignore ? b.filter((v) => !ignore.has(v.key)) : b; });
+    const rankCtx = ignore || held?.length ? { ...ctx, busyFor: busyAt } : ctx;
     const found = [];
-    for (let i = 0; i < Math.min(Number(days) || 14, 28); i++) {
+    for (let i = 0; i < Math.min(Number(days) || 14, 31); i++) {
       const d = addDays(start, i);
       if (weekdays?.length && !weekdays.includes(weekday(d))) continue;
       for (const c of pool) {
@@ -811,7 +814,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     }
     let anyCount = null;
     if (sameApplies && !slots.length) {
-      const other = await findSlots({ customer_id, lat, lng, duration, kind, from, days, weekdays, earliest, latest, limit, cleaner: 'any', booking_id });
+      const other = await findSlots({ customer_id, lat, lng, duration, kind, from, days, weekdays, earliest, latest, limit, cleaner: 'any', booking_id, locations, held });
       anyCount = other.slots.length;
     }
     return {
@@ -825,6 +828,29 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       any_count: anyCount,
       slots,
     };
+  }
+
+  // Held slots count as busy for that cleaner and day (a key keeps travel checks happy).
+  function withHeld(held, base) {
+    if (!held?.length) return base;
+    return (id, d) => [...base(id, d), ...held.filter((h) => Number(h.cleaner_id) === Number(id) && h.date === d).map((h, i) => ({ start: h.start, end: h.end, lat: h.lat ?? null, lng: h.lng ?? null, key: `held-${i}` }))];
+  }
+
+  // Is this exact slot still free for this cleaner, every date of the series, after the planner's
+  // rules? Used before holding and again before booking (Launch27 may have changed since).
+  async function checkSlot({ cleaner_id, date, start, duration, kind = 'one', lat = null, lng = null, held = [] }) {
+    const s = await need();
+    const c = s.byId.get(Number(cleaner_id));
+    if (!c || !c.assignable) return { ok: false, reason: 'cleaner not available' };
+    if (date <= s.today) return { ok: false, reason: 'in the past' };
+    const k = ['weekly', 'bi', 'monthly', 'tri', 'one'].includes(kind) ? kind : frequencyKind(kind);
+    const dates = seriesDates(k, date, addDays(s.today, AHEAD_DAYS));
+    const place = { lat: lat == null ? null : Number(lat), lng: lng == null ? null : Number(lng) };
+    const ctx = { ...ctxFor(s), busyFor: withHeld(held, busyFor(s)) };
+    const [rank] = rankCleaners({ dates, start, duration, place, kind: k, firstDate: date }, [c], ctx, { limit: 1 });
+    if (!rank) return { ok: false, reason: 'no longer fits' };
+    if (rank.fits < dates.length) return { ok: false, reason: `free ${rank.fits} of ${dates.length} dates` };
+    return { ok: true, cleaner: { id: c.id, name: c.name }, reasons: rank.reasons };
   }
 
   // Assign a cleaner in Launch27 (signed-in user's login). Projected visits of a series can't
@@ -973,6 +999,6 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     });
     snap = null;
   }
-  return { reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
+  return { reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
 }
 

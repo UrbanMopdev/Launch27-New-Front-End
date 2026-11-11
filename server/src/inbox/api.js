@@ -25,7 +25,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null, placement = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -734,6 +734,12 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     if (!u) return res.status(404).json({ error: 'No such person' });
     await svc.audit(db, req.user.id, 'brand.person', 'user', u.id, { brand });
     res.json({ id: u.id, brand: u.brand || null });
+  }));
+
+  // Sales Hub (placement API) audit: admins only. Who called, what, and the result.
+  r.get('/admin/placement-audit', needRole('admin'), wrap(async (req, res) => {
+    if (!placement || !config.placementTokens?.size) return res.json({ enabled: false, rows: [] });
+    res.json({ enabled: true, ...(await placement.auditLog({ days: Number(req.query.days) || 7 })) });
   }));
 
   r.get('/admin/l27-writes', needRole('admin'), wrap(async (req, res) => {

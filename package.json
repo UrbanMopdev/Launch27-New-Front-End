@@ -5,13 +5,14 @@
   "workspaces": [
     "server",
     "web",
-    "capture"
+    "capture",
+    "contracts/placement"
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
     "build": "npm run build -w web",
     "start": "npm start -w server",
-    "test": "npm test -w server -w capture -w web",
+    "test": "npm test -w server -w capture -w web -w contracts/placement",
     "capture": "npm start -w capture --",
     "catalog": "npm run catalog -w capture",
     "lint": "eslint .",
@@ -19,7 +20,9 @@
     "migrate": "npm run migrate -w server",
     "migrate:status": "npm run migrate:status -w server",
     "smoke": "node scripts/smoke.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run build"
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "conformance": "npm run conformance -w contracts/placement --",
+    "placement-token": "node scripts/placement-token.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

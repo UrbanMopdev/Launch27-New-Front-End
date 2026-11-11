@@ -1,0 +1,541 @@
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { runConformance } from 'placement-contract/conformance';
+import { validate } from 'placement-contract';
+import {
+  bookingBody, catalogService, customFieldsFrom, frequencyMap, homeKeyOf, locationFor, priceQuote, questionsOf, quotableServices, staffNotesFor, suggestBrand, taxPercentFor,
+} from '../src/placement/mapping.js';
+import { createPlacement, torontoIso } from '../src/placement/service.js';
+import { callerFor, createLimiter, ipAllowed } from '../src/placement/api.js';
+import { createHash } from 'node:crypto';
+import { configErrors, loadConfig, parsePlacementTokens } from '../src/config.js';
+import { openDb } from '../src/db/index.js';
+import { createApp } from '../src/app.js';
+import { createMockLaunch27 } from '../src/mock/launch27.js';
+import { createSchedule } from '../src/schedule/service.js';
+import { createWriteLog } from '../src/writes.js';
+
+const quiet = Object.assign(() => {}, { info() {}, warn() {}, error() {} }); // the app also calls log(level, ...)
+const TOKEN = 'hub-token-0123456789abcdefghijklmnopqrstuvwxyz';
+const sha = (s) => createHash('sha256').update(s).digest('hex');
+
+describe('placement: mapping Launch27 onto the contract', () => {
+  test('brands by location name, as on the web side', () => {
+    assert.equal(suggestBrand('Ottawa'), 'residential');
+    assert.equal(suggestBrand('Commercial Ottawa'), 'commercial');
+    assert.equal(suggestBrand('Cornwall'), 'commercial');
+    assert.equal(suggestBrand('Somewhere else'), null);
+  });
+
+  test('frequencies: first non-prepaid of each kind; every-3-weeks has no contract value', () => {
+    const m = frequencyMap([{ id: 1, name: 'Prepaid Biweekly' }, { id: 2, name: 'Biweekly - 10% off' }, { id: 3, name: 'One time' }, { id: 4, name: 'Tri-Weekly' }, { id: 5, name: 'Monthly - 5% off' }]);
+    assert.equal(m.get('biweekly').id, 2);
+    assert.equal(m.get('one_time').id, 3);
+    assert.equal(m.get('every_4_weeks').id, 5);
+    assert.deepEqual([...m.keys()].sort(), ['biweekly', 'every_4_weeks', 'one_time']);
+  });
+
+  test('services: $0 services are left to people; rooms map to home details; hourly is declared', () => {
+    const svcs = [
+      { id: 1, name: 'Two Bedroom Home', price: 137.5, duration: 150, pricing_parameters: [{ id: 137, name: 'Full Bathrooms', quantity_minimum: 1, quantity_maximum: 7 }, { id: 138, name: 'Half Bathrooms', quantity_minimum: 0 }], extras: [{ id: 9, name: 'Inside Oven', quantity_based: true }] },
+      { id: 2, name: 'Commercial', price: 0, pricing_parameters: [], extras: [] },
+      { id: 3, name: 'Odd', price: 50, pricing_parameters: [{ id: 1, name: 'Number of stairs' }], extras: [] },
+      { id: 4, name: 'Hourly Cleaning', price: 55, hourly: { minutes_minimum: 180, minutes_maximum: 720, half_hour_increments: true }, pricing_parameters: [], extras: [] },
+    ];
+    assert.deepEqual(quotableServices(svcs).map((s) => s.id), [1, 4]);
+    const two = catalogService(svcs[0]);
+    assert.deepEqual(two.home_fields.map((f) => [f.key, f.required]), [['bathrooms', true], ['half_bathrooms', false]]);
+    assert.equal(two.extras[0].max_quantity, 10);
+    assert.deepEqual(catalogService(svcs[3]).hourly, { min_minutes: 180, max_minutes: 720, step_minutes: 30 });
+    assert.equal(homeKeyOf('Half Bathrooms'), 'half_bathrooms');
+  });
+
+  test('booking questions: markup stripped, link kept, required answers enforced', () => {
+    const fields = [
+      { id: 267, control_type: 'drop_down', label: 'Parking on Premise?', value_required: true, options: [{ id: 16, label: 'Yes' }, { id: 17, label: 'No' }] },
+      { id: 256, control_type: 'checkbox', label: 'You agree to <a href="https://example.com/terms" target="_blank"><u>our Terms</u></a>.', value_required: true, options: [] },
+      { id: 262, control_type: 'plain_text', label: 'Additional Notes', value_required: false, options: [] },
+      { id: 261, control_type: 'multi_line', label: '', value_required: false, options: [] },
+    ];
+    const qs = questionsOf(fields);
+    assert.deepEqual(qs.map((q) => [q.id, q.type, q.required]), [['267', 'single_choice', true], ['256', 'checkbox', true], ['262', 'text', false]]);
+    assert.equal(qs[1].label, 'You agree to our Terms.');
+    assert.equal(qs[1].url, 'https://example.com/terms');
+    for (const q of qs) assert.deepEqual(validate('Question', q), []);
+
+    assert.deepEqual(customFieldsFrom(fields, []).missing, ['267', '256']);
+    // A required checkbox answered false is not an answer.
+    assert.deepEqual(customFieldsFrom(fields, [{ question_id: '267', option_ids: ['16'] }, { question_id: '256', value: false }]).missing, ['256']);
+    // An option that doesn't exist is not an answer either.
+    assert.deepEqual(customFieldsFrom(fields, [{ question_id: '267', option_ids: ['99'] }, { question_id: '256', value: true }]).missing, ['267']);
+    const ok = customFieldsFrom(fields, [{ question_id: '267', option_ids: ['16'] }, { question_id: '256', value: true }, { question_id: '262', value: ' Side door ' }]);
+    assert.deepEqual(ok.missing, []);
+    // Launch27's shapes: drop-downs as values, checkboxes as the strings "true"/"false".
+    assert.deepEqual(ok.custom_fields, [{ id: 267, values: [{ id: 16, other: null }] }, { id: 256, value: 'true' }, { id: 262, value: 'Side door' }]);
+  });
+
+  test('locations: brand first, then the longest postcode prefix, then the default', () => {
+    const locs = [
+      { id: 1, name: 'Ottawa', default: true, postcodes: ['K1', 'K2'] },
+      { id: 3, name: 'Carpet Cleaning', postcodes: ['K1'] },
+      { id: 4, name: 'Ottawa East', postcodes: ['K1K'] },
+      { id: 167, name: 'Commercial Ottawa', postcodes: ['K1', 'K1A'] },
+      { id: 2, name: 'Kitchener-Waterloo', postcodes: ['N2L'] },
+    ];
+    const brandOf = (l) => suggestBrand(l.name);
+    assert.equal(locationFor(locs, 'k1a 0b1', 'residential', brandOf).id, 1);
+    assert.equal(locationFor(locs, 'K1K 2A1', 'residential', brandOf).id, 4);
+    assert.equal(locationFor(locs, 'N2L 3G1', 'residential', brandOf).id, 2);
+    assert.equal(locationFor(locs, 'K1A 0B1', 'commercial', brandOf).id, 167);
+    assert.equal(locationFor(locs, 'M5V 1A1', 'residential', brandOf), null);
+  });
+
+  test('tax: latest rate already in effect for the location', () => {
+    const taxes = [{ effective_date: '2020-01-01', percent: 13, locations: [] }, { effective_date: '2027-01-01', percent: 15, locations: [] }, { effective_date: '2025-01-01', percent: 5, locations: [{ id: 9 }] }];
+    assert.equal(taxPercentFor(taxes, 1, '2026-11-11'), 13);
+    assert.equal(taxPercentFor(taxes, 9, '2026-11-11'), 5);
+  });
+
+  const two = { id: 1181, name: 'Two Bedroom Home', price: 137.5, duration: 150, pricing_parameters: [{ id: 137, name: 'Full Bathrooms', price: 27.5, quantity_minimum: 1, quantity_maximum: 7 }, { id: 138, name: 'Half Bathrooms', price: 18.33, quantity_minimum: 0, quantity_maximum: 7 }], extras: [{ id: 228, name: 'Inside Fridge', price: 55, duration: 60, recurring: true }, { id: 226, name: 'Deep Cleaning', price: 82.5, duration: 90, recurring: false }], discount_by_frequency: true, discount_by_code: true };
+  const address = { line1: '100 Example Street', city: 'Ottawa', region: 'ON', postal_code: 'K1A 0B1', country: 'CA' };
+  const biweekly = { id: 12, name: 'Biweekly - 10% off', percent: 10 };
+
+  test('quote: priced with Launch27 rules; recurring visits repeat only recurring extras', () => {
+    const req = { brand: 'urbanmop-residential', address, service_code: '1181', frequency: 'biweekly', home: { bathrooms: 2 }, extras: [{ code: '228', quantity: 1 }, { code: '226', quantity: 1 }] };
+    const q = priceQuote({ service: two, request: req, frequency: biweekly, recurringFrequency: biweekly, taxPercent: 13 });
+    // First visit: 137.50 + 2 × 27.50 + 55 + 82.50 = 330.00; less 10% = 297.00; + 13% HST = 335.61.
+    assert.deepEqual(q.price.first_visit, { amount_cents: 33561, currency: 'CAD' });
+    // Later visits: 137.50 + 55 + 55 = 247.50; less 10% = 222.75; + 13% = 251.71.
+    assert.deepEqual(q.price.recurring_visit, { amount_cents: 25171, currency: 'CAD' });
+    assert.equal(q.duration_minutes, 150 + 60 + 90);
+    // Every pricing parameter is sent, even at 0 (Launch27 requires it).
+    assert.deepEqual(q.l27_line, { id: 1181, pricing_parameters: [{ id: 137, quantity: 2 }, { id: 138, quantity: 0 }], extras: [{ id: 228, quantity: 1, recurring: null }, { id: 226, quantity: 1, recurring: null }] });
+    assert.ok(q.price.lines.some((l) => l.amount.amount_cents < 0), 'the discount is shown as a negative line');
+  });
+
+  test('quote: rejects what the service does not allow', () => {
+    const base = { brand: 'urbanmop-residential', address, service_code: '1181', frequency: 'one_time' };
+    assert.throws(() => priceQuote({ service: two, request: { ...base, home: { bathrooms: 0 } }, frequency: biweekly, taxPercent: 13 }), /Full Bathrooms/);
+    assert.throws(() => priceQuote({ service: two, request: { ...base, extras: [{ code: '999', quantity: 1 }] }, frequency: biweekly, taxPercent: 13 }), /isn't offered/);
+    assert.throws(() => priceQuote({ service: two, request: { ...base, extras: [{ code: '228', quantity: 2 }] }, frequency: biweekly, taxPercent: 13 }), /at most 1/);
+    const hourly = { id: 1186, name: 'Hourly Cleaning', price: 55, hourly: { quantity_minimum: 1, minutes_minimum: 180, minutes_maximum: 720, half_hour_increments: true }, pricing_parameters: [], extras: [] };
+    assert.throws(() => priceQuote({ service: hourly, request: { ...base, service_code: '1186' }, frequency: biweekly, taxPercent: 13 }), /send minutes/);
+    assert.throws(() => priceQuote({ service: hourly, request: { ...base, service_code: '1186', minutes: 200 }, frequency: biweekly, taxPercent: 13 }), /steps of 30/);
+    const h = priceQuote({ service: hourly, request: { ...base, service_code: '1186', minutes: 240 }, frequency: { id: 171, name: 'One time', percent: 0 }, taxPercent: 13 });
+    assert.equal(h.duration_minutes, 240);
+    assert.deepEqual(h.price.first_visit, { amount_cents: 24860, currency: 'CAD' }); // 55 × 4 h = 220 + 13%
+    assert.deepEqual(h.l27_line, { id: 1186, hourly: { quantity: 1, minutes: 240 } });
+  });
+
+  test('booking body: the same shape as the booking form, cleaner assigned', () => {
+    const body = bookingBody({
+      quote: { location_id: 1, frequency_id: 12, l27_line: { id: 1181 }, address },
+      slot: { date: '2026-11-13', start: 540, end: 690, cleaner_id: 7, arrival_window: 60 },
+      customer: { first_name: 'Test', last_name: 'Customer', email: 'test@example.com', phone: '613-555-0100' },
+      customFields: [{ id: 256, value: 'true' }],
+      paymentMethod: 'check',
+      staffNotes: 'n',
+    });
+    assert.deepEqual(body.user, { first_name: 'Test', last_name: 'Customer', email: 'test@example.com' });
+    assert.equal(body.service_date, '2026-11-13T09:00:00');
+    assert.equal(body.zip, 'K1A 0B1');
+    assert.deepEqual(body.teams, [7]);
+    assert.equal(bookingBody({ quote: { address }, slot: { date: '2026-11-13', start: 540 }, customer: {}, existingCustomerId: 55 }).user.id, 55);
+    assert.match(staffNotesFor({ accessNotes: 'Key under mat', placedBy: { kind: 'sales_rep', id: 'r7', display_name: 'Rep Seven' }, caller: 'sales-hub', leadRef: 'lead_1', source: { channel: 'phone' } }), /^Key under mat\n\nBooked through sales-hub by Rep Seven \(sales_rep r7\), lead lead_1, source phone\.$/);
+  });
+
+  test('times carry the Toronto offset, through daylight saving', () => {
+    assert.equal(torontoIso('2026-11-13', 540), '2026-11-13T09:00:00-05:00');
+    assert.equal(torontoIso('2026-07-01', 810), '2026-07-01T13:30:00-04:00');
+    assert.equal(torontoIso('2026-03-08', 600), '2026-03-08T10:00:00-04:00'); // DST starts 2am that day
+  });
+});
+
+describe('placement: config and auth', () => {
+  test('tokens: name:token (dev and QA), name:sha256:<hex>, or JSON with scopes', () => {
+    const { tokens, bad } = parsePlacementTokens(`sales-hub:${TOKEN}, booking-form:${TOKEN}x,short:abc,:${TOKEN},hashed:sha256:${sha(TOKEN + 'h')},nothex:sha256:zz`);
+    assert.deepEqual([...tokens.keys()], ['sales-hub', 'booking-form', 'hashed']);
+    assert.deepEqual(bad, ['short', '(unnamed)', 'nothex']);
+    assert.ok(configErrors(loadConfig({ L27_MODE: 'mock', PLACEMENT_TOKENS: 'hub:short' })).some((e) => e.startsWith('PLACEMENT_TOKENS')));
+    assert.equal(callerFor(tokens, `Bearer ${TOKEN}`).name, 'sales-hub');
+    assert.equal(callerFor(tokens, `Bearer ${TOKEN}h`).name, 'hashed');
+    assert.equal(callerFor(tokens, `Bearer ${TOKEN}y`), null);
+    assert.equal(callerFor(tokens, ''), null);
+    assert.equal(callerFor(tokens, `Basic ${TOKEN}`), null);
+    assert.equal(callerFor(tokens, `Bearer ${TOKEN} extra`), null);
+    const scoped = parsePlacementTokens(JSON.stringify([{ name: 'sales-hub', sha256: sha(TOKEN), actions: ['read', 'hold'], brands: ['urbanmop-residential'] }]));
+    assert.deepEqual(scoped.bad, []);
+    const c = callerFor(scoped.tokens, `Bearer ${TOKEN}`);
+    assert.deepEqual([[...c.actions], [...c.brands]], [['read', 'hold'], ['urbanmop-residential']]);
+    assert.deepEqual(parsePlacementTokens(JSON.stringify([{ name: 'x', sha256: sha(TOKEN), actions: ['delete'] }])).bad, ['x']);
+    assert.deepEqual(parsePlacementTokens('[not json').bad.length, 1);
+  });
+
+  test('production refuses raw tokens and bad address lists', () => {
+    const prod = (extra) => configErrors(loadConfig({ APP_ENV: 'production', L27_MODE: 'live', SESSION_SECRET: 'x'.repeat(40), DATABASE_URL: 'postgres://x', ...extra }));
+    assert.ok(prod({ PLACEMENT_TOKENS: `hub:${TOKEN}` }).some((e) => /only token hashes/.test(e)));
+    // Production tokens must say what they may do and for which brands; those brands must be served.
+    assert.ok(prod({ PLACEMENT_TOKENS: `hub:sha256:${sha(TOKEN)}` }).some((e) => /lists its actions and brands/.test(e)));
+    const scopedToken = (brands) => JSON.stringify([{ name: 'hub', sha256: sha(TOKEN), actions: ['read'], brands }]);
+    assert.ok(!prod({ PLACEMENT_TOKENS: scopedToken(['urbanmop-residential']) }).some((e) => /PLACEMENT/.test(e)));
+    assert.ok(prod({ PLACEMENT_TOKENS: scopedToken(['residential']) }).some((e) => /served brand keys/.test(e)));
+    assert.ok(prod({ PLACEMENT_TOKENS: scopedToken(['urbanmop-commercial']) }).some((e) => /served brand keys/.test(e)));
+    assert.ok(prod({ PLACEMENT_ALLOWED_IPS: '1.2.3.4,nope' }).some((e) => /PLACEMENT_ALLOWED_IPS/.test(e)));
+    // Booking in production needs its own switch, whatever L27_ALLOW_WRITES says.
+    assert.equal(loadConfig({ APP_ENV: 'production', L27_MODE: 'live', L27_ALLOW_WRITES: 'true' }).placementBookingEnabled, false);
+    assert.equal(loadConfig({ APP_ENV: 'production', L27_MODE: 'live', PLACEMENT_BOOKING_ENABLED: 'true' }).placementBookingEnabled, true);
+  });
+
+  test('address allowlist: exact addresses and IPv4 ranges', () => {
+    const list = [{ v4: '10.1.0.0', bits: 16 }, { v4: '203.0.113.7', bits: 32 }, { v6: '2001:db8::1' }];
+    assert.ok(ipAllowed([], '1.2.3.4'));
+    assert.ok(ipAllowed(list, '10.1.200.3'));
+    assert.ok(ipAllowed(list, '::ffff:203.0.113.7'));
+    assert.ok(ipAllowed(list, '2001:db8::1'));
+    assert.ok(!ipAllowed(list, '10.2.0.1'));
+    assert.ok(!ipAllowed(list, '203.0.113.8'));
+    assert.ok(!ipAllowed(list, undefined));
+  });
+
+  test('rate limiter: counts per key and window', () => {
+    let t = 0;
+    const lim = createLimiter({ limit: 2, windowMs: 1000, now: () => t });
+    assert.equal(lim.hit('a'), 0);
+    assert.equal(lim.hit('a'), 0);
+    assert.equal(lim.hit('a'), 1);
+    assert.equal(lim.hit('b'), 0);
+    assert.equal(lim.blocked('a'), 1);
+    t = 1001;
+    assert.equal(lim.hit('a'), 0);
+  });
+
+  test('placement login is only read for the live Launch27', () => {
+    const live = loadConfig({ APP_ENV: 'production', L27_MODE: 'live', L27_PLACEMENT_EMAIL: 'p@example.com', L27_PLACEMENT_PASSWORD: 'x', PLACEMENT_TOKENS: `hub:${TOKEN}` });
+    assert.equal(live.l27PlacementEmail, 'p@example.com');
+    assert.equal(loadConfig({ L27_MODE: 'mock', L27_PLACEMENT_EMAIL: 'p@example.com' }).l27PlacementEmail, null);
+    assert.ok(loadConfig({ L27_MODE: 'live', PLACEMENT_TOKENS: `hub:${TOKEN}` }).warnings.some((w) => /L27_PLACEMENT_EMAIL/.test(w)));
+  });
+});
+
+describe('placement: the app against the synthetic Launch27', () => {
+  let db;
+  let server;
+  let baseUrl;
+  let writes;
+  let schedule;
+  let placement;
+  let mock;
+  const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo', PLACEMENT_TOKENS: `sales-hub:${TOKEN}` });
+  // The router checks its own answers against the contract outside production and warns on drift.
+  const problems = [];
+  const appLog = Object.assign(() => {}, { info() {}, warn: (msg, f) => problems.push([msg, f]), error: (msg, f) => problems.push([msg, f]) });
+  const brand = 'urbanmop-residential';
+  const quoteRequest = { brand, address: { line1: '100 Example Street', city: 'Ottawa', region: 'ON', postal_code: 'K1A 0B1', country: 'CA' }, service_code: '1181', frequency: 'one_time', home: { bathrooms: 1 } };
+  const answers = [
+    { question_id: '267', option_ids: ['16'] },
+    { question_id: '270', option_ids: ['32'] },
+    { question_id: '269', option_ids: ['24'] },
+    { question_id: '256', value: true },
+    { question_id: '271', value: true },
+  ];
+  const customer = { first_name: 'Test', last_name: 'Customer', email: 'placement-test@example.com', phone: '613-555-0142' };
+  const call = async (method, path, body, headers = {}) => {
+    const res = await fetch(`${baseUrl}/api/placement/v1${path}`, { method, headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined });
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : null };
+  };
+
+  before(async () => {
+    db = await openDb();
+    mock = createMockLaunch27({ password: 'demo' });
+    writes = createWriteLog({ db, log: quiet });
+    schedule = createSchedule({ db, config, fetchImpl: mock, log: quiet, writes });
+    await schedule.sync();
+    placement = createPlacement({ db, config, fetchImpl: mock, schedule, writes, log: quiet });
+    server = createApp(config, { db, fetchImpl: mock, placement, schedule, writes, log: appLog }).listen(0);
+    await new Promise((r) => server.once('listening', r));
+    baseUrl = `http://127.0.0.1:${server.address().port}`;
+  });
+  after(async () => {
+    server.closeAllConnections();
+    server.close();
+    await db.close();
+  });
+
+  test('passes the shared conformance checks, holds and booking included', async () => {
+    const results = await runConformance({ baseUrl, token: TOKEN, brand, quoteRequest, holds: true, book: { customer, answers, placed_by: { kind: 'sales_rep', id: 'rep_7', display_name: 'Rep Seven' } } });
+    const failed = results.filter((r) => !r.ok);
+    assert.deepEqual(failed, []);
+    assert.ok(results.some((r) => r.name === 'bookings: missing required answers is invalid_request'));
+    assert.ok(results.some((r) => r.name === 'bookings: same Idempotency-Key replays without booking again'));
+    // The booking went through the write log, attributed to the hub and the rep.
+    const logged = (await writes.list()).rows.filter((r) => r.source === 'placement' && r.outcome === 'done');
+    assert.equal(logged.length, 1);
+    assert.match(logged[0].user_email, /^sales-hub \/ sales_rep rep_7$/);
+    const sent = typeof logged[0].request === 'string' ? JSON.parse(logged[0].request) : logged[0].request;
+    assert.equal(sent.teams.length, 1);
+    assert.match(sent.staff_notes, /Booked through sales-hub by Rep Seven/);
+    assert.ok(sent.custom_fields.some((f) => f.id === 256 && f.value === 'true'));
+  });
+
+  test('catalog lists quotable residential services, hourly ones and the booking questions', async () => {
+    const { status, body } = await call('GET', `/catalog?brand=${brand}`);
+    assert.equal(status, 200);
+    assert.ok(body.services.some((s) => s.code === '1181'));
+    assert.ok(body.services.some((s) => s.hourly));
+    assert.ok(!body.services.some((s) => s.name === 'Commercial'));
+    assert.ok(body.questions.some((q) => q.id === '256' && q.type === 'checkbox' && q.required && q.url));
+    assert.equal((await call('GET', '/catalog?brand=urbanmop-commercial')).body.error.code, 'brand_not_served');
+  });
+
+  test('an address outside every residential location is not serviceable', async () => {
+    const { status, body } = await call('POST', '/quote', { ...quoteRequest, address: { ...quoteRequest.address, postal_code: 'M5V 1A1' } });
+    assert.equal(status, 200);
+    assert.deepEqual([body.serviceable, body.not_serviceable_reason], [false, 'outside_service_area']);
+  });
+
+  test('a held slot disappears from availability until it is released', async () => {
+    const q = (await call('POST', '/quote', quoteRequest)).body;
+    const from = placement._addDays(placement._today(), 1);
+    const to = placement._addDays(from, 6);
+    const first = (await call('GET', `/availability?quote_id=${q.quote_id}&from=${from}&to=${to}`)).body;
+    assert.ok(first.slots.length > 0);
+    const slot = first.slots[0];
+    assert.match(slot.start, /T\d{2}:\d{2}:00-0[45]:00$/);
+    const hold = await call('POST', '/holds', { slot_token: slot.slot_token, placed_by: { kind: 'sales_rep', id: 'r1' } });
+    assert.equal(hold.status, 201);
+    const during = (await call('GET', `/availability?quote_id=${q.quote_id}&from=${from}&to=${to}`)).body;
+    assert.ok(!during.slots.some((s) => s.start === slot.start && s.team.id === slot.team.id));
+    assert.equal((await call('DELETE', `/holds/${hold.body.hold_id}`)).status, 204);
+    const afterRelease = (await call('GET', `/availability?quote_id=${q.quote_id}&from=${from}&to=${to}`)).body;
+    assert.ok(afterRelease.slots.some((s) => s.start === slot.start && s.team.id === slot.team.id));
+  });
+
+  test('a forged slot token is refused', async () => {
+    const q = (await call('POST', '/quote', quoteRequest)).body;
+    const forged = `${Buffer.from(JSON.stringify({ q: q.quote_id, d: '2030-01-01', s: 540, e: 690, c: 1 })).toString('base64url')}.AAAAAAAAAAAAAAAAAAAAAA`;
+    const res = await call('POST', '/holds', { slot_token: forged, placed_by: { kind: 'sales_rep', id: 'r1' } });
+    assert.deepEqual([res.status, res.body.error.code], [400, 'invalid_request']);
+  });
+
+  test('with writes off, booking is refused and nothing reaches Launch27', async () => {
+    const off = createPlacement({ db, config: { ...config, allowWrites: false }, fetchImpl: mock, schedule, writes, log: quiet });
+    const q = await off.quote(quoteRequest, 'sales-hub');
+    const from = off._addDays(off._today(), 1);
+    const { slots } = await off.availability({ quote_id: q.quote_id, from, to: off._addDays(from, 6) });
+    const h = await off.hold({ slot_token: slots.at(-1).slot_token, placed_by: { kind: 'system', id: 't' } });
+    await assert.rejects(() => off.book({ hold_id: h.hold_id, customer, answers, placed_by: { kind: 'system', id: 't' } }, 'writes-off-key-1', 'sales-hub'), (e) => e.code === 'forbidden');
+    const blocked = (await writes.list()).rows.filter((r) => r.source === 'placement' && r.outcome === 'blocked');
+    assert.equal(blocked.length, 1);
+    // The key was freed, so the same request can be retried once writes are on.
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM placement_bookings WHERE key = 'sales-hub:writes-off-key-1'")).rows[0].n, 0);
+    await off.release(h.hold_id);
+  });
+
+  test('every answer matched the contract, and nothing failed on our side', () => {
+    assert.deepEqual(problems.filter(([msg]) => msg !== 'placement request refused'), []);
+  });
+
+  // A second app on the same data, with two callers and small limits, to attack it.
+  async function hardened(extra = {}) {
+    const READER = 'reader-token-0123456789abcdefghijklmnopqrstuvw';
+    const cfg = {
+      ...config,
+      placementTokens: parsePlacementTokens(JSON.stringify([
+        { name: 'sales-hub', sha256: sha(TOKEN) },
+        { name: 'reader', sha256: sha(READER), actions: ['read'], brands: ['urbanmop-residential'] },
+      ])).tokens,
+      placementLimits: { badTokens: { limit: 3, windowMs: 60_000 }, all: { limit: 100, windowMs: 60_000 }, hold: { limit: 100, windowMs: 60_000 }, book: { limit: 1, windowMs: 60_000 } },
+      ...extra,
+    };
+    const app = createApp(cfg, { db, fetchImpl: mock, placement, schedule, writes, log: quiet }).listen(0);
+    await new Promise((r) => app.once('listening', r));
+    const url = `http://127.0.0.1:${app.address().port}/api/placement/v1`;
+    const req = async (method, path, { token = TOKEN, body, headers = {} } = {}) => {
+      const res = await fetch(`${url}${path}`, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers }, body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined });
+      const text = await res.text();
+      return { status: res.status, headers: res.headers, body: text ? JSON.parse(text) : null };
+    };
+    return { req, READER, close: () => (app.closeAllConnections(), app.close()) };
+  }
+
+  test('security: headers on every answer, 401 with a challenge, lockout after repeated bad tokens', async () => {
+    const h = await hardened();
+    const none = await h.req('GET', '/health', { token: null });
+    assert.equal(none.status, 401);
+    assert.equal(none.headers.get('www-authenticate'), 'Bearer realm="placement"');
+    assert.equal(none.headers.get('cache-control'), 'no-store');
+    assert.equal(none.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(none.headers.get('x-frame-options'), 'DENY');
+    assert.equal((await h.req('GET', '/health', { token: 'x'.repeat(40) })).status, 401);
+    assert.equal((await h.req('GET', '/health', { token: 'y'.repeat(40) })).status, 401);
+    const locked = await h.req('GET', '/health', { token: 'z'.repeat(40) });
+    assert.equal(locked.status, 429);
+    assert.ok(Number(locked.headers.get('retry-after')) > 0);
+    // Locked out for bad tokens, but a valid token from the same address still works, so someone
+    // sharing the Hub's address can't lock the Hub out.
+    assert.equal((await h.req('GET', '/health', { token: 'w'.repeat(40) })).status, 429);
+    assert.equal((await h.req('GET', '/health')).status, 200);
+    h.close();
+  });
+
+  test('security: scopes (actions and brands), ownership of quotes and holds, JSON only', async () => {
+    const h = await hardened();
+    const q = await h.req('POST', '/quote', { body: quoteRequest });
+    assert.equal(q.status, 200);
+    // The read-only token can quote but not hold, and not for another brand.
+    assert.equal((await h.req('POST', '/quote', { token: h.READER, body: quoteRequest })).status, 200);
+    assert.equal((await h.req('GET', '/catalog?brand=urbanmop-commercial', { token: h.READER })).body.error.code, 'forbidden');
+    // Another caller's quote looks like no quote at all.
+    const from = placement._addDays(placement._today(), 1);
+    const theirs = await h.req('GET', `/availability?quote_id=${q.body.quote_id}&from=${from}&to=${placement._addDays(from, 6)}`, { token: h.READER });
+    assert.equal(theirs.status, 404);
+    assert.equal(theirs.body.error.code, 'quote_not_found');
+    const mine = await h.req('GET', `/availability?quote_id=${q.body.quote_id}&from=${from}&to=${placement._addDays(from, 6)}`);
+    assert.equal(mine.status, 200);
+    const slot = mine.body.slots.at(-2).slot_token;
+    assert.equal((await h.req('POST', '/holds', { token: h.READER, body: { slot_token: slot, placed_by: { kind: 'system', id: 't' } } })).body.error.code, 'forbidden');
+    const hold = await h.req('POST', '/holds', { body: { slot_token: slot, placed_by: { kind: 'system', id: 't' } } });
+    assert.equal(hold.status, 201);
+    // A reader can't release it either (no hold scope); a well-formed but unknown id is "not found".
+    assert.equal((await h.req('DELETE', `/holds/${hold.body.hold_id}`, { token: h.READER })).status, 403);
+    assert.equal((await h.req('DELETE', '/holds/h_doesnotexist')).status, 404);
+    // Impossible dates are a 400, not a crash.
+    assert.equal((await h.req('GET', `/availability?quote_id=${q.body.quote_id}&from=2026-13-01&to=2026-13-05`)).status, 400);
+    assert.equal((await h.req('GET', `/availability?quote_id=${q.body.quote_id}&from=2026-02-30&to=2026-03-02`)).status, 400);
+    // Bodies must be JSON.
+    assert.equal((await h.req('POST', '/quote', { body: 'brand=x', headers: { 'content-type': 'text/plain' } })).status, 415);
+    assert.equal((await h.req('DELETE', `/holds/${hold.body.hold_id}`)).status, 204);
+    h.close();
+  });
+
+  test('security: bookings are rate limited per caller, and an address outside the allowlist is refused', async () => {
+    const h = await hardened();
+    const body = { hold_id: 'h_none', customer, answers, placed_by: { kind: 'system', id: 't' } };
+    assert.equal((await h.req('POST', '/bookings', { body, headers: { 'idempotency-key': 'rate-limit-key-1' } })).status, 404);
+    const second = await h.req('POST', '/bookings', { body, headers: { 'idempotency-key': 'rate-limit-key-2' } });
+    assert.equal(second.status, 429);
+    assert.equal(second.body.error.retryable, true);
+    h.close();
+    const fenced = await hardened({ placementAllowedIps: [{ v4: '203.0.113.7', bits: 32 }] });
+    const out = await fenced.req('GET', '/health');
+    assert.equal(out.status, 403);
+    assert.equal(out.body.error.code, 'forbidden');
+    fenced.close();
+  });
+
+  test('security: production books only with PLACEMENT_BOOKING_ENABLED, whatever L27_ALLOW_WRITES says', async () => {
+    const prod = createPlacement({ db, config: { ...config, production: true, allowWrites: true, placementBookingEnabled: false }, fetchImpl: mock, schedule, writes, log: quiet });
+    const q = await prod.quote(quoteRequest, 'sales-hub');
+    const from = prod._addDays(prod._today(), 1);
+    const { slots } = await prod.availability({ quote_id: q.quote_id, from, to: prod._addDays(from, 6) });
+    const hd = await prod.hold({ slot_token: slots.at(-3).slot_token, placed_by: { kind: 'system', id: 't' } });
+    await assert.rejects(() => prod.book({ hold_id: hd.hold_id, customer, answers, placed_by: { kind: 'system', id: 't' } }, 'prod-switch-key-1', 'sales-hub'), (e) => e.code === 'forbidden' && /PLACEMENT_BOOKING_ENABLED/.test(e.message));
+    assert.equal((await prod.health()).status, 'degraded');
+    await prod.release(hd.hold_id);
+  });
+
+  // A Launch27 stand-in that makes the booking, then answers as told (a 502 from a load balancer
+  // after the booking was made, a 422 refusal before it was).
+  const bookingAnswering = (status) => async (url, init = {}) => {
+    if (String(url).includes('/v1/staff/bookings') && init.method === 'POST' && !String(url).includes('/assign')) {
+      if (status === 422 || status === 429) return new Response(JSON.stringify({ message: status === 422 ? 'Invalid frequency' : 'Slow down', internal_trace: 'x'.repeat(5000) }), { status, headers: { 'content-type': 'application/json' } });
+      const real = await mock(url, init);
+      return status === 200 ? real : new Response('<html>Bad gateway</html>', { status });
+    }
+    return mock(url, init);
+  };
+  const holdFor = async (svc, nth) => {
+    const q = await svc.quote(quoteRequest, 'sales-hub');
+    const from = svc._addDays(svc._today(), 2);
+    const { slots } = await svc.availability({ quote_id: q.quote_id, from, to: svc._addDays(from, 6) });
+    return svc.hold({ slot_token: slots.at(nth).slot_token, placed_by: { kind: 'system', id: 't' } });
+  };
+  const bookingsMade = async () => (await writes.list()).rows.filter((r) => r.source === 'placement' && r.outcome === 'done').length;
+  const req = (holdId) => ({ hold_id: holdId, customer, answers, placed_by: { kind: 'system', id: 't' } });
+
+  test('bookings: one hold books once, even with two keys at the same moment', async () => {
+    const before = await bookingsMade();
+    const h = await holdFor(placement, -4);
+    const results = await Promise.allSettled([placement.book(req(h.hold_id), 'race-key-aaaa-1', 'sales-hub'), placement.book(req(h.hold_id), 'race-key-bbbb-2', 'sales-hub')]);
+    assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+    assert.equal(results.find((r) => r.status === 'rejected').reason.code, 'hold_not_found');
+    assert.equal((await bookingsMade()) - before, 1);
+  });
+
+  test('bookings: after Launch27 took it but answered 502, neither a retry nor a new key books again', async () => {
+    const flaky = createPlacement({ db, config, fetchImpl: bookingAnswering(502), schedule, writes, log: quiet });
+    const h = await holdFor(flaky, -5);
+    const posted = (await writes.list()).rows.filter((r) => r.source === 'placement').length;
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'after-502-key-1', 'sales-hub'), (e) => e.status === 502 && e.retryable === false);
+    // Same key: the stored answer, no second request to Launch27.
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'after-502-key-1', 'sales-hub'), (e) => e.status === 502);
+    // New key, same hold: the hold stays used.
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'after-502-key-2', 'sales-hub'), (e) => e.code === 'hold_not_found');
+    assert.equal((await writes.list()).rows.filter((r) => r.source === 'placement').length - posted, 1);
+  });
+
+  test('bookings: a slot whose booking is in flight or unknown is not offered or held again', async () => {
+    const flaky = createPlacement({ db, config, fetchImpl: bookingAnswering(502), schedule, writes, log: quiet });
+    const h = await holdFor(flaky, -8);
+    await assert.rejects(() => flaky.book(req(h.hold_id), 'unknown-slot-key-1', 'sales-hub'), (e) => e.status === 502);
+    const q = await flaky.quote(quoteRequest, 'sales-hub');
+    const day = h.slot.start.slice(0, 10);
+    const { slots } = await flaky.availability({ quote_id: q.quote_id, from: day, to: day, limit: 200 });
+    const same = slots.filter((x) => x.team.id === h.slot.team.id && x.start < h.slot.end && h.slot.start < x.end);
+    assert.deepEqual(same, []);
+  });
+
+  test('bookings: Launch27 saying "too many requests" frees the key and hold, and is retryable', async () => {
+    const busy = createPlacement({ db, config, fetchImpl: bookingAnswering(429), schedule, writes, log: quiet });
+    const h = await holdFor(busy, -9);
+    await assert.rejects(() => busy.book(req(h.hold_id), 'throttled-key-1', 'sales-hub'), (e) => e.status === 503 && e.retryable === true);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM placement_bookings WHERE key = 'sales-hub:throttled-key-1'")).rows[0].n, 0);
+    await busy.release(h.hold_id);
+  });
+
+  test('bookings: a Launch27 refusal frees the key and the hold; only a short message comes back', async () => {
+    const refusing = createPlacement({ db, config, fetchImpl: bookingAnswering(422), schedule, writes, log: quiet });
+    const h = await holdFor(refusing, -6);
+    let err;
+    await refusing.book(req(h.hold_id), 'refused-key-1', 'sales-hub').catch((e) => (err = e));
+    assert.equal(err.code, 'invalid_request');
+    assert.deepEqual(err.details, { launch27_status: 422, launch27_message: 'Invalid frequency' });
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM placement_bookings WHERE key = 'sales-hub:refused-key-1'")).rows[0].n, 0);
+    assert.equal((await db.query('SELECT used_at FROM placement_holds WHERE id = $1', [h.hold_id])).rows[0].used_at, null);
+    await refusing.release(h.hold_id);
+  });
+
+  test('bookings: a matching phone alone does not attach the visit to someone else', async () => {
+    const someone = (await mock(`${config.l27BaseUrl}/v1/staff/customers?limit=1`, { headers: { authorization: `Bearer ${(await (await mock(`${config.l27BaseUrl}/latest/login`, { method: 'POST', body: JSON.stringify({ email: 'x@example.com', password: 'demo' }), headers: { 'content-type': 'application/json' } })).json()).bearer}` } }).then((r) => r.json()))[0];
+    const h = await holdFor(placement, -7);
+    const stranger = { first_name: 'Pat', last_name: 'Different', email: 'pat-different@example.com', phone: someone.phone };
+    const { booking } = await placement.book({ ...req(h.hold_id), customer: stranger }, 'phone-only-key-1', 'sales-hub');
+    assert.equal(booking.customer_created, true);
+    // What went to Launch27: a new customer (no existing id), with the caller's own name and email.
+    const sent = (await writes.list()).rows.find((r) => r.source === 'placement' && r.outcome === 'done' && Number(r.booking_id || 0) === Number(booking.booking_id))?.request
+      || (await writes.list()).rows.filter((r) => r.source === 'placement' && r.outcome === 'done')[0].request;
+    assert.equal(sent.user.id, undefined);
+    assert.equal(sent.user.email, stranger.email);
+  });
+
+  test('security: every request is audited without customer details', async () => {
+    await new Promise((r) => setTimeout(r, 50)); // audit rows are written after each answer
+    const log = await placement.auditLog({ days: 1 });
+    assert.ok(log.rows.some((r) => r.caller === 'sales-hub' && r.operation === 'createQuote' && r.status === 200 && /^q_/.test(r.ref)));
+    assert.ok(log.rows.some((r) => r.caller === null && r.status === 401 && r.code === 'unauthorized'));
+    assert.ok(log.rows.some((r) => r.caller === 'reader' && r.code === 'forbidden'));
+    const text = JSON.stringify(log.rows);
+    assert.ok(!text.includes(customer.email) && !text.includes('Example Street'));
+    assert.deepEqual(log.callers.map((c) => c.name).sort(), ['sales-hub']);
+  });
+
+  test('without PLACEMENT_TOKENS the API is not served', async () => {
+    const plain = createApp(loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' }), { db, fetchImpl: mock, placement, schedule, log: quiet }).listen(0);
+    await new Promise((r) => plain.once('listening', r));
+    const res = await fetch(`http://127.0.0.1:${plain.address().port}/api/placement/v1/health`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.notEqual(res.status, 200);
+    plain.closeAllConnections();
+    plain.close();
+  });
+});
