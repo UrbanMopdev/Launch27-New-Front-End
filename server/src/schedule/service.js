@@ -77,6 +77,8 @@ export function slimVisit(b) {
     end: start + duration,
     customer_id: perAddress && u.id != null ? clientId(u.id, street) : u.id ?? null,
     account_id: u.id ?? null,
+    // The Launch27 account's own name (partners book many clients from one account).
+    account_name: perAddress || partner ? [u.company_name, u.name || [u.first_name, u.last_name].filter(Boolean).join(' ')].filter(Boolean).join(' · ') || null : null,
     customer: perAddress ? clientLabel(b.staff_notes, street) : u.name || [u.first_name, u.last_name].filter(Boolean).join(' ') || u.company_name || 'Customer',
     partner: partner?.key || null,
     partner_name: partner?.name || null,
@@ -1061,6 +1063,6 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     };
   }
 
-  return { utilizationSource, reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
+  return { utilizationSource, reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load, _window: windowFor };
 }
 

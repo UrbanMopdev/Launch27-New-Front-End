@@ -26,7 +26,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null, placement = null }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null, placement = null, commercialPlan = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -734,6 +734,47 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     r.get('/commercial/organizations', com(async (req, res) => res.json(await commercial.organizations({ period: per(req), locations: cLocs(req) }))));
     r.get('/commercial/organizations/:key', com(async (req, res) => res.json(await commercial.organization(String(req.params.key), { period: per(req), locations: cLocs(req) }))));
     r.get('/commercial/programs', com(async (req, res) => res.json(await commercial.programs())));
+  }
+
+  // ---------- Commercial workforce plan: team, weekly moves, open slots, partner files ----------
+  // Reads the planner's snapshot; saves only the team's choices. Never writes to Launch27.
+  if (commercialPlan) {
+    const wf = (fn) => wrap(async (req, res) => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    const ids = (v) => String(v || '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    const scope = (req) => ({ locations: ids(req.query.locations), areas: { cornwall: ids(req.query.cornwall) } });
+    r.get('/commercial/workforce/team', wf(async (req, res) => res.json(await commercialPlan.team(scope(req)))));
+    r.get('/commercial/workforce/plan', wf(async (req, res) => res.json(await commercialPlan.plan({ ...scope(req), week: req.query.week ? String(req.query.week) : null }))));
+    r.get('/commercial/workforce/slots', wf(async (req, res) => res.json(await commercialPlan.slots({ ...scope(req), postal: req.query.postal ? String(req.query.postal).slice(0, 10) : null, freq: Number(req.query.freq ?? 1), day: req.query.day === undefined || req.query.day === '' ? null : Number(req.query.day) }))));
+    // The partner file leaves the app, so only leads make it; who and when goes to the audit log.
+    r.get('/commercial/workforce/partner-file', needRole('admin', 'supervisor'), wf(async (req, res) => {
+      const file = await commercialPlan.partnerFile({ ...scope(req), partner: String(req.query.partner || '') });
+      await svc.audit(db, req.user.id, 'commercial.partner_file', 'partner', String(req.query.partner), { open_slots: file.open });
+      res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Content-Disposition': `attachment; filename="${file.filename}"`, 'Cache-Control': 'no-store' });
+      res.send(file.html);
+    }));
+    r.put('/commercial/workforce/cleaners/:id', wf(async (req, res) => {
+      await commercialPlan.setCleaner(req.params.id, { commercial: req.body?.commercial, last_day: req.body?.last_day }, req.user.id);
+      await svc.audit(db, req.user.id, 'commercial.cleaner', 'cleaner', req.params.id, req.body || {});
+      res.json({ ok: true });
+    }));
+    r.put('/commercial/workforce/moves', wf(async (req, res) => {
+      await commercialPlan.setMove(req.body?.key, { status: req.body?.status, assignee_id: req.body?.assignee_id, ends_on: req.body?.ends_on }, req.user.id);
+      await svc.audit(db, req.user.id, 'commercial.move', 'series', String(req.body?.key).slice(0, 80), { status: req.body?.status, assignee_id: req.body?.assignee_id, ends_on: req.body?.ends_on });
+      res.json({ ok: true });
+    }));
+    r.get('/commercial/workforce/settings', wf(async (req, res) => res.json(await commercialPlan.settings())));
+    r.put('/commercial/workforce/settings', needRole('admin', 'supervisor'), wf(async (req, res) => {
+      const next = await commercialPlan.setSettings(req.body || {}, req.user.id);
+      await svc.audit(db, req.user.id, 'commercial.settings', 'settings', '1', req.body || {});
+      res.json(next);
+    }));
   }
 
   // ---------- brands (Residential / Commercial) ----------

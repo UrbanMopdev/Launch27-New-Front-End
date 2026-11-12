@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UrbanMop Homemaking Availability</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;600&display=swap">
+<style>
+/* Layout: one column for a partner coordinator: find-a-slot form first, then the weekly overview, then dates. */
+:root {
+  --bg: #f4f6f4; --surface: #ffffff; --sunken: #eef1ef; --ink: #16201e; --muted: #5a6864; --line: #dbe2df;
+  --com: #0d6b63; --com-soft: #dcefeb; --move: #a95f00; --move-soft: #fbedd8; --ok: #2d7a31; --ok-soft: #e0f0e1;
+  --f-display: "Bricolage Grotesque", "Schibsted Grotesk", system-ui, sans-serif;
+  --f-ui: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0f1514; --surface: #172020; --sunken: #121a19; --ink: #e5edea; --muted: #97a6a1; --line: #293532;
+  --com: #4cbcb0; --com-soft: #163a36; --move: #e8a945; --move-soft: #3a2a10; --ok: #74c477; --ok-soft: #173319; color-scheme: dark } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--f-ui); }
+.wrap { max-width: 980px; margin: 0 auto; padding: 24px max(16px, env(safe-area-inset-right, 0px)) 48px max(16px, env(safe-area-inset-left, 0px)); display: grid; gap: 24px; }
+header { display: grid; gap: 4px; }
+.eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--com); font-weight: 600; }
+h1 { font: 700 28px/1.15 var(--f-display); margin: 0; text-wrap: balance; }
+h2 { font: 600 18px var(--f-display); margin: 0 0 8px; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+label.f { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+input, select, button { font: inherit; color: inherit; }
+input, select { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
+input#pc { width: 9ch; text-transform: uppercase; font-family: var(--f-mono); }
+button { border: 1px solid var(--com); background: var(--com); color: var(--surface); border-radius: 8px; padding: 9px 16px; font-weight: 600; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--com); outline-offset: 2px; }
+.err { color: #b0223a; font-size: 13px; }
+ol.res { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+ol.res li { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; align-items: baseline; }
+ol.res li.best { border-color: var(--com); box-shadow: inset 4px 0 0 var(--com); }
+.when { font: 600 16px var(--f-display); white-space: nowrap; }
+.why { display: grid; gap: 2px; font-size: 14px; min-width: 0; }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.chip.ok { background: var(--ok-soft); color: var(--ok); } .chip.warn { background: var(--move-soft); color: var(--move); } .chip.com { background: var(--com-soft); color: var(--com); }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--sunken); font-weight: 600; }
+td.cell { font-variant-numeric: tabular-nums; }
+.n { font: 600 18px var(--f-display); }
+.dates { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.date { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); display: grid; gap: 4px; }
+.date b { font-family: var(--f-display); }
+.date .s { display: flex; justify-content: space-between; font-size: 13px; font-family: var(--f-mono); }
+footer { font-size: 12.5px; color: var(--muted); display: grid; gap: 6px; }
+a { color: var(--com); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="eyebrow" id="who"></span>
+    <h1>Homemaking availability</h1>
+    <span class="muted" id="range"></span>
+  </header>
+
+  <section class="card" aria-labelledby="find">
+    <h2 id="find">Find a slot for a new client</h2>
+    <p class="muted small" style="margin:0">Enter the client's postal code. Suggestions favour times when we already have a visit nearby, so travel stays short. The postal code stays on this computer.</p>
+    <form id="f">
+      <label class="f">Postal code <input id="pc" maxlength="7" placeholder="K1C 2B3" autocomplete="off" required></label>
+      <label class="f">How often <select id="fq"><option value="1">Every week</option><option value="2">Every 2 weeks</option><option value="0">One visit</option></select></label>
+      <label class="f">Day <select id="dy"><option value="">Any weekday</option></select></label>
+      <button type="submit">Suggest slots</button>
+    </form>
+    <div id="msg" class="err" hidden></div>
+    <ol class="res" id="res"></ol>
+  </section>
+
+  <section class="card" aria-labelledby="ov">
+    <h2 id="ov">Open slots each week</h2>
+    <div id="areasw"></div>
+    <p class="muted small" style="margin:0" id="ovlead"></p>
+    <div class="tbl"><table id="grid"></table></div>
+  </section>
+
+  <section aria-labelledby="bd">
+    <h2 id="bd">Open slots by date</h2>
+    <div class="dates" id="dates"></div>
+  </section>
+
+  <footer>
+    <p id="contact" style="margin:0"></p>
+    <p style="margin:0">Open slots are as of the date above and can be taken by other bookings. UrbanMop confirms every booking. Distances are estimates between postal-area centres (© <a href="https://www.geonames.org/" target="_blank" rel="noopener">GeoNames</a>, CC BY 4.0), not driving directions.</p>
+  </footer>
+</div>
+<script>
+var SNAP = /*SNAPSHOT*/;
+var FSA = /*FSA*/;
+var TRAVEL = /*TRAVEL*/;
+</script>
+<script>
+(function () {
+  "use strict";
+  var D5 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], D3 = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function addDays(iso, k) { var d = new Date(iso + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + k); return d.toISOString().slice(0, 10); }
+  function fmtD(iso, wd) { var p = iso.split("-"), d = new Date(iso + "T12:00:00Z"); return (wd ? D3[(d.getUTCDay() + 6) % 7] + " " : "") + MON[+p[1] - 1] + " " + (+p[2]); }
+  function fmtT(m) { var h = Math.floor(m / 60), mi = m % 60; return (h % 12 || 12) + (mi ? ":" + ("0" + mi).slice(-2) : ":00") + (h >= 12 ? " pm" : " am"); }
+  function km(a, b) {
+    if (!a || !b || !FSA[a] || !FSA[b]) return null;
+    if (a === b) return TRAVEL.sameAreaKm;
+    var R = 6371, p1 = FSA[a][0] * Math.PI / 180, p2 = FSA[b][0] * Math.PI / 180, dp = p2 - p1, dl = (FSA[b][1] - FSA[a][1]) * Math.PI / 180;
+    var h = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+    return 2 * R * Math.asin(Math.sqrt(h)) * TRAVEL.roadFactor;
+  }
+  function mins(k) { return k == null ? null : Math.max(TRAVEL.minGap, Math.round(k / TRAVEL.kmh * 60)); }
+  function slotDate(wi, d) { return addDays(SNAP.weeks[wi], d); }
+  var W = SNAP.weeks.length, last = addDays(SNAP.weeks[W - 1], 6);
+  function areaOf(fsa) { return FSA[fsa] ? (FSA[fsa][1] >= -75.05 ? "C" : "O") : ""; }
+  var AREAS = { O: "Ottawa", C: "Cornwall" }, hasArea = {}; SNAP.options.forEach(function (o) { hasArea[o.l || "O"] = 1; });
+  var both = Object.keys(hasArea).length > 1, view = both ? "O" : Object.keys(hasArea)[0] || "O";
+  function inView(o) { return !both || (o.l || "O") === view; }
+
+  $("who").textContent = "UrbanMop for " + SNAP.partner;
+  $("range").textContent = "Weeks of " + fmtD(SNAP.weeks[0]) + " to " + fmtD(last) + " · prepared " + fmtD(SNAP.generated);
+  $("contact").innerHTML = SNAP.contact ? "To book a slot: " + esc(SNAP.contact) : "To book a slot, contact your UrbanMop coordinator.";
+  SNAP.days.forEach(function (d) { var o = document.createElement("option"); o.value = d; o.textContent = D5[d]; $("dy").appendChild(o); });
+
+  // ---- weekly overview: how many options are open in every week, and in some weeks ----
+  function overview() {
+    var head = "<tr><th>Time</th>" + SNAP.days.map(function (d) { return "<th>" + D5[d] + "</th>"; }).join("") + "</tr>";
+    var rows = SNAP.slots.map(function (sl, si) {
+      return "<tr><th>" + fmtT(sl[0]) + "</th>" + SNAP.days.map(function (d) {
+        var all = 0, some = 0;
+        SNAP.options.forEach(function (o) { if (!inView(o) || o.d !== d || o.s !== si) return; var n = o.w.filter(function (x) { return x.f; }).length; if (n === W) all++; else if (n) some++; });
+        return '<td class="cell">' + (all ? '<span class="n">' + all + '</span> <span class="muted small">every week</span>' : '<span class="muted">—</span>') + (some ? '<br><span class="chip warn">+' + some + " some weeks</span>" : "") + "</td>";
+      }).join("") + "</tr>";
+    }).join("");
+    $("grid").innerHTML = "<thead>" + head + "</thead><tbody>" + rows + "</tbody>";
+    var sw = $("areasw");
+    if (both && !sw.innerHTML) {
+      sw.innerHTML = '<label class="f" style="display:inline-grid">Area <select id="ar">' + ["O", "C"].map(function (a) { return '<option value="' + a + '">' + AREAS[a] + "</option>"; }).join("") + "</select></label>";
+      $("ar").addEventListener("change", function () { view = this.value; overview(); byDate(); });
+    }
+    $("ovlead").textContent = (both ? AREAS[view] + ". " : "") + "Each number is a cleaner free at that day and time in all " + W + " weeks shown, so a weekly client can start right away. “Some weeks” means free most weeks; we arrange cover for the others.";
+  }
+  function byDate() {
+    var html = "";
+    for (var wi = 0; wi < W; wi++) SNAP.days.forEach(function (d) {
+      var date = slotDate(wi, d), parts = SNAP.slots.map(function (sl, si) {
+        var n = SNAP.options.filter(function (o) { return inView(o) && o.d === d && o.s === si && o.w[wi].f; }).length;
+        return '<span class="s"><span>' + fmtT(sl[0]) + "</span><span>" + (n ? n + " open" : "—") + "</span></span>";
+      }).join("");
+      html += '<div class="date"><b>' + fmtD(date, true) + "</b>" + parts + "</div>";
+    });
+    $("dates").innerHTML = html;
+  }
+
+  // ---- suggestions ----
+  function nearest(w, pc) {
+    var best = null;
+    [w.p, w.n].forEach(function (x, i) {
+      if (!x) return; var k = km(x.fsa, pc); if (k == null) return;
+      if (!best || k < best.k) best = { k: k, x: x, before: i === 0 };
+    });
+    return best;
+  }
+  function suggest(e) {
+    e.preventDefault();
+    var raw = $("pc").value.toUpperCase().replace(/\s/g, ""), fsa = raw.slice(0, 3), freq = +$("fq").value, day = $("dy").value;
+    $("msg").hidden = true; $("res").innerHTML = "";
+    if (!/^[A-Z]\d[A-Z]/.test(raw)) { $("msg").textContent = "Enter a postal code like K1C 2B3 (the first three characters are enough)."; $("msg").hidden = false; return; }
+    if (!FSA[fsa]) { $("msg").textContent = "We can't place postal area " + fsa + " on our map. Suggestions below ignore distance."; $("msg").hidden = false; }
+    var cands = [];
+    var area = areaOf(fsa);
+    SNAP.options.forEach(function (o) {
+      if (day !== "" && o.d !== +day) return;
+      if (area && (o.l || "O") !== area) return;
+      var sl = SNAP.slots[o.s], starts = freq === 0 ? o.w.map(function (x, i) { return i; }) : freq === 2 ? [0, 1] : [0];
+      starts.forEach(function (st) {
+        var wk = [];
+        if (freq === 0) wk = [st]; else for (var i = st; i < W; i += freq) wk.push(i);
+        var free = wk.filter(function (i) { return o.w[i].f; });
+        if (!free.length || (freq === 0 && !o.w[st].f)) return;
+        if (freq !== 0 && !o.w[wk[0]].f) return; // first visit must be free
+        var bestK = null, near = null, tight = false;
+        free.forEach(function (i) {
+          var w = o.w[i], nb = nearest(w, fsa);
+          if (nb && (bestK == null || nb.k < bestK)) { bestK = nb.k; near = nb; }
+          if (w.p && FSA[fsa]) { var need = mins(km(w.p.fsa, fsa)); if (need != null && sl[0] - w.p.t < need) tight = true; }
+          if (w.n && FSA[fsa]) { var need2 = mins(km(fsa, w.n.fsa)); if (need2 != null && w.n.t - (sl[0] + sl[1]) < need2) tight = true; }
+        });
+        var missing = wk.filter(function (i) { return !o.w[i].f; });
+        var score = (bestK == null ? 60 : bestK) + missing.length * 6 + (tight ? 8 : 0);
+        cands.push({ o: o, sl: sl, wk: wk, missing: missing, k: bestK, near: near, tight: tight, score: score, first: slotDate(wk[0], o.d) });
+      });
+    });
+    cands.sort(function (a, b) { return a.score - b.score || (a.first < b.first ? -1 : 1); });
+    // one line per day + time + start week; keep the best cleaner for it
+    var seen = {}, out = [];
+    cands.forEach(function (c) { var k = c.o.d + "|" + c.o.s + "|" + c.first; if (seen[k]) return; seen[k] = 1; out.push(c); });
+    out = out.slice(0, 8);
+    if (!out.length) { $("res").innerHTML = '<li class="muted">No open slot matches. Try another day or frequency, or contact UrbanMop.</li>'; return; }
+    $("res").innerHTML = out.map(function (c, i) {
+      var when = freq === 0 ? fmtD(c.first, true) + ", " + fmtT(c.sl[0]) : D5[c.o.d] + "s, " + fmtT(c.sl[0]);
+      var lines = [];
+      if (freq !== 0) lines.push("Starts " + fmtD(c.first, true) + (freq === 2 ? ", every 2 weeks" : ", every week"));
+      if (c.k != null) {
+        var where = c.near.x.mine && c.near.x.addr ? " (your client at " + esc(c.near.x.addr) + ")" : c.near.x.addr ? " (" + esc(c.near.x.acct ? c.near.x.acct + ": " : "") + esc(c.near.x.addr) + ")" : "";
+        lines.push("About " + Math.max(1, Math.round(c.k)) + " km from an existing visit " + (c.near.before ? "ending " + fmtT(c.near.x.t) : "starting " + fmtT(c.near.x.t)) + where);
+      } else lines.push('<span class="muted">No other visit nearby that day to compare with</span>');
+      if (c.missing.length) lines.push('<span class="chip warn">Already booked on ' + c.missing.map(function (i) { return fmtD(slotDate(i, c.o.d)); }).join(", ") + "</span> We would arrange cover for " + (c.missing.length === 1 ? "that date" : "those dates") + ".");
+      else if (freq !== 0) lines.push('<span class="chip ok">Free every ' + (freq === 2 ? "second " : "") + "week shown</span>");
+      if (c.tight) lines.push('<span class="chip warn">Tight travel</span> Little time to get there from the visit before or to the one after; we will confirm.');
+      if (SNAP.showNames) lines.push('<span class="chip com">' + esc(c.o.c) + "</span>");
+      return '<li class="' + (i === 0 ? "best" : "") + '"><span class="when">' + when + '</span><span class="why">' + lines.map(function (l) { return "<span>" + l + "</span>"; }).join("") + "</span></li>";
+    }).join("");
+  }
+  $("f").addEventListener("submit", suggest);
+  overview(); byDate();
+})();
+</script>
+</body>
+</html>
