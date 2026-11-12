@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useBrand } from '../brands/useBrand';
 import { brandLabel } from '../brands/ui';
-import { reportsApi, pct, type UtilFigures, type UtilizationReport } from '../reports/api';
+import { reportsApi, pct, type DataFlag, type UtilFigures, type UtilizationReport } from '../reports/api';
 import { weekLabel } from '../reports/ui';
 
 const AREAS = ['Central', 'North', 'South', 'East', 'West'];
@@ -30,6 +30,7 @@ export function UtilizationPage() {
   // null = the server's default (its today … 6 days later, Toronto time).
   const [range, setRange] = useState<{ from: string; to: string } | null>(null);
   const [area, setArea] = useState<string | null>(null);
+  const [tab, setTab] = useState<'report' | 'check'>('report');
   const q = useQuery({
     queryKey: ['reports', 'utilization', range?.from, range?.to, brand.locationIds],
     queryFn: () => reportsApi.utilization(range?.from ?? null, range?.to ?? null, brand.locationIds),
@@ -47,6 +48,12 @@ export function UtilizationPage() {
         </div>
         {r && <RangePicker value={range || { from: r.from, to: r.to }} onChange={setRange} today={r.today} maxTo={r.max_to} />}
       </header>
+      <div className="ut-tabs" role="tablist">
+        <button role="tab" aria-selected={tab === 'report'} className={tab === 'report' ? 'active' : ''} onClick={() => setTab('report')}>Utilization</button>
+        <button role="tab" aria-selected={tab === 'check'} className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}>
+          Data check{r && issues(r) > 0 && <span className="ut-badge">{issues(r)}</span>}
+        </button>
+      </div>
       <div className="ut-areas" role="group" aria-label="Area">
         {[null, ...AREAS].map((a) => (
           <button key={a || 'all'} className={area === a ? 'active' : ''} aria-pressed={area === a} onClick={() => setArea(a)}>
@@ -61,8 +68,96 @@ export function UtilizationPage() {
           <p className="muted">{(q.error as Error).message}</p>
         </section>
       )}
-      {r && <Report r={r} area={area} setArea={setArea} />}
+      {r && (tab === 'report' ? <Report r={r} area={area} setArea={setArea} /> : <DataCheckView r={r} area={area} />)}
     </div>
+  );
+}
+
+// The cleaner's hours exactly as Launch27 sent them (weekday 0 = Sunday), to compare with its screen.
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function SentRows({ sent }: { sent: UtilizationReport['data_check']['cleaners'][number]['sent'] }) {
+  const line = (r: { weekday: number | null; start: string | null; end: string | null; dayoff: boolean }) =>
+    `${r.dayoff ? 'day off' : `${r.start ?? '(no start)'} – ${r.end ?? '(no end)'}`}`;
+  if (!sent.weekly.length && !sent.dated_total) return <p className="small muted">Nothing: no hours came back.</p>;
+  return (
+    <div className="small ut-sent-body">
+      <div><b>Weekly</b>{sent.weekly.length === 0 && ' none'}</div>
+      {sent.weekly.map((r, i) => <div key={i}>{r.weekday != null ? WD[r.weekday] ?? `weekday ${r.weekday}` : '(no weekday)'}: {line(r)}</div>)}
+      {sent.dated_total > 0 && <div><b>Dates</b> ({sent.dated_total}{sent.dated_total > sent.dated.length ? `, first ${sent.dated.length}` : ''})</div>}
+      {sent.dated.map((r, i) => <div key={`d${i}`}>{r.date}: {line(r)}</div>)}
+    </div>
+  );
+}
+
+const issues = (r: UtilizationReport) => r.data_check.cleaners.filter((c) => c.flags.length).length;
+
+// ---------- data check: what the report knows from Launch27, per cleaner ----------
+const FLAG_HELP: Record<DataFlag, string> = {
+  refused: "Launch27 didn't hand over their hours. Usually the login the planner used isn't allowed to read Team Availability, or Launch27 got too many requests at once. Their available hours count as 0 until fixed.",
+  booked_no_hours: 'They have bookings in these dates but 0 available hours, so their bookings push the area "over". Check their Team Availability in Launch27.',
+  booked_not_taking: 'Their title code says they are not taking bookings ((3), (X), On hold or no code), yet they have bookings. Either the code or the bookings need updating.',
+  no_hours: 'Launch27 answered, but no weekly hours are set for them.',
+  no_home: "Their Launch27 profile has no map location (usually a missing or incomplete home address), so their area shows as Unknown.",
+};
+function DataCheckView({ r, area }: { r: UtilizationReport; area: string | null }) {
+  const dc = r.data_check;
+  const [only, setOnly] = useState<DataFlag | null>(null);
+  const rows = dc.cleaners.filter((c) => (!area || c.area === area) && (!only || c.flags.some((f) => f.kind === only)));
+  const flagged = dc.cleaners.filter((c) => c.flags.length).length;
+  const when = dc.refreshed_at ? new Date(dc.refreshed_at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+  return (
+    <>
+      <section className="card ut-summary">
+        <span className="muted small">{dayName(r.from)} – {dayName(r.to)}{area ? ` · ${area} Ottawa` : ''}</span>
+        <span className={`ut-big${flagged ? ' warn' : ''}`}>{flagged ? `${flagged} ${flagged === 1 ? 'cleaner needs' : 'cleaners need'} a look` : 'No data problems found'}</span>
+        <span className="ut-sub">
+          Cleaners' hours were last read from Launch27 on <b>{when}</b>{dc.read_by === 'sync' ? ' by the automatic sync login' : dc.read_by === 'person' ? " with the login of someone who opened the planner (production has no sync login set up yet, so it refreshes only when the planner is open)" : ''}.
+          {' '}To re-read now: Scheduling planner → Refresh now.
+        </span>
+        <div className="ut-flagchips">
+          {(Object.keys(dc.labels) as DataFlag[]).map((k) => (
+            <button key={k} className={`ut-flagchip${only === k ? ' active' : ''}${dc.counts[k] ? ' has' : ''}`} onClick={() => setOnly(only === k ? null : k)} title={FLAG_HELP[k]}>
+              <b>{dc.counts[k]}</b> {dc.labels[k]}
+            </button>
+          ))}
+        </div>
+        {only && <p className="small muted ut-flaghelp">{FLAG_HELP[only]}</p>}
+      </section>
+      <section className="card flush">
+        <div className="seg-table-head"><h2>By cleaner{area && ` · ${area}`}</h2><span className="muted small">Cleaners taking bookings, plus anyone else with bookings in these dates. Problems first.</span></div>
+        <div className="table-scroll">
+          <table className="seg-table">
+            <thead><tr><th>Cleaner</th><th>What to check</th><th>Status</th><th>Area</th><th className="num">Weekly hours in Launch27</th><th className="num">Available</th><th className="num">Booked</th></tr></thead>
+            <tbody>
+              {rows.map((c) => (
+                <tr key={c.cleaner_id}>
+                  <td>
+                    <Link to={`/schedule/cleaner/${c.cleaner_id}`} className="seg-name">{c.name}</Link>
+                    <details className="ut-sent">
+                      <summary className="small muted">What Launch27 sent</summary>
+                      <SentRows sent={c.sent} />
+                    </details>
+                  </td>
+                  <td>
+                    {c.flags.length === 0 ? <span className="ut-tick ok">✓ looks fine</span> : (
+                      <ul className="ut-flags">
+                        {c.flags.map((f) => <li key={f.kind}>{f.kind === 'refused' && c.availability_error ? c.availability_error : f.label}</li>)}
+                      </ul>
+                    )}
+                  </td>
+                  <td className={c.taking ? '' : 'warn'}>{c.status_label || '—'}{!c.taking && <span className="muted small"> · not taking</span>}</td>
+                  <td className={c.home_location ? 'muted' : 'warn'}>{c.home_location ? c.area : 'Unknown · no home location'}</td>
+                  <td className="num">{c.availability_error ? <span className="warn">—</span> : c.weekly_hours ? h(c.weekly_hours) : <span className="warn">none set</span>}{c.dated_rows > 0 && <span className="muted small"> · {c.dated_rows} date changes</span>}</td>
+                  <td className="num">{h(c.available_h)}</td>
+                  <td className="num">{h(c.booked_h)}<span className="muted small"> · {c.visits} {c.visits === 1 ? 'visit' : 'visits'}</span></td>
+                </tr>
+              ))}
+              {rows.length === 0 && <tr><td colSpan={7} className="muted">Nothing to show.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
   );
 }
 
