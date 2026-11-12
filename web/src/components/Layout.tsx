@@ -45,6 +45,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: string; 
     items: [
       { to: '/commercial/organizations', label: 'Organizations', icon: 'badge' },
       { to: '/commercial/programs', label: 'Hospital programs', icon: 'home' },
+      { to: '/commercial/workforce', label: 'Workforce plan', icon: 'users' },
     ],
   },
   {
