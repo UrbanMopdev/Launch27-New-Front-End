@@ -375,6 +375,21 @@ describe('schedule: sync, plan, assign, changes', () => {
     assert.ok(!(await s.changes()).items.some((c) => c.kind === 'availability'), 'no "hours changed" alerts from a failed read');
   });
 
+  test('hours read by an older version: the next look at the planner re-reads them in full', async () => {
+    const w = world();
+    const db = await openDb();
+    const cfg = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const s = createSchedule({ db, config: cfg, fetchImpl: w.fetchImpl, log: quiet, now: () => NOW, retryDelayMs: 0 });
+    await s.sync();
+    await db.query("UPDATE schedule_snapshots SET data = data - 'hours_v'");
+    const s2 = createSchedule({ db, config: cfg, fetchImpl: w.fetchImpl, log: quiet, now: () => NOW + 60_000, retryDelayMs: 0 });
+    await s2.maybeRun({ bearer: 'b' });
+    while (s2.isRunning()) await new Promise((r) => setTimeout(r, 20));
+    const runs = (await db.query('SELECT trigger FROM schedule_runs ORDER BY id')).rows.map((r) => r.trigger);
+    assert.equal(runs.at(-1), 'viewer:full');
+    await db.close();
+  });
+
   test('quick refresh: next 14 days every few minutes; moved further out reads as moved, not cancelled', async () => {
     const w = world();
     const db = await openDb();
