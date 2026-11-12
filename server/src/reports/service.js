@@ -4,6 +4,8 @@
 // live schedule. Cleaner pay is only returned to admins.
 import { addDays, localDate, mondayOf } from '../schedule/rules.js';
 import { harmonizePartners } from '../commercial/partners.js';
+import { clampRange, utilizationFacts, utilizationReport } from './utilization.js';
+import { UTILIZATION } from './utilization-config.js';
 import { PERIODS, cleanerRow, cleanerStats, flagsFor, indexVisits, median, outsideArea, pct, periodRange, regularClients, round1, sameCleaner, slimReportVisit, timing, weeklySeries } from './compute.js';
 
 const DAYS_BACK = 365;
@@ -322,7 +324,31 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     return { taken_at: s?.taken_at || null, running: !!running, last_error: last?.status === 'failed' ? last.error : null, covers_from: s?.from || null };
   }
 
+  // Utilization (read-only): of cleaners' open hours from..to, how much is spoken for and how
+  // much is left to book. Built from the planner's live copy (8 weeks ahead).
+  async function utilization({ from, to, locations = null } = {}) {
+    if (!schedule?.utilizationSource) throw Object.assign(new Error('The scheduling planner is not running'), { status: 409 });
+    let src;
+    try {
+      src = await schedule.utilizationSource();
+    } catch (err) {
+      throw Object.assign(new Error(err.message), { status: err.status || 409 });
+    }
+    const maxTo = addDays(src.today, 55);
+    const range = clampRange(src.today, from, to, maxTo);
+    const facts = utilizationFacts({ today: src.today, cleaners: src.cleaners, visits: src.visits, holidays: src.holidays, unavailable: src.unavailable, locations });
+    // Scheduling insights' own figures, for "Check the numbers".
+    const { ov } = await plannerView(locations);
+    let existing = null;
+    if (ov) {
+      const rows = ov.rows.filter((r) => r.assignable);
+      const w4 = (k) => rows.reduce((m, r) => m + r.weeks.slice(0, 4).reduce((a, x) => a + x[k], 0), 0);
+      existing = { capacity4: w4('capacity'), booked4: w4('booked'), unassigned_visits: ov.counts.unassigned_visits, tolerance: Math.max(0.5, rows.length * 4 * 0.05) };
+    }
+    return utilizationReport({ facts, ...range, maxTo, cfg: UTILIZATION, existing, takenAt: src.taken_at });
+  }
+
   // The raw year of visits (for the Commercial area).
   const visitsSnapshot = () => need();
-  return { sync, start, maybeRun, scheduling, cleaners, cleaner, status, visitsSnapshot, isRunning: () => !!running, mondayOf };
+  return { sync, start, maybeRun, scheduling, utilization, cleaners, cleaner, status, visitsSnapshot, isRunning: () => !!running, mondayOf };
 }

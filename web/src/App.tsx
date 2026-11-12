@@ -13,6 +13,7 @@ import { SegmentPage } from './pages/SegmentPage';
 import { SchedulingPage } from './pages/Scheduling';
 import { CleanerPlanPage } from './pages/CleanerPlan';
 import { SchedulingInsightsPage } from './pages/SchedulingInsights';
+import { UtilizationPage } from './pages/Utilization';
 import { CleanerReportsPage, CleanerReportPage } from './pages/CleanerReports';
 import { CustomerInsightsPage } from './pages/CustomerTrends';
 import { CustomerProfilePage } from './pages/CustomerProfile';
@@ -87,6 +88,8 @@ export function App() {
         <Route path="commercial/programs" element={<ProgramsPage />} />
         <Route path="reports/customers" element={<CustomerInsightsPage />} />
         <Route path="reports/scheduling" element={<SchedulingInsightsPage />} />
+        <Route path="reports/utilization" element={<UtilizationPage />} />
+        <Route path="reports/headroom" element={<Navigate to="/reports/utilization" replace />} />
         <Route path="reports/cleaners" element={<CleanerReportsPage />} />
         <Route path="reports/cleaners/:id" element={<CleanerReportPage />} />
         <Route path="customers/segments/:segment" element={<SegmentPage />} />

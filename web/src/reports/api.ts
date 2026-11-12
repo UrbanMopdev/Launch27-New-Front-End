@@ -75,6 +75,26 @@ export interface CleanerReport {
   last40: { date: string; late: number; long: boolean; enroute: boolean; customer: string }[];
 }
 
+export interface UtilFigures {
+  closed_h: number; available_h: number; assigned_h: number; unassigned_h: number; unassigned_visits: number;
+  not_taking_h: number; not_taking_visits: number; travel_h: number; spoken_h: number; left_h: number;
+  utilization: number | null; room_bookings: number; typical_booking_h: number;
+}
+export interface UtilizationReport {
+  taken_at: string | null; today: string; from: string; to: string; max_to: string; avg_leg_min: number;
+  totals: UtilFigures & { cleaners: number; customers: number; customers_recurring: number };
+  areas: (UtilFigures & { area: string; cleaners: number; customers: number; customers_recurring: number })[];
+  cleaners: { cleaner_id: number; name: string; area: string; status_label: string | null; visits: number; available_h: number; assigned_h: number; travel_h: number; travel_per_visit_min: number | null; left_h: number; utilization: number | null; if_left: number | null; area_short: boolean }[];
+  by_day: (UtilFigures & { date: string; areas: Record<string, UtilFigures> })[];
+  trend: { week: string; total: number | null; areas: Record<string, number | null> }[];
+  reconcile: null | {
+    capacity: { existing: number; sundays: number; closed: number; other_brand: number; floor: number; result: number; ties: boolean };
+    booked: { existing: number; sundays: number; other_brand: number; result: number; ties: boolean };
+    unassigned: { existing: number; other_brand: number; sundays: number; outside: number; result: number; ties: boolean };
+    hours_from: string; hours_to: string;
+  };
+}
+
 export interface ReportStatus { taken_at: string | null; running: boolean; last_error: string | null; covers_from: string | null }
 
 async function call<T>(method: string, path: string): Promise<T> {
@@ -93,6 +113,7 @@ export const reportsApi = {
   cleaners: (period: Period, locations?: number[] | null) => call<CleanersReport>('GET', `/cleaners?period=${period}${locations ? `&locations=${locations.join(',')}` : ''}`),
   cleaner: (id: number, period: Period) => call<CleanerReport>('GET', `/cleaners/${id}?period=${period}`),
   refresh: () => call<{ running: boolean }>('POST', '/refresh'),
+  utilization: (from: string | null, to: string | null, locations?: number[] | null) => call<UtilizationReport>('GET', `/utilization?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(locations ? { locations: locations.join(',') } : {}) })}`),
 };
 
 export const pct = (x: number | null | undefined, digits = 0) => (x == null ? '—' : `${(x * 100).toFixed(digits)}%`);
