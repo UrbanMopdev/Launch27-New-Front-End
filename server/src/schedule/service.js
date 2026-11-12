@@ -10,6 +10,7 @@ import {
 
 const PAST_DAYS = 91;
 const AHEAD_DAYS = 56;
+const AVAIL_CHUNK = 28; // days per availability request (Launch27's calendar asks for 42)
 const NEAR_DAYS = 14; // problems are raised for this many days ahead
 const NEAR_EVERY_MS = 3 * 60_000; // next 14 days of bookings
 const FULL_EVERY_MS = 60 * 60_000; // cleaners' hours and status, the whole window
@@ -359,49 +360,89 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return b;
   }
 
-  // A cleaner's hours from Launch27 (Team Availability). A refusal is retried once after a pause
-  // when it looks temporary (too many requests, server error, network), and is recorded on the
-  // cleaner rather than hidden, so the Utilization data check can show it.
-  async function availabilityFor(bearer, id, t) {
-    const query = { from: addDays(t, -7), to: addDays(t, AHEAD_DAYS) };
+  // A cleaner's hours from Launch27 (Team Availability), asked in two parts so one can never wipe
+  // the other:
+  //  - weekly hours: a plain request (no dates), as before Nov 9;
+  //  - one-day changes (a day off, a short day): dated rows, asked AVAIL_CHUNK days at a time
+  //    (Launch27's own calendar asks for 6 weeks at once).
+  // A refusal that looks temporary (too many requests, server error, network) is retried once after
+  // a pause. One that still fails keeps what the last snapshot had for that part and is recorded on
+  // the cleaner (Utilization → Data check) and in the log; it is never read as "no hours".
+  async function availabilityFor(bearer, id, t, prevRows) {
     const path = `/v1/staff/teams/${id}/availability`;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const rows = await get(bearer, path, query);
-        return { rows: Array.isArray(rows) ? rows : [], error: Array.isArray(rows) ? null : 'Launch27 answered with no list of hours' };
-      } catch (err) {
-        const s = err.l27Status;
-        const temporary = !s || s === 429 || s >= 500;
-        if (temporary && attempt === 0) {
-          await new Promise((r) => setTimeout(r, retryDelayMs));
-          continue;
+    const old = Array.isArray(prevRows) ? prevRows : null;
+    const read = async (query) => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const rows = await get(bearer, path, query);
+          if (!Array.isArray(rows)) return { rows: null, error: 'Launch27 answered with no list of hours' };
+          return { rows, error: null };
+        } catch (err) {
+          const s = err.l27Status;
+          const temporary = !s || s === 429 || s >= 500;
+          if (temporary && attempt === 0) {
+            await new Promise((r) => setTimeout(r, retryDelayMs));
+            continue;
+          }
+          const why = s === 401 || s === 403 ? `not allowed for this login (${s})` : s === 404 ? 'not found (404)' : s === 429 ? 'too many requests (429)' : s ? `error ${s}` : `no answer (${String(err.message).slice(0, 80)})`;
+          return { rows: null, error: `Launch27 refused: ${why}` };
         }
-        const why = s === 401 || s === 403 ? `not allowed for this login (${s})` : s === 404 ? 'not found (404)' : s === 429 ? 'too many requests (429)' : s ? `error ${s}` : `no answer (${String(err.message).slice(0, 80)})`;
-        return { rows: [], error: `Launch27 refused: ${why}` };
+      }
+    };
+    const errors = [];
+    const w = await read({});
+    if (w.error) errors.push(w.error);
+    const weekly = (w.rows || old || []).filter((r) => !r.date);
+    const end = addDays(t, AHEAD_DAYS);
+    const dated = [];
+    for (let from = addDays(t, -7); from <= end; from = addDays(from, AVAIL_CHUNK)) {
+      const to = addDays(from, AVAIL_CHUNK - 1) < end ? addDays(from, AVAIL_CHUNK - 1) : end;
+      const d = await read({ from, to });
+      if (d.error) errors.push(`${d.error} (one-day changes ${from} to ${to})`);
+      for (const r of d.rows || old || []) {
+        const day = r.date ? String(r.date).slice(0, 10) : null;
+        if (day && day >= from && day <= to) dated.push(r);
       }
     }
+    return { rows: [...weekly, ...dated], error: errors[0] || null };
   }
 
-  async function fullData(bearer, t, byPerson = false) {
+  async function fullData(bearer, t, byPerson = false, prev = null) {
     const teams = (await pullAll(bearer, '/v1/staff/teams', {}, 40)).filter((x) => x.active !== false);
+    const before = new Map((prev?.cleaners || []).map((c) => [c.id, c.availability]));
     const cleaners = [];
     let refused = 0;
-    for (const tm of teams) {
-      const c = parseCleaner(tm);
-      // With a date range Launch27 also returns one-day changes (a day off, a short day) on top of
-      // the weekly hours; without one it returns only the weekly hours.
-      const av = await availabilityFor(bearer, tm.id, t);
-      c.availability = av.rows;
-      c.availability_error = av.error;
-      if (av.error) refused++;
-      c.weekly_hours = weeklyHours(c.availability);
-      c.area = areaOf(c);
-      c.share = tm.share || null;
-      cleaners.push(c);
+    let firstError = null;
+    for (let i = 0; i < teams.length; i += 4) {
+      const batch = await Promise.all(teams.slice(i, i + 4).map(async (tm) => {
+        const c = parseCleaner(tm);
+        const av = await availabilityFor(bearer, tm.id, t, before.get(c.id));
+        c.availability = av.rows;
+        c.availability_error = av.error;
+        if (av.error) {
+          refused++;
+          firstError ||= av.error;
+        }
+        c.weekly_hours = weeklyHours(c.availability);
+        c.area = areaOf(c);
+        c.share = tm.share || null;
+        return c;
+      }));
+      cleaners.push(...batch);
     }
     const visits = await pullRange(bearer, addDays(t, -PAST_DAYS), addDays(t, AHEAD_DAYS));
     const holidays = await closedDates(bearer, cleaners, t);
-    if (refused) log.warn('schedule: Launch27 refused some cleaners\' hours', { refused, cleaners: teams.length });
+    if (refused) log.warn("schedule: Launch27 refused some cleaners' hours; kept the last ones read", { refused, cleaners: teams.length, first_error: firstError });
+    // What Launch27 sent, in short, for cleaners who come out with no working hours at all (names
+    // and row shapes only), so a wrong reading can be compared with Launch27's Team Availability.
+    const noHours = cleaners.filter((c) => !weeklyHours(c.availability) && c.assignable);
+    const shape = (r) => [r.date ? String(r.date).slice(0, 10) : `wd${r.weekday}`, r.dayoff ? 'off' : `${r.start_time ?? '-'}/${r.end_time ?? '-'}`].join(' ');
+    log.info('schedule: cleaner hours read', {
+      cleaners: cleaners.length,
+      with_weekly_hours: cleaners.filter((c) => weeklyHours(c.availability) > 0).length,
+      no_hours: noHours.length,
+      examples: noHours.slice(0, 12).map((c) => ({ id: c.id, name: c.name, weekly_rows: c.availability.filter((r) => !r.date).length, dated_rows: c.availability.filter((r) => r.date).length, first_rows: c.availability.slice(0, 4).map(shape) })),
+    });
     const iso = new Date(now()).toISOString();
     // cleaners_by: whose login read the cleaners' hours ("sync login" or a person who opened the planner).
     return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits, holidays, cleaners_by: byPerson ? 'person' : 'sync' };
@@ -457,7 +498,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       const restart = config.l27Mode === 'mock' && loaded && loaded.sample !== sample;
       const prev = restart ? null : loaded;
       const doNear = kind === 'near' && prev && prev.today === t;
-      const data = { ...(doNear ? await nearData(bearer, prev, t) : await fullData(bearer, t, byPerson)), sample };
+      const data = { ...(doNear ? await nearData(bearer, prev, t) : await fullData(bearer, t, byPerson, prev)), sample };
       await loadUnavailable();
       const next = index(data);
       const found = [...(prev ? diff(prev, next) : []), ...problems(next)];
