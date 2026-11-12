@@ -9,6 +9,7 @@
 | Launch27 | synthetic (`L27_MODE=mock`) | synthetic (`L27_MODE=mock`) | live |
 | Launch27 writes | to the in-memory fake only | to the in-memory fake only | only if `L27_ALLOW_WRITES=true` |
 | SMS / email / notifications | sandbox (never sent) | sandbox (never sent) | `NOTIFICATIONS_MODE` |
+| Email mailboxes (Gmail) | never read (`GMAIL_*` ignored) | never read (`GMAIL_*` ignored) | read every minute (docs/email.md) |
 | RingCentral | sandbox server only | sandbox server only | production server |
 | Channel simulator | on | on | off |
 | Deploys | every push to `develop` after CI | every merge to `staging` after CI | merge to `main` after CI + QA approval |

@@ -301,6 +301,20 @@ export interface Canned {
   channels: Channel[];
 }
 
+export type ChannelState = 'live' | 'sandbox' | 'not_connected';
+export interface ChannelAccount {
+  address: string;
+  provider: string;
+  last_poll_at: string | null;
+  last_ok_at: string | null;
+  last_error: string | null;
+  ingested_count: number;
+}
+export interface ChannelStatus {
+  email: { state: ChannelState; provider: string | null; send_from?: string[]; accounts: ChannelAccount[] };
+  sms: { state: ChannelState; provider: string | null };
+}
+
 export interface Meta {
   queues: Queue[];
   sla_policies: SlaPolicy[];
@@ -308,6 +322,7 @@ export interface Meta {
   canned: Canned[];
   identities: { email: string[]; sms: string[] };
   connected_channels: Channel[];
+  channels: ChannelStatus;
   portal?: { name: string; links: { name: string; url: string }[] };
   ringcentral: { clientId: string; appServer: string | null; record?: boolean } | null;
   holidays: { day: string; name: string }[];
@@ -383,6 +398,7 @@ export const inbox = {
   clearQaCopy: () => call<void>('DELETE', '/admin/qa-copy'),
   saveSchedule: (s: Schedule) => call<Schedule>('PUT', s.id ? `/admin/schedules/${s.id}` : '/admin/schedules', s),
   meta: () => call<Meta>('GET', '/meta'),
+  channels: () => call<ChannelStatus>('GET', '/channels'),
   counts: () => call<Counts>('GET', '/counts'),
   list: (params: { view?: string; status?: string; channel?: string; role?: string; q?: string; contact_id?: number; booking_id?: number }) => call<ConversationRow[]>('GET', `/conversations${qs(params)}`),
   get: (id: number) => call<ConversationDetail>('GET', `/conversations/${id}`),
