@@ -433,6 +433,16 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const visits = await pullRange(bearer, addDays(t, -PAST_DAYS), addDays(t, AHEAD_DAYS));
     const holidays = await closedDates(bearer, cleaners, t);
     if (refused) log.warn("schedule: Launch27 refused some cleaners' hours; kept the last ones read", { refused, cleaners: teams.length, first_error: firstError });
+    // What Launch27 sent, in short, for cleaners who come out with no working hours at all (names
+    // and row shapes only), so a wrong reading can be compared with Launch27's Team Availability.
+    const noHours = cleaners.filter((c) => !weeklyHours(c.availability) && c.assignable);
+    const shape = (r) => [r.date ? String(r.date).slice(0, 10) : `wd${r.weekday}`, r.dayoff ? 'off' : `${r.start_time ?? '-'}/${r.end_time ?? '-'}`].join(' ');
+    log.info('schedule: cleaner hours read', {
+      cleaners: cleaners.length,
+      with_weekly_hours: cleaners.filter((c) => weeklyHours(c.availability) > 0).length,
+      no_hours: noHours.length,
+      examples: noHours.slice(0, 12).map((c) => ({ id: c.id, name: c.name, weekly_rows: c.availability.filter((r) => !r.date).length, dated_rows: c.availability.filter((r) => r.date).length, first_rows: c.availability.slice(0, 4).map(shape) })),
+    });
     const iso = new Date(now()).toISOString();
     // cleaners_by: whose login read the cleaners' hours ("sync login" or a person who opened the planner).
     return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits, holidays, cleaners_by: byPerson ? 'person' : 'sync' };
