@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { utilizationFacts, utilizationReport, clampRange } from '../src/reports/utilization.js';
+import { utilizationFacts, utilizationReport, clampRange, dataCheck } from '../src/reports/utilization.js';
 import { createReports } from '../src/reports/service.js';
 import { createSchedule } from '../src/schedule/service.js';
 import { createMockLaunch27 } from '../src/mock/launch27.js';
@@ -140,4 +140,77 @@ describe('utilization: on the sample Launch27', () => {
       await db.close();
     }
   });
+});
+
+describe('utilization: data check', () => {
+  test('flags refused hours, booked with no hours, booked while not taking, no hours set, no home location', () => {
+    const NOHOURS = { id: 4, name: 'No hours', area: 'Unknown', assignable: true, location_ids: [1], lat: null, lng: null, rules: {}, availability: [] };
+    const REFUSED = { ...NOHOURS, id: 5, name: 'Refused', ...HOME, area: 'Central', availability_error: 'Launch27 refused: not allowed for this login (403)' };
+    const visits = [...VISITS, visit('v8', '2026-11-10', 600, 720, [4]), visit('v9', '2026-11-11', 600, 720, [5])];
+    const all = [A, B, OFF, NOHOURS, REFUSED].map((c) => ({ ...c, weekly_hours: c.availability.length ? 8 * 7 : 0, status_label: c.assignable ? 'Active' : 'On hold' }));
+    const f = utilizationFacts({ today: TODAY, cleaners: all, visits, holidays: HOLIDAYS, until: '2026-11-15' });
+    const dc = dataCheck({ facts: f, inWin: (d) => d >= TODAY && d <= '2026-11-15', cleaners: all, source: { full_at: '2026-11-09T10:00:00Z', cleaners_by: 'person' } });
+    const kinds = (id) => dc.cleaners.find((c) => c.cleaner_id === id).flags.map((x) => x.kind);
+    assert.deepEqual(kinds(5), ['refused', 'booked_no_hours']);
+    assert.deepEqual(kinds(4), ['booked_no_hours', 'no_hours', 'no_home']);
+    assert.deepEqual(kinds(3), ['booked_not_taking']);
+    assert.deepEqual(kinds(1), []);
+    assert.equal(dc.cleaners[0].cleaner_id, 5); // problems first, refused at the top
+    assert.equal(dc.counts.booked_no_hours, 2);
+    assert.equal(dc.read_by, 'person');
+  });
+
+  test('the planner records a refusal instead of hiding it, and retries a temporary one', async () => {
+    const db = await openDb();
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const mock = createMockLaunch27({ password: 'demo' });
+    let tries429 = 0;
+    const fetchImpl = async (url, init) => {
+      if (url.includes('/v1/staff/teams/9000/availability')) return new Response('{}', { status: 403 });
+      if (url.includes('/v1/staff/teams/9001/availability') && tries429++ === 0) return new Response('{}', { status: 429 });
+      return mock(url, init);
+    };
+    const schedule = createSchedule({ db, config, fetchImpl, log: quiet, retryDelayMs: 0 });
+    await schedule.sync();
+    const src = await schedule.utilizationSource();
+    const c0 = src.cleaners.find((c) => c.id === 9000);
+    const c1 = src.cleaners.find((c) => c.id === 9001);
+    assert.equal(c0.availability_error, 'Launch27 refused: not allowed for this login (403)');
+    assert.deepEqual(c0.availability, []);
+    assert.equal(c1.availability_error, null); // 429 once, then fine on the retry
+    assert.ok(c1.availability.length > 0);
+    assert.equal(src.cleaners_by, 'sync');
+    const reports = createReports({ db, config, fetchImpl, schedule, log: quiet });
+    const r = await reports.utilization({});
+    assert.ok(r.data_check.cleaners.find((c) => c.cleaner_id === 9000).flags.some((f) => f.kind === 'refused'));
+    await db.close();
+  });
+});
+
+describe('reading Launch27 hours', () => {
+  test('times in any common format', async () => {
+    const { toMinutes } = await import('../src/schedule/rules.js');
+    assert.deepEqual(['09:00', '9:00:00', '9:00 AM', '9am', '5:00 PM', '5pm', '17:30', '12:00 PM', '12:30 AM'].map(toMinutes), [540, 540, 540, 540, 1020, 1020, 1050, 720, 30]);
+  });
+  test('a date row with no times does not wipe out the weekly hours; split days count; AM/PM read right', async () => {
+    const { workingWindow, weeklyHours } = await import('../src/schedule/rules.js');
+    const rows = [
+      { date: null, weekday: 1, dayoff: false, start_time: '9:00 AM', end_time: '5:00 PM' },
+      { date: null, weekday: 2, dayoff: false, start_time: '08:00', end_time: '12:00' },
+      { date: null, weekday: 2, dayoff: false, start_time: '13:00', end_time: '17:00' },
+      { date: '2026-11-16', weekday: null, dayoff: false, start_time: null, end_time: null }, // Monday, says nothing
+      { date: '2026-11-23', weekday: null, dayoff: true, start_time: null, end_time: null }, // Monday off
+      { date: '2026-11-30', weekday: null, dayoff: false, start_time: '10:00', end_time: '14:00' }, // short Monday
+    ];
+    assert.deepEqual(workingWindow(rows, '2026-11-16'), [540, 1020]);
+    assert.equal(workingWindow(rows, '2026-11-23'), null);
+    assert.deepEqual(workingWindow(rows, '2026-11-30'), [600, 840]);
+    assert.deepEqual(workingWindow(rows, '2026-11-17'), [480, 1020]);
+    assert.equal(weeklyHours(rows), 8 + 8);
+  });
+});
+test('a split day counts its blocks, not the gap', async () => {
+  const { workingMinutes } = await import('../src/schedule/rules.js');
+  const rows = [{ date: null, weekday: 2, dayoff: false, start_time: '08:00', end_time: '12:00' }, { date: null, weekday: 2, dayoff: false, start_time: '13:00', end_time: '17:00' }];
+  assert.equal(workingMinutes(rows, '2026-11-17'), 480);
 });
