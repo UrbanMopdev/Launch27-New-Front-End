@@ -1,6 +1,7 @@
 // /api: the support workspace. Every route needs a signed-in agent (same Launch27 login
 // as the rest of the app); the agent's Launch27 token is used for lookups so Launch27
 // keeps enforcing their permissions.
+import { canSeeUtilization } from '../config.js';
 import express from 'express';
 import { json as toJson } from '../db/index.js';
 import { lintRules, route } from './routing.js';
@@ -1029,6 +1030,12 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req), { locations: repLocs(req) }))));
     r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req), locations: repLocs(req) }))));
     r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req), locations: repLocs(req) }))));
+    // Utilization: everyone outside production unless UTILIZATION_EMAILS narrows it; 404 otherwise.
+    // ?from=YYYY-MM-DD&to=YYYY-MM-DD (clamped to today … the end of the planner's 8 weeks).
+    r.get('/reports/utilization', rep(async (req, res) => {
+      if (!canSeeUtilization(config, req.user.email)) return res.status(404).json({ error: 'Not found' });
+      res.json(await reports.utilization({ from: req.query.from ? String(req.query.from) : null, to: req.query.to ? String(req.query.to) : null, locations: repLocs(req) }));
+    }));
     r.post('/reports/refresh', needRole('admin'), rep(async (req, res) => {
       reports.start({ bearer: req.bearer });
       res.status(202).json({ running: true });
