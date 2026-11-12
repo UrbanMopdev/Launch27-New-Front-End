@@ -165,8 +165,10 @@ export function loadConfig(env = process.env) {
     migrateOnBoot: env.MIGRATE_ON_BOOT === undefined ? true : truthy(env.MIGRATE_ON_BOOT),
     adminEmails: env.ADMIN_EMAILS || '',
     supervisorEmails: env.SUPERVISOR_EMAILS || '',
-    // Headroom report: only these logins see it, and never in production (for now).
-    headroomEmails: isProd ? [] : String(env.HEADROOM_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
+    // Headroom report: everyone outside production (off in production for now). HEADROOM_EMAILS,
+    // if set, narrows it to those logins.
+    headroomEnabled: !isProd,
+    headroomEmails: String(env.HEADROOM_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
     simulator: env.INBOX_SIMULATOR === undefined ? !isProd : truthy(env.INBOX_SIMULATOR),
     // Sample inbox conversations on an empty database. Never in production.
     sampleData: !isProd && truthy(env.SAMPLE_DATA),
@@ -227,4 +229,11 @@ export function configErrors(config) {
   if (placementTokens.length && config.onRailway && (!process.env.SESSION_SECRET || config.sessionSecret.length < 32)) errors.push('SESSION_SECRET must be a random value of at least 32 characters wherever the placement API is served.');
   if (config.placementBadIps?.length) errors.push(`PLACEMENT_ALLOWED_IPS: not an IP address or IPv4 range: ${config.placementBadIps.join(', ')}.`);
   return errors;
+}
+
+// Who sees the Headroom report: everyone outside production, unless HEADROOM_EMAILS narrows it.
+export function canSeeHeadroom(config, email) {
+  if (!config?.headroomEnabled) return false;
+  const list = config.headroomEmails || [];
+  return !list.length || list.includes(String(email || '').toLowerCase());
 }
