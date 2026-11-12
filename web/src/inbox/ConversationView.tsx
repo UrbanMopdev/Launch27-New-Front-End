@@ -156,12 +156,35 @@ function renderMessage(m: Message) {
           <div key={m.id} className={`tl-msg ${m.direction}`}>
             {m.subject && m.channel === 'email' && <div className="tl-subject">{m.subject}</div>}
             <div className="pre">{m.body}</div>
+            {m.channel === 'email' && <EmailExtras m={m} />}
             <div className="tl-meta">
               {m.channel && <Icon name={m.channel} size={12} />} {m.channel ? CHANNEL_LABEL[m.channel] : ''} · {m.direction === 'out' ? m.author_name || 'Agent' : displayIdentity(m.from_addr)} · {fmtTime(m.created_at)}
               {m.direction === 'out' && <span className={notSent ? 'delivery bad' : 'delivery'}> · {m.delivery_state === 'not_connected' ? 'not sent: channel not connected' : m.delivery_state === 'sandbox' ? 'sandbox: not sent to customer' : m.delivery_state}</span>}
             </div>
           </div>
         );
+}
+
+// Email details under a message: who else was copied, attachment names, the quoted history.
+function EmailExtras({ m }: { m: Message }) {
+  const [open, setOpen] = useState(false);
+  const cc = Array.isArray(m.meta?.cc) ? (m.meta.cc as string[]) : [];
+  const files = Array.isArray(m.meta?.attachments) ? (m.meta.attachments as { filename: string; size: number }[]) : [];
+  const full = typeof m.meta?.full_body === 'string' ? m.meta.full_body : null;
+  if (!cc.length && !files.length && !full && !(m.delivery_state === 'failed' && m.meta?.note)) return null;
+  return (
+    <div className="small muted email-extras">
+      {cc.length > 0 && <div>Cc: {cc.join(', ')}</div>}
+      {files.length > 0 && <div><Icon name="note" size={12} /> {files.map((f) => f.filename).join(', ')} <span>(open the mailbox in Gmail to download)</span></div>}
+      {m.delivery_state === 'failed' && m.meta?.note && <div className="error small">Not sent: {String(m.meta.note)}</div>}
+      {full && (
+        <>
+          <button type="button" className="link small" onClick={() => setOpen(!open)}>{open ? 'Hide earlier messages' : 'Show earlier messages in this email'}</button>
+          {open && <div className="pre quoted">{full}</div>}
+        </>
+      )}
+    </div>
+  );
 }
 
 const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: boolean; onSent: () => void }>(function Composer({ detail, onSent }, ref) {
@@ -198,6 +221,9 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
   const fromOptions = channel === 'email' ? meta.data?.identities.email : meta.data?.identities.sms;
   const sender = from || (channel === c.channel ? c.our_identity : fromOptions?.[0]) || '';
   const connected = meta.data?.connected_channels.includes(channel);
+  const sandboxed = meta.data?.channels?.[channel === 'email' ? 'email' : 'sms']?.state === 'sandbox';
+  // A new email (or a conversation started without one) needs a subject line.
+  const needsSubject = channel === 'email' && (channel !== c.channel || !c.subject);
 
   // "/" opens canned replies; type to filter.
   const slash = mode === 'reply' && /(^|\s)\/(\w*)$/.exec(text);
@@ -255,7 +281,7 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
           </div>
         )}
       </div>
-      {mode === 'reply' && channel === 'email' && channel !== c.channel && <input className="full" placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />}
+      {mode === 'reply' && needsSubject && <input className="full" placeholder="Subject" aria-label="Email subject" value={subject} onChange={(e) => setSubject(e.target.value)} />}
       <div className="composer-box">
         <textarea
           ref={area}
@@ -282,10 +308,11 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
       <div className="composer-foot">
         <span className="muted small">
           {mode === 'reply' && !connected && `${CHANNEL_LABEL[channel]} isn't connected yet: replies are saved, not sent.`}
+          {mode === 'reply' && connected && sandboxed && 'Sandbox: replies are recorded here, not sent to the customer.'}
           {mode === 'reply' && channel === 'sms' && text && <span className="mono"> {text.length} chars · {segments} text{segments === 1 ? '' : 's'}</span>}
           {!text && <span> Type <span className="kbd">/</span> for saved replies · <span className="kbd">Ctrl</span>+<span className="kbd">Enter</span> to send</span>}
         </span>
-        <button disabled={busy || !text.trim() || !!optedOut} className={mode === 'note' ? 'note-btn' : ''} onClick={send}>
+        <button disabled={busy || !text.trim() || !!optedOut || (mode === 'reply' && needsSubject && !subject.trim())} title={mode === 'reply' && needsSubject && !subject.trim() ? 'Add a subject first' : undefined} className={mode === 'note' ? 'note-btn' : ''} onClick={send}>
           {mode !== 'note' && <Icon name="send" />}
           {busy ? 'Saving…' : mode === 'note' ? 'Add note' : 'Send'}
         </button>

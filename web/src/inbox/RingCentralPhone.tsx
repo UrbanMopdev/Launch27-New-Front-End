@@ -92,7 +92,10 @@ export function RingCentralPhone() {
     const s = document.createElement('script');
     s.id = 'rc-adapter-script';
     // defaultDirection=left: the widget sits bottom left, clear of the call card (top right).
-    const params = new URLSearchParams({ clientId: cfg.clientId, defaultDirection: 'left', ...(cfg.appServer ? { appServer: cfg.appServer } : {}) });
+    // disableGlip / disableMeeting: the portal uses calls only. Our RingCentral app has no
+    // Team Messaging or Video permissions, so leaving those features on makes the widget call
+    // APIs that always fail (403), which RingCentral flags as a high error rate.
+    const params = new URLSearchParams({ clientId: cfg.clientId, defaultDirection: 'left', disableGlip: 'true', disableMeeting: 'true', ...(cfg.appServer ? { appServer: cfg.appServer } : {}) });
     s.src = `${ADAPTER}?${params}`;
     s.async = true;
     document.body.appendChild(s);
