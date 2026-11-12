@@ -111,8 +111,9 @@ describe('utilization: on the sample Launch27', () => {
     await db.close();
   });
 
-  test('everyone sees it outside production; UTILIZATION_EMAILS can narrow it; never in production', async () => {
-    assert.equal(canSeeUtilization(loadConfig({ APP_ENV: 'production', DATABASE_URL: 'x', SESSION_SECRET: 'x'.repeat(40) }), 'boss@example.com'), false);
+  test('everyone sees it, production included; UTILIZATION_EMAILS can narrow it', async () => {
+    assert.equal(canSeeUtilization(loadConfig({ APP_ENV: 'production', DATABASE_URL: 'x', SESSION_SECRET: 'x'.repeat(40) }), 'boss@example.com'), true);
+    assert.equal(canSeeUtilization(loadConfig({ APP_ENV: 'production', UTILIZATION_EMAILS: 'boss@example.com', DATABASE_URL: 'x', SESSION_SECRET: 'x'.repeat(40) }), 'someone@example.com'), false);
     assert.equal(canSeeUtilization(loadConfig({ APP_ENV: 'development', UTILIZATION_EMAILS: 'Boss@Example.com' }), 'someone@example.com'), false);
     assert.equal(canSeeUtilization(loadConfig({ APP_ENV: 'development', UTILIZATION_EMAILS: 'Boss@Example.com' }), 'boss@example.com'), true);
     const db = await openDb();
