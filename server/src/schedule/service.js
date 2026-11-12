@@ -10,6 +10,9 @@ import {
 
 const PAST_DAYS = 91;
 const AHEAD_DAYS = 56;
+// How cleaners' hours are read. Bump when that changes: the next look at the planner then re-reads
+// everyone's hours instead of waiting for the hourly refresh.
+const HOURS_VERSION = 2;
 const AVAIL_CHUNK = 28; // days per availability request (Launch27's calendar asks for 42)
 const NEAR_DAYS = 14; // problems are raised for this many days ahead
 const NEAR_EVERY_MS = 3 * 60_000; // next 14 days of bookings
@@ -445,7 +448,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     });
     const iso = new Date(now()).toISOString();
     // cleaners_by: whose login read the cleaners' hours ("sync login" or a person who opened the planner).
-    return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits, holidays, cleaners_by: byPerson ? 'person' : 'sync' };
+    return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits, holidays, cleaners_by: byPerson ? 'person' : 'sync', hours_v: HOURS_VERSION };
   }
 
   // Company closed dates (Launch27 "closed dates", per location) in the planner's window.
@@ -481,7 +484,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     }
     const replaced = new Set([...freshKeys, ...extra.map((v) => v.key), ...gone]);
     const kept = prev.visits.filter((v) => !(v.date >= t && v.date <= until) && !replaced.has(v.key));
-    return { taken_at: new Date(now()).toISOString(), full_at: prev.full_at || prev.taken_at, today: t, cycle_anchor: prev.cycle_anchor, cleaners: prev.cleaners, holidays: prev.holidays || [], cleaners_by: prev.cleaners_by || null, visits: [...kept, ...fresh, ...extra] };
+    return { taken_at: new Date(now()).toISOString(), full_at: prev.full_at || prev.taken_at, today: t, cycle_anchor: prev.cycle_anchor, cleaners: prev.cleaners, holidays: prev.holidays || [], cleaners_by: prev.cleaners_by || null, hours_v: prev.hours_v || null, visits: [...kept, ...fresh, ...extra] };
   }
 
   async function sync({ bearer, trigger = 'manual', kind = 'full' } = {}) {
@@ -556,7 +559,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const fullAge = s ? t - new Date(s.full_at || s.taken_at).getTime() : Infinity;
     const anyAge = s ? t - new Date(s.taken_at).getTime() : Infinity;
     const trigger = bearer ? 'viewer' : s ? 'auto' : 'boot';
-    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today()) start({ bearer: bearer || undefined, trigger, kind: 'full' });
+    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today() || s.hours_v !== HOURS_VERSION) start({ bearer: bearer || undefined, trigger, kind: 'full' });
     else if (anyAge >= NEAR_EVERY_MS) start({ bearer: bearer || undefined, trigger, kind: 'near' });
   }
 
