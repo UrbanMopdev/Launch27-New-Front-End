@@ -18,9 +18,18 @@ export const daysBetween = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - 
 export const weekday = (d) => new Date(`${d}T12:00:00Z`).getUTCDay(); // 0 = Sunday
 export const mondayOf = (d) => addDays(d, -((weekday(d) + 6) % 7));
 export const hhmm = (min) => `${pad(Math.floor(min / 60) % 24)}:${pad(min % 60)}`;
+// "09:00", "9:00:00", "9:00 AM", "5pm", "17:30" -> minutes since midnight.
 export const toMinutes = (s) => {
-  const [h, m] = String(s || '0:0').split(':').map(Number);
-  return h * 60 + (m || 0);
+  const m = String(s ?? '').trim().match(/^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*([ap])?\.?\s*m?\.?$/i);
+  if (!m) {
+    const [h, mm] = String(s || '0:0').split(':').map(Number);
+    return (h || 0) * 60 + (mm || 0);
+  }
+  let h = Number(m[1]) % 24;
+  const ap = m[3]?.toLowerCase();
+  if (ap === 'p' && h < 12) h += 12;
+  if (ap === 'a' && h === 12) h = 0;
+  return h * 60 + Number(m[2] || 0);
 };
 
 // ---------- the 4-week cycle ----------
@@ -135,18 +144,34 @@ export const nameMatches = (cleanerName, wanted) => {
 // ---------- availability ----------
 // Launch27 rows: weekly (date null, weekday 0-6) and date-specific overrides; plus dates the
 // office marked unavailable in this app.
+// A date row only overrides the weekly hours when it says something: a day off, or its own times
+// (Launch27 can return a row for a date with neither). A day can have several blocks (8–12 and
+// 1–5): the window runs from the first start to the last end.
+const hasTimes = (r) => r.start_time && r.end_time && toMinutes(r.end_time) > toMinutes(r.start_time);
+function dayRows(rows, d) {
+  const dated = rows.filter((r) => r.date && String(r.date).slice(0, 10) === d && (r.dayoff || hasTimes(r)));
+  if (dated.length) return dated;
+  return rows.filter((r) => !r.date && Number(r.weekday) === weekday(d));
+}
 export function workingWindow(rows = [], d, unavailableDates = null) {
   if (unavailableDates?.has(d)) return null;
-  const dated = rows.find((r) => r.date && String(r.date).slice(0, 10) === d);
-  const row = dated || rows.find((r) => !r.date && Number(r.weekday) === weekday(d));
-  if (!row || row.dayoff || !row.start_time || !row.end_time) return null;
-  return [toMinutes(row.start_time), toMinutes(row.end_time)];
+  const list = dayRows(rows, d);
+  if (list.some((r) => r.dayoff && !hasTimes(r)) && !list.some((r) => !r.dayoff && hasTimes(r))) return null;
+  const open = list.filter((r) => !r.dayoff && hasTimes(r));
+  if (!open.length) return null;
+  return [Math.min(...open.map((r) => toMinutes(r.start_time))), Math.max(...open.map((r) => toMinutes(r.end_time)))];
+}
+// Minutes a cleaner is open on a date: the sum of that day's blocks (a split day counts its gap as closed).
+export function workingMinutes(rows = [], d, unavailableDates = null) {
+  if (!workingWindow(rows, d, unavailableDates)) return 0;
+  return dayRows(rows, d).filter((r) => !r.dayoff && hasTimes(r)).reduce((m, r) => m + toMinutes(r.end_time) - toMinutes(r.start_time), 0);
 }
 export function weeklyHours(rows = []) {
   let min = 0;
   for (let w = 0; w < 7; w++) {
-    const row = rows.find((r) => !r.date && Number(r.weekday) === w);
-    if (row && !row.dayoff && row.start_time && row.end_time) min += toMinutes(row.end_time) - toMinutes(row.start_time);
+    for (const row of rows.filter((r) => !r.date && Number(r.weekday) === w)) {
+      if (!row.dayoff && hasTimes(row)) min += toMinutes(row.end_time) - toMinutes(row.start_time);
+    }
   }
   return min / 60;
 }
