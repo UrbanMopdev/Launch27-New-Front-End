@@ -16,6 +16,7 @@ import { createSchedule } from './schedule/service.js';
 import { createReports } from './reports/service.js';
 import { createWriteLog } from './writes.js';
 import { createCommercial } from './commercial/service.js';
+import { createWorkforce } from './commercial/workforce.js';
 import { createPlacement } from './placement/service.js';
 import { sandboxEmail } from './inbox/channels.js';
 import { createGmailClient, createGmailConnector } from './inbox/email/gmail.js';
@@ -49,6 +50,7 @@ const segments = createSegments({ db, config, fetchImpl, log });
 const schedule = createSchedule({ db, config, fetchImpl, log, writes, dataTag: () => (qaStore?.summary()?.created_at ? `qa:${qaStore.summary().created_at}:v8` : SAMPLE_VERSION) });
 const reports = createReports({ db, config, fetchImpl, schedule, log });
 const commercial = createCommercial({ reports, schedule });
+const commercialPlan = createWorkforce({ db, schedule });
 const placement = createPlacement({ db, config, fetchImpl, schedule, writes, log });
 const jobs = { consecutiveFailures: 0, lastSuccessAt: null, lastError: null };
 onQaChange = (why) => {
@@ -84,7 +86,7 @@ if (config.gmail) {
 } else if (!config.production) {
   connectors.email = sandboxEmail();
 }
-const app = createApp(config, { db, sessions, fetchImpl, log, jobs, connectors, qa: { store: qaStore, sender: qaSender }, segments, schedule, reports, writes, commercial, placement });
+const app = createApp(config, { db, sessions, fetchImpl, log, jobs, connectors, qa: { store: qaStore, sender: qaSender }, segments, schedule, reports, writes, commercial, placement, commercialPlan });
 if (config.sampleData && config.l27Mode === 'mock') {
   await loadSampleInbox(db, { fetchImpl, baseUrl: config.l27BaseUrl, log: (level, msg, fields) => log[level](msg, fields) }).catch((err) => log.error('sample inbox failed', { error: err.message }));
 }
