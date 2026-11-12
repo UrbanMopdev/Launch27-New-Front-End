@@ -371,8 +371,24 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       cleaners.push(c);
     }
     const visits = await pullRange(bearer, addDays(t, -PAST_DAYS), addDays(t, AHEAD_DAYS));
+    const holidays = await closedDates(bearer, cleaners, t);
     const iso = new Date(now()).toISOString();
-    return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits };
+    return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits, holidays };
+  }
+
+  // Company closed dates (Launch27 "closed dates", per location) in the planner's window.
+  // Read-only; if Launch27 refuses, the report simply has none.
+  async function closedDates(bearer, cleaners, t) {
+    const locs = [...new Set(cleaners.flatMap((c) => c.location_ids || []))];
+    const out = [];
+    for (const loc of locs) {
+      const rows = await pullAll(bearer, '/v1/staff/holidays', { locations: loc }, 20).catch(() => []);
+      for (const h of rows) {
+        const date = String(h.date || '').slice(0, 10);
+        if (date >= t && date <= addDays(t, AHEAD_DAYS)) out.push({ date, start_time: h.start_time || null, end_time: h.end_time || null, description: h.description || null, location_id: loc });
+      }
+    }
+    return out;
   }
 
   async function nearData(bearer, prev, t) {
@@ -393,7 +409,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     }
     const replaced = new Set([...freshKeys, ...extra.map((v) => v.key), ...gone]);
     const kept = prev.visits.filter((v) => !(v.date >= t && v.date <= until) && !replaced.has(v.key));
-    return { taken_at: new Date(now()).toISOString(), full_at: prev.full_at || prev.taken_at, today: t, cycle_anchor: prev.cycle_anchor, cleaners: prev.cleaners, visits: [...kept, ...fresh, ...extra] };
+    return { taken_at: new Date(now()).toISOString(), full_at: prev.full_at || prev.taken_at, today: t, cycle_anchor: prev.cycle_anchor, cleaners: prev.cleaners, holidays: prev.holidays || [], visits: [...kept, ...fresh, ...extra] };
   }
 
   async function sync({ bearer, trigger = 'manual', kind = 'full' } = {}) {
@@ -999,6 +1015,20 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     });
     snap = null;
   }
-  return { reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
+  // Read-only view of the saved copy for the Headroom report: cleaners with their Launch27 hours,
+  // visits from today on, closed dates and days marked unavailable in this app.
+  async function headroomSource() {
+    const s = await need();
+    return {
+      taken_at: s.taken_at,
+      today: s.today,
+      cleaners: s.cleaners.map((c) => ({ ...cleanerOut(c), availability: c.availability || [] })),
+      visits: s.future,
+      holidays: s.holidays || [],
+      unavailable,
+    };
+  }
+
+  return { headroomSource, reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
 }
 

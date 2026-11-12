@@ -106,7 +106,8 @@ export function createApp(
   app.get('/auth/me', (req, res) => {
     const session = sessions.get(req.signedCookies[COOKIE]);
     if (!session) return res.status(401).json({ error: 'Not logged in' });
-    res.json({ email: session.email, allowWrites: config.allowWrites, env: config.appEnv, l27Mode: config.l27Mode, notificationsMode: config.notificationsMode });
+    const features = { headroom: (config.headroomEmails || []).includes(String(session.email).toLowerCase()) };
+    res.json({ email: session.email, allowWrites: config.allowWrites, env: config.appEnv, l27Mode: config.l27Mode, notificationsMode: config.notificationsMode, features });
   });
 
   app.post('/auth/logout', (req, res) => {

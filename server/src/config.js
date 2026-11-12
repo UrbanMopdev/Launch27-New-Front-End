@@ -165,6 +165,8 @@ export function loadConfig(env = process.env) {
     migrateOnBoot: env.MIGRATE_ON_BOOT === undefined ? true : truthy(env.MIGRATE_ON_BOOT),
     adminEmails: env.ADMIN_EMAILS || '',
     supervisorEmails: env.SUPERVISOR_EMAILS || '',
+    // Headroom report: only these logins see it, and never in production (for now).
+    headroomEmails: isProd ? [] : String(env.HEADROOM_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
     simulator: env.INBOX_SIMULATOR === undefined ? !isProd : truthy(env.INBOX_SIMULATOR),
     // Sample inbox conversations on an empty database. Never in production.
     sampleData: !isProd && truthy(env.SAMPLE_DATA),

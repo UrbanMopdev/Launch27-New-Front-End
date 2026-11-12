@@ -758,6 +758,12 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     // Reference data
     const locations = snap ? snap.locations : LOCATIONS;
     if (path === '/v1/staff/locations') return [200, locations];
+    // Closed dates: Christmas, Boxing Day and New Year's Day, every location.
+    if (path === '/v1/staff/holidays') {
+      const y = new Date(now()).getUTCFullYear();
+      const rows = [[`${y}-12-25`, 'Christmas Day'], [`${y}-12-26`, 'Boxing Day'], [`${y + 1}-01-01`, "New Year's Day"]].map(([date, description], i) => ({ id: 500 + i, date, start_time: '00:00', end_time: '23:59', description }));
+      return [200, page(rows, q)];
+    }
     if (path === '/v1/staff/locations/count') return [200, { count: locations.length }];
     if (path === '/v1/booking/services' || path === '/v1/staff/services') return [200, catalogServices(q.get('location_id'))];
     if (path === '/v1/booking/frequencies') return [200, snap ? snap.frequencies[q.get('location_id')] || Object.values(snap.frequencies)[0] || [] : FREQUENCIES];

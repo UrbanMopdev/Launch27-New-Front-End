@@ -4,7 +4,7 @@ import { useBrand } from '../brands/useBrand';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { auth } from '../api';
-import { useCanWrite } from '../hooks';
+import { useCanWrite, useMe } from '../hooks';
 import { EnvBanner } from './EnvBanner';
 import { Icon } from './Icon';
 import { SupportStatus } from '../inbox/SupportStatus';
@@ -15,7 +15,8 @@ import { PortalSwitcher } from './PortalSwitcher';
 
 // Sidebar sections. Add a line here for each page rebuilt from docs/API.md.
 // `icon` is a name from components/Icon.tsx.
-const NAV: { section: string; items: { to: string; label: string; icon: string }[] }[] = [
+// `feature`: shown only to logins the server enables it for (/auth/me features).
+const NAV: { section: string; items: { to: string; label: string; icon: string; feature?: 'headroom' }[] }[] = [
   {
     section: 'Support',
     items: [
@@ -59,6 +60,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: string }
     items: [
       { to: '/reports/customers', label: 'Customer insights', icon: 'grid' },
       { to: '/reports/scheduling', label: 'Scheduling insights', icon: 'route' },
+      { to: '/reports/headroom', label: 'Headroom', icon: 'trend', feature: 'headroom' },
       { to: '/reports/cleaners', label: 'Cleaner reports', icon: 'users' },
       { to: '/feedback', label: 'Customer feedback', icon: 'star' },
     ],
@@ -93,6 +95,7 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 export function Layout({ email }: { email: string }) {
   const queryClient = useQueryClient();
   const canWrite = useCanWrite();
+  const me = useMe();
   // Phones: the sidebar becomes a slide-out drawer behind a top bar.
   const [menuOpen, setMenuOpen] = useState(false);
   // Desktop: the sidebar can shrink to an icon rail.
@@ -161,7 +164,8 @@ export function Layout({ email }: { email: string }) {
           {NAV.filter((group) => !(group.section === 'Commercial' && brandView === 'residential')).map((group) => {
             // Rail: every item shows. Expanded: closed sections hide their items, except the current page.
             const open = rail || !closed[group.section];
-            const items = open ? group.items : group.items.filter((i) => i === current);
+            const allowed = group.items.filter((i) => !i.feature || me.data?.features?.[i.feature]);
+            const items = open ? allowed : allowed.filter((i) => i === current);
             return (
               <div key={group.section} className="nav-group">
                 <button className="nav-section" aria-expanded={open} onClick={() => toggleSection(group.section)}>

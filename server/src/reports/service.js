@@ -4,6 +4,8 @@
 // live schedule. Cleaner pay is only returned to admins.
 import { addDays, localDate, mondayOf } from '../schedule/rules.js';
 import { harmonizePartners } from '../commercial/partners.js';
+import { headroomFacts, headroomReport, travelReference } from './headroom.js';
+import { HEADROOM } from './headroom-config.js';
 import { PERIODS, cleanerRow, cleanerStats, flagsFor, indexVisits, median, outsideArea, pct, periodRange, regularClients, round1, sameCleaner, slimReportVisit, timing, weeklySeries } from './compute.js';
 
 const DAYS_BACK = 365;
@@ -322,7 +324,32 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     return { taken_at: s?.taken_at || null, running: !!running, last_error: last?.status === 'failed' ? last.error : null, covers_from: s?.from || null };
   }
 
+  // Headroom (read-only): room left in cleaners' availability over the next `weeks` weeks.
+  // Built from the planner's live copy; the past year's "en route" taps (if the nightly report
+  // copy exists) only feed the travel reference line.
+  async function headroom(weeks = 4, { locations = null } = {}) {
+    if (!schedule?.headroomSource) throw Object.assign(new Error('The scheduling planner is not running'), { status: 409 });
+    let src;
+    try {
+      src = await schedule.headroomSource();
+    } catch (err) {
+      throw Object.assign(new Error(err.message), { status: err.status || 409 });
+    }
+    const facts = headroomFacts({ today: src.today, cleaners: src.cleaners, visits: src.visits, holidays: src.holidays, unavailable: src.unavailable, locations });
+    // Scheduling insights' own figures, for the reconciliation strip.
+    const { ov } = await plannerView(locations);
+    let existing = null;
+    if (ov) {
+      const rows = ov.rows.filter((r) => r.assignable);
+      const w4 = (k) => rows.reduce((m, r) => m + r.weeks.slice(0, 4).reduce((a, x) => a + x[k], 0), 0);
+      existing = { capacity4: w4('capacity'), booked4: w4('booked'), unassigned_visits: ov.counts.unassigned_visits, tolerance: Math.max(0.5, rows.length * 4 * 0.05) };
+    }
+    const past = await load().catch(() => null);
+    const travelRef = travelReference({ pastVisits: past?.visits || [], from: addDays(src.today, -91), to: addDays(src.today, -1), facts, cleaners: src.cleaners, visits: src.visits });
+    return headroomReport({ facts, weeks, cfg: HEADROOM, cleaners: src.cleaners, existing, travelRef, takenAt: src.taken_at });
+  }
+
   // The raw year of visits (for the Commercial area).
   const visitsSnapshot = () => need();
-  return { sync, start, maybeRun, scheduling, cleaners, cleaner, status, visitsSnapshot, isRunning: () => !!running, mondayOf };
+  return { sync, start, maybeRun, scheduling, headroom, cleaners, cleaner, status, visitsSnapshot, isRunning: () => !!running, mondayOf };
 }

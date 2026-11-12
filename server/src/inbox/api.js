@@ -1029,6 +1029,12 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req), { locations: repLocs(req) }))));
     r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req), locations: repLocs(req) }))));
     r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req), locations: repLocs(req) }))));
+    // Headroom: only the logins in HEADROOM_EMAILS (never production for now); 404 for everyone else.
+    r.get('/reports/headroom', rep(async (req, res) => {
+      if (!(config.headroomEmails || []).includes(String(req.user.email).toLowerCase())) return res.status(404).json({ error: 'Not found' });
+      const weeks = [1, 2, 4, 8].includes(Number(req.query.weeks)) ? Number(req.query.weeks) : 4;
+      res.json(await reports.headroom(weeks, { locations: repLocs(req) }));
+    }));
     r.post('/reports/refresh', needRole('admin'), rep(async (req, res) => {
       reports.start({ bearer: req.bearer });
       res.status(202).json({ running: true });
