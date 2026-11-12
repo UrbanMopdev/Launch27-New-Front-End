@@ -110,7 +110,8 @@ export async function autoAssign(q, conv) {
 
 // ---------- inbound ----------
 
-// input: { channel, from, to, subject, body, external_id, thread_key, from_name, meta, at }
+// input: { channel, from, to, subject, body, external_id, thread_key, references, from_name, meta, at }
+//   references (email): Message-IDs the message answers (In-Reply-To + References)
 // lookup: optional result of a Launch27 lookup done before the transaction:
 //   { name, roles, l27_customer_id, l27_team_id, identities }
 export async function ingestInbound(q, input, { lookup = null, now = new Date() } = {}) {
@@ -130,6 +131,17 @@ export async function ingestInbound(q, input, { lookup = null, now = new Date() 
   let contacts = await contactsByIdentity(q, kind, from);
   let contact = contacts.length === 1 ? contacts[0] : null;
   const needsMatch = contacts.length > 1;
+  // A new address for someone we already know in Launch27 (e.g. they emailed from a second
+  // address listed on their customer): add it to that contact rather than making a twin.
+  if (!contacts.length && (lookup?.l27_team_id || lookup?.l27_customer_id)) {
+    const col = lookup.l27_team_id ? 'l27_team_id' : 'l27_customer_id';
+    const existing = await one(q, `SELECT * FROM contacts WHERE ${col} = $1 ORDER BY id LIMIT 1`, [lookup[col]]);
+    if (existing) {
+      await addIdentity(q, existing.id, kind, from);
+      contact = existing;
+      contacts = [existing];
+    }
+  }
   if (!contacts.length) {
     contact = await createContact(q, {
       name: lookup?.name || input.from_name || null,
@@ -141,7 +153,7 @@ export async function ingestInbound(q, input, { lookup = null, now = new Date() 
   }
 
   // 2. Which conversation?
-  let conv = await findThread(q, { channel, from, to, contactId: contact?.id, threadKey: input.thread_key });
+  let conv = await findThread(q, { channel, from, to, contactId: contact?.id, threadKey: input.thread_key, references: input.references });
   let isNew = false;
   let reopened = false;
   if (conv && conv.status === 'done') {
@@ -235,9 +247,21 @@ export async function ingestInbound(q, input, { lookup = null, now = new Date() 
   return { conversationId: conv.id, messageId: msg.id, isNew, reopened, contactId: contact?.id ?? null };
 }
 
-async function findThread(q, { channel, from, to, contactId, threadKey }) {
+async function findThread(q, { channel, from, to, contactId, threadKey, references = [] }) {
   if (channel === 'email' && threadKey) {
     const t = await one(q, "SELECT * FROM conversations WHERE channel = 'email' AND thread_key = $1 ORDER BY id DESC LIMIT 1", [threadKey]);
+    if (t) return t;
+  }
+  // A reply to one of our emails (or to an earlier email of theirs) names it in In-Reply-To /
+  // References, even when it arrives in a different mailbox or Gmail thread.
+  const refs = [...new Set((references || []).filter(Boolean))].slice(-30);
+  if (channel === 'email' && refs.length) {
+    const t = await one(
+      q,
+      `SELECT c.* FROM messages m JOIN conversations c ON c.id = m.conversation_id
+       WHERE m.channel = 'email' AND m.meta->>'message_id' = ANY($1::text[]) ORDER BY m.created_at DESC LIMIT 1`,
+      [refs],
+    );
     if (t) return t;
   }
   if (channel === 'email' || channel === 'chat') return null; // a new email thread is a new conversation
@@ -323,13 +347,28 @@ export async function reply(q, user, convId, { body, channel, to, subject, from 
     if (blocked) throw new InboxError(409, `${target} replied STOP. Texts to this number are blocked until they text START.`);
   }
   const fromId = from || (ch === conv.channel ? conv.our_identity : null);
-  const result = await sendOutbound({ channel: ch, from: fromId, to: target, subject: subject ?? (conv.subject ? `Re: ${conv.subject.replace(/^re:\s*/i, '')}` : null), body }, connectors);
+  if (ch === 'email' && !fromId) throw new InboxError(400, 'Pick one of our addresses to send from');
+  // Email: stay in the customer's thread (Gmail thread + In-Reply-To / References).
+  let thread = null;
+  let emailSubject = null;
+  if (ch === 'email') {
+    const earlier = conv.channel === 'email' ? await many(q, "SELECT meta->>'message_id' AS id FROM messages WHERE conversation_id = $1 AND kind = 'message' AND channel = 'email' ORDER BY created_at, id", [convId]) : [];
+    const refs = earlier.map((r) => r.id).filter(Boolean);
+    thread = { key: conv.channel === 'email' ? conv.thread_key : null, inReplyTo: refs.at(-1) || null, references: refs };
+    const base = (conv.subject || '').trim();
+    emailSubject = subject?.trim() || (base ? (earlier.length && !/^re:/i.test(base) ? `Re: ${base}` : base) : 'A message from UrbanMop');
+  }
+  const result = await sendOutbound({ channel: ch, from: fromId, to: target, subject: emailSubject, body, thread }, connectors);
   const msg = await one(
     q,
     `INSERT INTO messages (conversation_id, kind, direction, channel, from_addr, to_addr, subject, body, author_id, delivery_state, external_id, meta)
      VALUES ($1,'message','out',$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) RETURNING *`,
-    [convId, ch, fromId, target, subject ?? null, body, user.id, result.state, result.external_id || null, json({ provider: result.provider, note: result.note })],
+    [convId, ch, fromId, target, emailSubject, body, user.id, result.state, result.external_id || null, json({ provider: result.provider, note: result.note, message_id: result.message_id || undefined })],
   );
+  // The first email in a conversation names its subject and Gmail thread, so replies find it.
+  if (ch === 'email' && conv.channel === 'email') {
+    await q.query('UPDATE conversations SET subject = COALESCE(subject, $2), thread_key = COALESCE(thread_key, $3) WHERE id = $1', [convId, emailSubject, result.thread_key || null]);
+  }
   await q.query(
     `UPDATE conversations SET first_response_at = COALESCE(first_response_at, now()), awaiting_reply_since = NULL,
             sla_due_at = NULL, sla_warned_at = NULL, last_message_at = now(), last_preview = $2,

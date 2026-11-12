@@ -6,7 +6,7 @@ import express from 'express';
 import { json as toJson } from '../db/index.js';
 import { lintRules, route } from './routing.js';
 import { DISPOSITIONS, OUR_IDENTITIES, UM } from './seed.js';
-import { connectedChannels } from './channels.js';
+import { connectedChannels, sendableIdentities } from './channels.js';
 import { normalizeEmail, normalizeIdentity, normalizePhone, kindForChannel } from './normalize.js';
 import * as svc from './service.js';
 import { CHANNELS, canEditSettings, getSettings, normalizeCapacity, validateSettings } from './workforce.js';
@@ -155,6 +155,18 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.json(await one(db, 'SELECT * FROM users WHERE id = $1', [req.params.id]));
   }));
 
+  // How each channel is connected, for the composer and Support settings → Channels.
+  async function channelStatus() {
+    const email = connectors.email;
+    const accounts = email ? await many(db, "SELECT address, provider, last_poll_at, last_ok_at, last_error, ingested_count FROM channel_accounts WHERE channel = 'email' ORDER BY address") : [];
+    return {
+      email: !email ? { state: 'not_connected', provider: null, accounts: [] } : { state: email.sandbox ? 'sandbox' : 'live', provider: email.name, send_from: email.identities || OUR_IDENTITIES.email, accounts },
+      sms: !connectors.sms ? { state: 'not_connected', provider: null } : { state: connectors.sms.sandbox ? 'sandbox' : 'live', provider: connectors.sms.name },
+    };
+  }
+
+  r.get('/channels', wrap(async (req, res) => res.json(await channelStatus())));
+
   r.get('/meta', wrap(async (req, res) => {
     const visible = await visibleQueueIds(req.user);
     res.json({
@@ -162,8 +174,10 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       sla_policies: await many(db, 'SELECT * FROM sla_policies ORDER BY first_response_minutes'),
       dispositions: DISPOSITIONS,
       canned: await many(db, 'SELECT * FROM canned_responses ORDER BY shortcut'),
-      identities: OUR_IDENTITIES,
+      // Only addresses the email connector can really send from (all of ours when sandboxed).
+      identities: { ...OUR_IDENTITIES, email: sendableIdentities(connectors, 'email') || OUR_IDENTITIES.email },
       connected_channels: connectedChannels(connectors),
+      channels: await channelStatus(),
       portal: { name: config.portalName || 'UrbanMop', links: config.portalLinks || [] },
       ringcentral: config.ringcentralClientId ? { clientId: config.ringcentralClientId, appServer: config.ringcentralServer || null, record: config.ringcentralRecord !== false } : null,
       holidays: await many(db, "SELECT to_char(day,'YYYY-MM-DD') AS day, name FROM holidays ORDER BY day"),
@@ -297,7 +311,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       const kind = kindForChannel(channel);
       const target = normalizeIdentity(kind, to) || (await one(q, 'SELECT value FROM contact_identities WHERE contact_id = $1 AND kind = $2 ORDER BY id LIMIT 1', [contact.id, kind]))?.value;
       if (!target) throw new svc.InboxError(400, `${contact.name || 'This contact'} has no ${kind === 'email' ? 'email address' : 'phone number'}`);
-      const ours = from || (channel === 'email' ? UM.info : UM.smsOttawa);
+      const sendable = sendableIdentities(connectors, 'email');
+      const ours = from || (channel === 'email' ? (!sendable || sendable.includes(UM.info) ? UM.info : sendable[0]) : UM.smsOttawa);
       const queue = await one(q, 'SELECT id FROM queues WHERE slug = $1', [(contact.roles || []).includes('applicant') ? 'hiring' : 'operations']);
       const conv = await one(q, "INSERT INTO conversations (contact_id, channel, our_identity, their_identity, subject, queue_id, owner_id, l27_booking_id, routed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'Started by agent') RETURNING *", [contact.id, channel, channel === 'email' ? normalizeEmail(ours) : normalizePhone(ours), target, subject || null, queue?.id, req.user.id, l27_booking_id || null]);
       if (body) await svc.reply(q, req.user, conv.id, { body, channel, to: target, subject, from: conv.our_identity }, { connectors });
@@ -421,7 +436,23 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     const col = customer_id ? 'l27_customer_id' : 'l27_team_id';
     const id = Number(customer_id || team_id);
     const existing = await one(db, `SELECT * FROM contacts WHERE ${col} = $1 ORDER BY id LIMIT 1`, [id]);
-    if (existing) return res.json(existing);
+    if (existing) {
+      // Keep their email and phones current with Launch27 (a changed email would otherwise
+      // leave the Email button and inbound matching on the old address). Best effort.
+      try {
+        const info = customer_id ? await l27.customer(req.bearer, id) : await l27.team(req.bearer, id);
+        await db.tx(async (q) => {
+          for (const i of info.identities) {
+            const v = normalizeIdentity(i.kind, i.value);
+            const taken = v ? await one(q, 'SELECT contact_id FROM contact_identities WHERE kind = $1 AND value = $2 AND contact_id <> $3 LIMIT 1', [i.kind, v, existing.id]) : null;
+            if (v && !taken) await svc.addIdentity(q, existing.id, i.kind, v, i.label);
+          }
+        });
+      } catch (err) {
+        log('warn', 'could not refresh contact details from Launch27', { contact_id: existing.id, error: err.message });
+      }
+      return res.json(existing);
+    }
     const info = customer_id ? await l27.customer(req.bearer, id) : await l27.team(req.bearer, id);
     const contact = await db.tx(async (q) => {
       // A person who already wrote in (matched by phone or email) gets linked instead of duplicated.
