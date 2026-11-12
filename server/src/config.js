@@ -165,9 +165,9 @@ export function loadConfig(env = process.env) {
     migrateOnBoot: env.MIGRATE_ON_BOOT === undefined ? true : truthy(env.MIGRATE_ON_BOOT),
     adminEmails: env.ADMIN_EMAILS || '',
     supervisorEmails: env.SUPERVISOR_EMAILS || '',
-    // Utilization report: everyone outside production (off in production for now).
-    // UTILIZATION_EMAILS, if set, narrows it to those logins.
-    utilizationEnabled: !isProd,
+    // Utilization report (read-only): everyone, production included. UTILIZATION_EMAILS, if set,
+    // narrows it to those logins.
+    utilizationEnabled: true,
     utilizationEmails: String(env.UTILIZATION_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
     simulator: env.INBOX_SIMULATOR === undefined ? !isProd : truthy(env.INBOX_SIMULATOR),
     // Sample inbox conversations on an empty database. Never in production.
@@ -231,7 +231,7 @@ export function configErrors(config) {
   return errors;
 }
 
-// Who sees the Utilization report: everyone outside production, unless UTILIZATION_EMAILS narrows it.
+// Who sees the Utilization report: everyone, unless UTILIZATION_EMAILS narrows it.
 export function canSeeUtilization(config, email) {
   if (!config?.utilizationEnabled) return false;
   const list = config.utilizationEmails || [];
