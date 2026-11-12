@@ -17,6 +17,7 @@ import { createReports } from './reports/service.js';
 import { createWriteLog } from './writes.js';
 import { createCommercial } from './commercial/service.js';
 import { createPlacement } from './placement/service.js';
+import { createCrew } from './crew/service.js';
 import { sandboxEmail } from './inbox/channels.js';
 import { createGmailClient, createGmailConnector } from './inbox/email/gmail.js';
 import { createEmailSync } from './inbox/email/sync.js';
@@ -50,6 +51,7 @@ const schedule = createSchedule({ db, config, fetchImpl, log, writes, dataTag: (
 const reports = createReports({ db, config, fetchImpl, schedule, log });
 const commercial = createCommercial({ reports, schedule });
 const placement = createPlacement({ db, config, fetchImpl, schedule, writes, log });
+const crew = createCrew({ db, config, schedule, log });
 const jobs = { consecutiveFailures: 0, lastSuccessAt: null, lastError: null };
 onQaChange = (why) => {
   (async () => {
@@ -84,7 +86,7 @@ if (config.gmail) {
 } else if (!config.production) {
   connectors.email = sandboxEmail();
 }
-const app = createApp(config, { db, sessions, fetchImpl, log, jobs, connectors, qa: { store: qaStore, sender: qaSender }, segments, schedule, reports, writes, commercial, placement });
+const app = createApp(config, { db, sessions, fetchImpl, log, jobs, connectors, qa: { store: qaStore, sender: qaSender }, segments, schedule, reports, writes, commercial, placement, crew });
 if (config.sampleData && config.l27Mode === 'mock') {
   await loadSampleInbox(db, { fetchImpl, baseUrl: config.l27BaseUrl, log: (level, msg, fields) => log[level](msg, fields) }).catch((err) => log.error('sample inbox failed', { error: err.message }));
 }
@@ -107,6 +109,8 @@ const worker = setInterval(async () => {
     await segments.maybeRun();
     await schedule.maybeRun();
     await reports.maybeRun();
+    // Crew Planner: new preferences to review after the planner's copy changes (never blocks the worker).
+    crew.maybeIngest().catch((err) => log.error('crew planner preference scan failed', { error: err.message }));
     await placement.purge();
     if (jobs.consecutiveFailures) log.info('worker recovered', { after: jobs.consecutiveFailures });
     jobs.consecutiveFailures = 0;

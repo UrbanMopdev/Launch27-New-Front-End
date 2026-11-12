@@ -1,7 +1,7 @@
 // /api: the support workspace. Every route needs a signed-in agent (same Launch27 login
 // as the rest of the app); the agent's Launch27 token is used for lookups so Launch27
 // keeps enforcing their permissions.
-import { canSeeUtilization } from '../config.js';
+import { canSeeUtilization, canUseCrewPlanner } from '../config.js';
 import express from 'express';
 import { json as toJson } from '../db/index.js';
 import { lintRules, route } from './routing.js';
@@ -26,7 +26,7 @@ export function diffRules(before, after) {
 }
 const many = async (q, sql, p) => (await q.query(sql, p)).rows;
 
-export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null, placement = null }) {
+export function createInboxRouter({ db, sessions, cookieName, config, l27, connectors = {}, log = (lvl, msg, f) => console.error(msg, f), qa = {}, segments = null, schedule = null, reports = null, writes = null, commercial = null, placement = null, crew = null }) {
   const r = express.Router();
   r.use(express.json({ limit: '1mb' }));
 
@@ -1041,6 +1041,36 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     r.post('/schedule/refresh', sched(async (req, res) => {
       schedule.start({ bearer: req.bearer, trigger: 'manual' });
       res.status(202).json({ running: true });
+    }));
+  }
+
+  // ---------- crew planner (docs/crew-planner.md) ----------
+  // Admins and CREW_PLANNER_EMAILS only, while CREW_PLANNER_ENABLED; everyone else gets a 404.
+  // Reads the planner's saved copy of Launch27; never writes to Launch27.
+  if (crew) {
+    const cp = (fn) => wrap(async (req, res) => {
+      if (!canUseCrewPlanner(config, req.user.email, req.user.role)) return res.status(404).json({ error: 'Not found' });
+      try {
+        await fn(req, res);
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+    });
+    const isAdmin = (req) => req.user.role === 'admin';
+    r.get('/crew/status', cp(async (req, res) => res.json({ ...(await crew.status()), admin: isAdmin(req) })));
+    r.get('/crew/cleaners', cp(async (req, res) => res.json(await crew.cleaners({ admin: isAdmin(req) }))));
+    r.patch('/crew/cleaners/:id', cp(async (req, res) => res.json(await crew.saveCleaner(req.params.id, req.body || {}, req.user))));
+    r.get('/crew/prefs', cp(async (req, res) => res.json(await crew.prefs({ status: req.query.status ? String(req.query.status) : null, source: req.query.source ? String(req.query.source) : null, q: req.query.q ? String(req.query.q) : null, client_id: req.query.client_id ?? null }))));
+    r.post('/crew/prefs', cp(async (req, res) => res.status(201).json(await crew.addPref(req.body || {}, req.user))));
+    r.post('/crew/prefs/bulk', cp(async (req, res) => res.json(await crew.bulkPrefs(req.body?.ids, req.body?.action, req.user))));
+    r.post('/crew/prefs/:id/:action', cp(async (req, res) => res.json(await crew.prefAction(req.params.id, req.params.action, req.user, req.body || {}))));
+    r.post('/crew/prefs-scan', cp(async (req, res) => res.json(await crew.ingest({ force: true }))));
+    r.get('/crew/areas', cp(async (req, res) => res.json(await crew.clusters())));
+    r.put('/crew/areas/:fsa', cp(async (req, res) => res.json(await crew.saveCluster(req.params.fsa, req.body?.cluster, req.user))));
+    r.post('/crew/seed', cp(async (req, res) => {
+      if (!isAdmin(req)) return res.status(403).json({ error: 'Only admins can load the starting data' });
+      res.json(await crew.loadSeed(req.user));
     }));
   }
 

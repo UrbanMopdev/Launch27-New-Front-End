@@ -191,6 +191,10 @@ export function loadConfig(env = process.env) {
     // narrows it to those logins.
     utilizationEnabled: true,
     utilizationEmails: String(env.UTILIZATION_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
+    // Crew Planner (docs/crew-planner.md): weekly schedules for the employee crews. On in dev and QA,
+    // off in production until CREW_PLANNER_ENABLED=true. Only admins and CREW_PLANNER_EMAILS (Grace).
+    crewPlannerEnabled: env.CREW_PLANNER_ENABLED === undefined ? !isProd : truthy(env.CREW_PLANNER_ENABLED),
+    crewPlannerEmails: String(env.CREW_PLANNER_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
     simulator: env.INBOX_SIMULATOR === undefined ? !isProd : truthy(env.INBOX_SIMULATOR),
     // Sample inbox conversations on an empty database. Never in production.
     sampleData: !isProd && truthy(env.SAMPLE_DATA),
@@ -258,4 +262,13 @@ export function canSeeUtilization(config, email) {
   if (!config?.utilizationEnabled) return false;
   const list = config.utilizationEmails || [];
   return !list.length || list.includes(String(email || '').toLowerCase());
+}
+
+// Who can use the Crew Planner: admins and the logins in CREW_PLANNER_EMAILS, while it's on.
+// role: the person's role in this app (users.role), when known.
+export function canUseCrewPlanner(config, email, role = null) {
+  if (!config?.crewPlannerEnabled) return false;
+  const e = String(email || '').toLowerCase();
+  const admins = String(config.adminEmails || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean);
+  return role === 'admin' || admins.includes(e) || (config.crewPlannerEmails || []).includes(e);
 }

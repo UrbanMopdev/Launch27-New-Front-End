@@ -107,6 +107,8 @@ its own `SESSION_SECRET`; never copy one between environments.
 | `L27_ALLOW_WRITES` | — | — | true when ready |
 | `LOG_LEVEL` | debug | info | info |
 | `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` | — (ignored) | — (ignored) | read-only staff login for the nightly segment update |
+| `CREW_PLANNER_ENABLED` | on unless `false` | on unless `false` | off unless `true` |
+| `CREW_PLANNER_EMAILS` | Grace's login | Grace's login | Grace's login (admins always have access) |
 
 ## Customer segments: when they update
 

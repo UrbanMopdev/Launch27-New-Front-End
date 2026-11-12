@@ -6,12 +6,18 @@ import { BrandPill, brandLabel } from '../brands/ui';
 import { segmentsApi } from '../segments/api';
 import { scheduleApi, type Candidate, type Change, type ChangeKind, type Overview, type Series, type Slot, type Visit } from '../schedule/api';
 import { FreqPill, Reasons, ScheduleStatus, niceDate, CleanerDot } from '../schedule/ui';
+import { CrewTab } from '../crew/CrewTab';
+import { useMe } from '../hooks';
 
-type Tab = 'changes' | 'capacity' | 'continuity' | 'find';
-const TABS: [Tab, string][] = [['changes', 'Changes to handle'], ['capacity', 'Capacity'], ['continuity', 'Same cleaner'], ['find', 'Find a slot']];
+type Tab = 'changes' | 'capacity' | 'continuity' | 'find' | 'crew';
+const BASE_TABS: [Tab, string][] = [['changes', 'Changes to handle'], ['capacity', 'Capacity'], ['continuity', 'Same cleaner'], ['find', 'Find a slot']];
+// Crew Planner: admins and the planner only (the server says who, in /auth/me features).
+const CREW_TAB: [Tab, string] = ['crew', 'Crew Planner'];
 
 export function SchedulingPage() {
   const [params, setParams] = useSearchParams();
+  const me = useMe();
+  const TABS = me.data?.features?.crewPlanner ? [...BASE_TABS, CREW_TAB] : BASE_TABS;
   // Old links to the separate "Needs a cleaner" tab open that filter in Changes to handle.
   const asked = params.get('tab');
   const tab = (TABS.some(([t]) => t === asked) ? asked : 'changes') as Tab;
@@ -49,6 +55,7 @@ export function SchedulingPage() {
           {tab === 'changes' && <ChangesTab initialKind={initialKind} />}
           {tab === 'capacity' && <CapacityTab data={overview.data} />}
           {tab === 'continuity' && <ContinuityTab />}
+          {tab === 'crew' && <CrewTab />}
           {tab === 'find' && <FindFromLink customerId={Number(params.get('customer')) || null} name={params.get('name')} reschedule={rescheduleFrom(params)} />}
         </>
       )}

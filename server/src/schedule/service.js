@@ -48,6 +48,8 @@ export function fillForecasts(visits) {
       kind, freq: v.freq || src.freq, weeks: cycleWeeks(kind, v.date), prepaid: v.prepaid || src.prepaid,
       services: v.services?.length ? v.services : src.services, tags: v.tags?.length ? v.tags : src.tags,
       phone: v.phone || src.phone, area: v.area || src.area, lat: v.lat ?? src.lat, lng: v.lng ?? src.lng,
+      zip: v.zip || src.zip || null, ctags: v.ctags?.length ? v.ctags : src.ctags,
+      staff_notes: v.staff_notes || src.staff_notes || null, customer_notes: v.customer_notes || src.customer_notes || null,
     };
   });
 }
@@ -87,6 +89,8 @@ export function slimVisit(b) {
     lat: b.address?.latitude ?? null,
     lng: b.address?.longitude ?? null,
     area: b.address?.city || null,
+    zip: b.address?.zip ? String(b.address.zip).toUpperCase().replace(/\s+/g, ' ').trim() : null,
+    location_name: b.location?.name || null,
     freq: b.frequency?.name || null,
     kind,
     prepaid: isPrepaid(b.frequency?.name),
@@ -96,6 +100,12 @@ export function slimVisit(b) {
     team_hours: Object.fromEntries((b.teams || []).map((t) => [t.id, t.hours || 0])),
     // Customer tags plus cleaner wishes typed in the staff notes ("prefers…", "do not assign…").
     tags: [...(u.tags_info || []).map((t) => t.name).filter(Boolean), ...noteHints(b.staff_notes)],
+    // Raw text for the Crew Planner's preference review (docs/crew-planner.md).
+    ctags: (u.tags_info || []).map((t) => t.name).filter(Boolean),
+    staff_notes: b.staff_notes ? String(b.staff_notes).slice(0, 1500) : null,
+    customer_notes: b.customer_notes ? String(b.customer_notes).slice(0, 800) : null,
+    // Amount owed on this visit (unpaid), when Launch27 says.
+    owed: Number(b.charges?.outstanding) > 0 ? Number(b.charges.outstanding) : 0,
   };
 }
 
@@ -1029,6 +1039,21 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     };
   }
 
-  return { utilizationSource, reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
+  // Read-only view of the saved copy for the Crew Planner: cleaners (with Launch27 hours), every
+  // visit in the window (past and future) and customers with their main cleaner and history.
+  async function crewSource() {
+    const s = await need();
+    const customers = [...s.customers.values()].map((c) => ({ id: c.id, name: c.name, phone: c.phone, recurring: c.recurring, main: c.main, history: Object.fromEntries(c.history), past: c.past.length, future: c.future.length }));
+    return {
+      taken_at: s.taken_at,
+      today: s.today,
+      cleaners: s.cleaners.map((c) => ({ ...cleanerOut(c), title: c.title, availability: c.availability || [] })),
+      visits: s.visits,
+      customers,
+      unavailable,
+    };
+  }
+
+  return { crewSource, utilizationSource, reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
 }
 

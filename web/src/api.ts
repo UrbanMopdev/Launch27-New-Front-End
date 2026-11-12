@@ -68,7 +68,7 @@ export interface Me {
   env?: 'development' | 'staging' | 'production';
   l27Mode?: 'live' | 'mock';
   notificationsMode?: 'live' | 'sandbox';
-  features?: { utilization?: boolean };
+  features?: { utilization?: boolean; crewPlanner?: boolean };
 }
 
 export const auth = {
