@@ -75,30 +75,23 @@ export interface CleanerReport {
   last40: { date: string; late: number; long: boolean; enroute: boolean; customer: string }[];
 }
 
-export type HeadroomStatus = 'red' | 'amber' | 'green' | null;
-export interface HeadroomFigures {
+export interface UtilFigures {
   closed_h: number; available_h: number; assigned_h: number; unassigned_h: number; unassigned_visits: number;
-  not_taking_h: number; not_taking_visits: number; travel_h: number; fragments_h: number;
-  raw_h: number; raw_pct: number | null; adjusted_h: number; adjusted_pct: number | null;
-  raw_status: HeadroomStatus; status: HeadroomStatus;
+  not_taking_h: number; not_taking_visits: number; travel_h: number; spoken_h: number; left_h: number;
+  utilization: number | null; room_bookings: number; typical_booking_h: number;
 }
-export interface HeadroomReport {
-  taken_at: string | null; today: string; weeks: number; from: string; to: string;
-  config: { travel_model: 'route'; travel_return_home: boolean; travel_fallback_min: number; avg_leg_min: number; fragment_h: number; red_at: number; amber_at: number; operating_days: number[]; windows: number[] };
-  totals: HeadroomFigures;
-  ratio: { cleaners: number; customers: number; customers_recurring: number; per_cleaner: number | null; per_cleaner_recurring: number | null };
-  areas: (HeadroomFigures & { area: string; cleaners: number; customers: number; customers_recurring: number; customers_per_cleaner: number | null })[];
-  cleaners: { cleaner_id: number; name: string; area: string; status_label: string | null; available_h: number; assigned_h: number; headroom_h: number; utilization: number | null; if_left: number | null; if_left_raw: number | null; area_negative: boolean }[];
-  trend: { week: string; total: number | null; raw_total: number | null; areas: Record<string, number | null> }[];
+export interface UtilizationReport {
+  taken_at: string | null; today: string; from: string; to: string; max_to: string; avg_leg_min: number;
+  totals: UtilFigures & { cleaners: number; customers: number; customers_recurring: number };
+  areas: (UtilFigures & { area: string; cleaners: number; customers: number; customers_recurring: number })[];
+  cleaners: { cleaner_id: number; name: string; area: string; status_label: string | null; visits: number; available_h: number; assigned_h: number; travel_h: number; travel_per_visit_min: number | null; left_h: number; utilization: number | null; if_left: number | null; area_short: boolean }[];
+  by_day: (UtilFigures & { date: string; areas: Record<string, UtilFigures> })[];
+  trend: { week: string; total: number | null; areas: Record<string, number | null> }[];
   reconcile: null | {
-    capacity: { existing: number; sundays: number; closed: number; other_brand: number; floor: number; result: number; tolerance: number; ties: boolean };
+    capacity: { existing: number; sundays: number; closed: number; other_brand: number; floor: number; result: number; ties: boolean };
     booked: { existing: number; sundays: number; other_brand: number; result: number; ties: boolean };
-    unassigned: { existing: number; other_brand: number; sundays: number; later: number; result: number; ties: boolean };
-    window_weeks: number;
-  };
-  travel_reference: null | {
-    measured: { median_min: number | null; average_min: number | null; visits: number; share_tapped: number | null; from: string; to: string };
-    estimated: { average_min: number | null; legs: number };
+    unassigned: { existing: number; other_brand: number; sundays: number; outside: number; result: number; ties: boolean };
+    hours_from: string; hours_to: string;
   };
 }
 
@@ -120,7 +113,7 @@ export const reportsApi = {
   cleaners: (period: Period, locations?: number[] | null) => call<CleanersReport>('GET', `/cleaners?period=${period}${locations ? `&locations=${locations.join(',')}` : ''}`),
   cleaner: (id: number, period: Period) => call<CleanerReport>('GET', `/cleaners/${id}?period=${period}`),
   refresh: () => call<{ running: boolean }>('POST', '/refresh'),
-  headroom: (weeks: number, locations?: number[] | null) => call<HeadroomReport>('GET', `/headroom?weeks=${weeks}${locations ? `&locations=${locations.join(',')}` : ''}`),
+  utilization: (from: string | null, to: string | null, locations?: number[] | null) => call<UtilizationReport>('GET', `/utilization?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}), ...(locations ? { locations: locations.join(',') } : {}) })}`),
 };
 
 export const pct = (x: number | null | undefined, digits = 0) => (x == null ? '—' : `${(x * 100).toFixed(digits)}%`);

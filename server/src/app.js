@@ -8,7 +8,7 @@ import { createL27Client } from './inbox/lookup.js';
 import { createLogger, requestLogger } from './log.js';
 import { migrationStatus } from './db/migrate.js';
 import { createPlacementRouter } from './placement/api.js';
-import { canSeeHeadroom } from './config.js';
+import { canSeeUtilization } from './config.js';
 
 const COOKIE = 'l27_session';
 const UPSTREAM_TIMEOUT_MS = 30_000;
@@ -107,7 +107,7 @@ export function createApp(
   app.get('/auth/me', (req, res) => {
     const session = sessions.get(req.signedCookies[COOKIE]);
     if (!session) return res.status(401).json({ error: 'Not logged in' });
-    const features = { headroom: canSeeHeadroom(config, session.email) };
+    const features = { utilization: canSeeUtilization(config, session.email) };
     res.json({ email: session.email, allowWrites: config.allowWrites, env: config.appEnv, l27Mode: config.l27Mode, notificationsMode: config.notificationsMode, features });
   });
 

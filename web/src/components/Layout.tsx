@@ -16,7 +16,7 @@ import { PortalSwitcher } from './PortalSwitcher';
 // Sidebar sections. Add a line here for each page rebuilt from docs/API.md.
 // `icon` is a name from components/Icon.tsx.
 // `feature`: shown only to logins the server enables it for (/auth/me features).
-const NAV: { section: string; items: { to: string; label: string; icon: string; feature?: 'headroom' }[] }[] = [
+const NAV: { section: string; items: { to: string; label: string; icon: string; feature?: 'utilization' }[] }[] = [
   {
     section: 'Support',
     items: [
@@ -60,7 +60,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: string; 
     items: [
       { to: '/reports/customers', label: 'Customer insights', icon: 'grid' },
       { to: '/reports/scheduling', label: 'Scheduling insights', icon: 'route' },
-      { to: '/reports/headroom', label: 'Headroom', icon: 'trend', feature: 'headroom' },
+      { to: '/reports/utilization', label: 'Utilization', icon: 'trend', feature: 'utilization' },
       { to: '/reports/cleaners', label: 'Cleaner reports', icon: 'users' },
       { to: '/feedback', label: 'Customer feedback', icon: 'star' },
     ],

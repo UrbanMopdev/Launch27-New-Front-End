@@ -1015,9 +1015,9 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     });
     snap = null;
   }
-  // Read-only view of the saved copy for the Headroom report: cleaners with their Launch27 hours,
+  // Read-only view of the saved copy for the Utilization report: cleaners with their Launch27 hours,
   // visits from today on, closed dates and days marked unavailable in this app.
-  async function headroomSource() {
+  async function utilizationSource() {
     const s = await need();
     return {
       taken_at: s.taken_at,
@@ -1029,6 +1029,6 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     };
   }
 
-  return { headroomSource, reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
+  return { utilizationSource, reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load };
 }
 
