@@ -114,10 +114,19 @@ export function DispatchPage() {
     [teamsQ.data, locationId, brand],
   );
   const availQ = useQuery({
-    // The date range makes Launch27 include one-day changes (a day off, a short day).
+    // Weekly hours from a plain request; one-day changes (a day off, a short day) from a dated one.
+    // Asked separately so a refused dated request never makes a cleaner read as off.
     queryKey: ['availability', date, teams.map((t) => t.id).join(',')],
     queryFn: async () => {
-      const rows = await mapLimit(teams, 8, (t) => l27<AvailabilityRow[]>(`/v1/staff/teams/${t.id}/availability`, { from: date, to: date }).catch(() => [] as AvailabilityRow[]));
+      const rows = await mapLimit(teams, 8, async (t) => {
+        const path = `/v1/staff/teams/${t.id}/availability`;
+        const [weekly, dated] = await Promise.all([
+          l27<AvailabilityRow[]>(path).catch(() => [] as AvailabilityRow[]),
+          l27<AvailabilityRow[]>(path, { from: date, to: date }).catch(() => [] as AvailabilityRow[]),
+        ]);
+        const list = (x: unknown) => (Array.isArray(x) ? (x as AvailabilityRow[]) : []);
+        return [...list(weekly).filter((r) => !r.date), ...list(dated).filter((r) => r.date && String(r.date).slice(0, 10) === date)];
+      });
       return new Map(teams.map((t, i) => [t.id, rows[i]]));
     },
     enabled: teams.length > 0,
