@@ -21,6 +21,7 @@ import { TeamsPage } from './pages/Teams';
 import { OrganizationsPage } from './commercial/Organizations';
 import { OrganizationPage } from './commercial/OrganizationPage';
 import { ProgramsPage } from './commercial/Programs';
+import { WorkforcePage } from './commercial/Workforce';
 import { ChargesPage } from './pages/Charges';
 import { TimeTrackingPage } from './pages/TimeTracking';
 import { FeedbackPage } from './pages/Feedback';
@@ -86,6 +87,7 @@ export function App() {
         <Route path="commercial/organizations" element={<OrganizationsPage />} />
         <Route path="commercial/organizations/:key" element={<OrganizationPage />} />
         <Route path="commercial/programs" element={<ProgramsPage />} />
+        <Route path="commercial/workforce" element={<WorkforcePage />} />
         <Route path="reports/customers" element={<CustomerInsightsPage />} />
         <Route path="reports/scheduling" element={<SchedulingInsightsPage />} />
         <Route path="reports/utilization" element={<UtilizationPage />} />
