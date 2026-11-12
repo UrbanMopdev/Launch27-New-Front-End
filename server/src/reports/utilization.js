@@ -183,7 +183,7 @@ export function clampRange(today, from, to, maxTo) {
  *   { capacity4, booked4, unassigned_visits, tolerance } (planner overview: its 4 weeks, and all future;
  *   tolerance = the rounding the planner applies, 0.05 h per cleaner-week)
  */
-export function utilizationReport({ facts, from, to, maxTo, cfg = UTILIZATION, existing = null, takenAt = null }) {
+export function utilizationReport({ facts, from, to, maxTo, cfg = UTILIZATION, existing = null, takenAt = null, cleaners: allCleaners = [], source = {} }) {
   const { today } = facts;
   const inWin = (d) => d >= from && d <= to;
   const all = sum(facts, inWin, null, cfg);
@@ -257,7 +257,63 @@ export function utilizationReport({ facts, from, to, maxTo, cfg = UTILIZATION, e
 
   return {
     taken_at: takenAt, today, from, to, max_to: maxTo, avg_leg_min: Math.round(facts.avg_leg_min),
+    data_check: dataCheck({ facts, inWin, cleaners: allCleaners, source }),
     totals: { ...rounded(all), cleaners: facts.taking.length, customers: new Set(cust.map((x) => x.customer)).size, customers_recurring: new Set(cust.filter((x) => x.recurring).map((x) => x.customer)).size },
     areas, cleaners, by_day: byDay, trend, reconcile,
   };
+}
+
+// Data check: per cleaner, what the report knows from Launch27 and what looks wrong, for the dates
+// shown. Cleaners taking bookings, plus anyone else with bookings in these dates.
+const FLAG = {
+  refused: 'Launch27 refused their hours',
+  booked_no_hours: 'Booked, but 0 available hours',
+  booked_not_taking: 'Booked, but not taking bookings',
+  no_hours: 'No hours set in Launch27',
+  no_home: 'No home location (area Unknown)',
+};
+const FLAG_ORDER = Object.keys(FLAG);
+export function dataCheck({ facts, inWin, cleaners = [], source = {} }) {
+  const takingIds = new Set(facts.taking.map((c) => c.id));
+  const per = new Map();
+  for (const x of facts.days) {
+    if (x.sunday || !inWin(x.d)) continue;
+    const p = per.get(x.cid) || { avail: 0, booked: 0, visits: 0 };
+    p.avail += x.avail;
+    p.booked += x.assigned;
+    p.visits += x.visits;
+    per.set(x.cid, p);
+  }
+  for (const x of facts.loose) {
+    if (x.kind !== 'not_taking' || x.sunday || !x.brand || !inWin(x.d)) continue;
+    const p = per.get(x.cid) || { avail: 0, booked: 0, visits: 0 };
+    p.booked += x.hours;
+    p.visits += 1;
+    per.set(x.cid, p);
+  }
+  const rows = [];
+  for (const c of cleaners) {
+    const taking = takingIds.has(c.id);
+    const p = per.get(c.id) || { avail: 0, booked: 0, visits: 0 };
+    if (!taking && !p.visits) continue;
+    const weekly = (c.availability || []).filter((r) => !r.date);
+    const weeklyH = c.weekly_hours ?? null;
+    const flags = [];
+    if (c.availability_error) flags.push('refused');
+    if (taking && p.visits && p.avail <= 0) flags.push('booked_no_hours');
+    if (!taking && p.visits) flags.push('booked_not_taking');
+    if (!c.availability_error && taking && !(weeklyH > 0)) flags.push('no_hours');
+    if (c.lat == null || c.lng == null) flags.push('no_home');
+    rows.push({
+      cleaner_id: c.id, name: c.name, status_label: c.status_label || null, taking, area: c.area || 'Unknown',
+      home_location: c.lat != null && c.lng != null, weekly_hours: weeklyH, weekly_rows: weekly.length, dated_rows: (c.availability || []).length - weekly.length,
+      availability_error: c.availability_error || null,
+      available_h: r1(p.avail / 60), booked_h: r1(p.booked / 60), visits: p.visits,
+      flags: flags.map((k) => ({ kind: k, label: FLAG[k] })),
+    });
+  }
+  const rank = (r) => (r.flags.length ? Math.min(...r.flags.map((f) => FLAG_ORDER.indexOf(f.kind))) : 99);
+  rows.sort((a, b) => rank(a) - rank(b) || b.booked_h - a.booked_h || a.name.localeCompare(b.name));
+  const counts = Object.fromEntries(FLAG_ORDER.map((k) => [k, rows.filter((r) => r.flags.some((f) => f.kind === k)).length]));
+  return { refreshed_at: source.full_at || null, read_by: source.cleaners_by || null, counts, labels: FLAG, cleaners: rows };
 }

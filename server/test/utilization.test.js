@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { utilizationFacts, utilizationReport, clampRange } from '../src/reports/utilization.js';
+import { utilizationFacts, utilizationReport, clampRange, dataCheck } from '../src/reports/utilization.js';
 import { createReports } from '../src/reports/service.js';
 import { createSchedule } from '../src/schedule/service.js';
 import { createMockLaunch27 } from '../src/mock/launch27.js';
@@ -139,5 +139,50 @@ describe('utilization: on the sample Launch27', () => {
       server.close();
       await db.close();
     }
+  });
+});
+
+describe('utilization: data check', () => {
+  test('flags refused hours, booked with no hours, booked while not taking, no hours set, no home location', () => {
+    const NOHOURS = { id: 4, name: 'No hours', area: 'Unknown', assignable: true, location_ids: [1], lat: null, lng: null, rules: {}, availability: [] };
+    const REFUSED = { ...NOHOURS, id: 5, name: 'Refused', ...HOME, area: 'Central', availability_error: 'Launch27 refused: not allowed for this login (403)' };
+    const visits = [...VISITS, visit('v8', '2026-11-10', 600, 720, [4]), visit('v9', '2026-11-11', 600, 720, [5])];
+    const all = [A, B, OFF, NOHOURS, REFUSED].map((c) => ({ ...c, weekly_hours: c.availability.length ? 8 * 7 : 0, status_label: c.assignable ? 'Active' : 'On hold' }));
+    const f = utilizationFacts({ today: TODAY, cleaners: all, visits, holidays: HOLIDAYS, until: '2026-11-15' });
+    const dc = dataCheck({ facts: f, inWin: (d) => d >= TODAY && d <= '2026-11-15', cleaners: all, source: { full_at: '2026-11-09T10:00:00Z', cleaners_by: 'person' } });
+    const kinds = (id) => dc.cleaners.find((c) => c.cleaner_id === id).flags.map((x) => x.kind);
+    assert.deepEqual(kinds(5), ['refused', 'booked_no_hours']);
+    assert.deepEqual(kinds(4), ['booked_no_hours', 'no_hours', 'no_home']);
+    assert.deepEqual(kinds(3), ['booked_not_taking']);
+    assert.deepEqual(kinds(1), []);
+    assert.equal(dc.cleaners[0].cleaner_id, 5); // problems first, refused at the top
+    assert.equal(dc.counts.booked_no_hours, 2);
+    assert.equal(dc.read_by, 'person');
+  });
+
+  test('the planner records a refusal instead of hiding it, and retries a temporary one', async () => {
+    const db = await openDb();
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const mock = createMockLaunch27({ password: 'demo' });
+    let tries429 = 0;
+    const fetchImpl = async (url, init) => {
+      if (url.includes('/v1/staff/teams/9000/availability')) return new Response('{}', { status: 403 });
+      if (url.includes('/v1/staff/teams/9001/availability') && tries429++ === 0) return new Response('{}', { status: 429 });
+      return mock(url, init);
+    };
+    const schedule = createSchedule({ db, config, fetchImpl, log: quiet, retryDelayMs: 0 });
+    await schedule.sync();
+    const src = await schedule.utilizationSource();
+    const c0 = src.cleaners.find((c) => c.id === 9000);
+    const c1 = src.cleaners.find((c) => c.id === 9001);
+    assert.equal(c0.availability_error, 'Launch27 refused: not allowed for this login (403)');
+    assert.deepEqual(c0.availability, []);
+    assert.equal(c1.availability_error, null); // 429 once, then fine on the retry
+    assert.ok(c1.availability.length > 0);
+    assert.equal(src.cleaners_by, 'sync');
+    const reports = createReports({ db, config, fetchImpl, schedule, log: quiet });
+    const r = await reports.utilization({});
+    assert.ok(r.data_check.cleaners.find((c) => c.cleaner_id === 9000).flags.some((f) => f.kind === 'refused'));
+    await db.close();
   });
 });
