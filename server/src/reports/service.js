@@ -6,7 +6,11 @@ import { addDays, localDate, mondayOf } from '../schedule/rules.js';
 import { harmonizePartners } from '../commercial/partners.js';
 import { clampRange, utilizationFacts, utilizationReport } from './utilization.js';
 import { UTILIZATION } from './utilization-config.js';
-import { PERIODS, cleanerRow, cleanerStats, flagsFor, indexVisits, median, outsideArea, pct, periodRange, regularClients, round1, sameCleaner, slimReportVisit, timing, weeklySeries } from './compute.js';
+import { PERIODS, cleanerRow, cleanerStats, emptyStats, flagsFor, indexVisits, median, outsideArea, pct, periodRange, regularClients, round1, sameCleaner, slimReportVisit, teamLong, timing, weeklySeries } from './compute.js';
+import { CHANGE_LOG_START, DROP_REASONS, RAISE_THRESHOLDS } from './raise-config.js';
+import { ladderOf, raiseReview, rateHistory, reliability, reliabilityWeeks, restrictiveTags, slackSummary } from './raise.js';
+
+const VERDICT_RANK = { ready: 4, watch: 3, not_yet: 2, ceiling: 1, ladder: 1, thin: 0 };
 
 const DAYS_BACK = 365;
 const HOUR = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', hour: 'numeric', hourCycle: 'h23' });
@@ -248,10 +252,108 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     };
   }
 
+  // ---------- raise readiness: data kept in this app ----------
+  // Drops (cleaner taken off a visit), complaints tagged with a cleaner, Google reviews.
+  async function sideData(since) {
+    const safe = (p) => p.then((r) => r.rows).catch((err) => {
+      log.warn('raise readiness data unavailable', { error: err.message });
+      return [];
+    });
+    const [drops, complaints, reviews] = await Promise.all([
+      safe(db.query('SELECT id, cleaner_id, visit_key, booking_id, customer, visit_at, dropped_at, reason, source FROM cleaner_drops WHERE dropped_at >= $1 ORDER BY dropped_at', [`${since}T00:00:00Z`])),
+      safe(db.query("SELECT id, cleaner_id, cleaner_name, subject, created_at, complaint FROM conversations WHERE cleaner_id IS NOT NULL AND complaint IS NOT NULL AND created_at >= $1 ORDER BY created_at DESC", [`${since}T00:00:00Z`])),
+      safe(db.query('SELECT id, cleaner_id, review_date, reviewer, link, bonus_paid, created_at FROM cleaner_google_reviews ORDER BY review_date DESC')),
+    ]);
+    const group = (rows) => {
+      const m = new Map();
+      for (const r of rows) {
+        const k = Number(r.cleaner_id);
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(r);
+      }
+      return m;
+    };
+    const iso = (x) => (x instanceof Date ? x.toISOString() : String(x));
+    const day = (x) => (x instanceof Date ? x.toISOString().slice(0, 10) : String(x).slice(0, 10));
+    return {
+      drops: group(drops.map((d) => ({ ...d, id: Number(d.id), visit_at: iso(d.visit_at), dropped_at: iso(d.dropped_at), dropped_on: localDate(d.dropped_at), visit_date: localDate(d.visit_at) }))),
+      complaints: group(complaints.map((c) => ({ id: Number(c.id), cleaner_id: Number(c.cleaner_id), subject: c.subject, date: localDate(c.created_at), outcome: c.complaint?.outcome || null, status: c.complaint?.status || null, booking_id: c.complaint?.booking_id ?? null }))),
+      reviews: group(reviews.map((r) => ({ id: Number(r.id), cleaner_id: Number(r.cleaner_id), date: day(r.review_date), reviewer: r.reviewer, link: r.link, bonus_paid: !!r.bonus_paid }))),
+    };
+  }
+
+  // Pay rate on each visit, per cleaner (from the whole snapshot), cached per build.
+  const rateCache = new Map();
+  function ratesFor(s) {
+    if (!rateCache.has(s.taken_at)) {
+      rateCache.clear();
+      const m = new Map();
+      for (const v of s.visits) for (const t of v.teams) {
+        if (!m.has(t.id)) m.set(t.id, []);
+        m.get(t.id).push({ date: v.date, rate: t.rate });
+      }
+      const out = new Map();
+      for (const [id, pts] of m) out.set(id, { history: rateHistory(pts), first: pts.reduce((a, p) => (!a || p.date < a ? p.date : a), null) });
+      rateCache.set(s.taken_at, out);
+    }
+    return rateCache.get(s.taken_at);
+  }
+
+  // Start date: Launch27's provider created date when known, else their first visit in the
+  // last 12 months ("at least" when that is near the start of what we have).
+  function startOf(info, rates, s) {
+    if (info?.created_at) return { date: localDate(info.created_at), known: true };
+    const first = rates?.first || null;
+    if (!first) return { date: null, known: false };
+    return { date: first, known: first > addDays(s.from, 14) };
+  }
+
+  // The 13-week figures the verdict is built from.
+  function raiseInput({ st, info, s, side, rates, ratedShare, today13, from13, to13 }) {
+    const row = cleanerRow(st);
+    const start = startOf(info, rates, s);
+    const rel = reliability({ drops: side.drops.get(st.id) || [], checks: { missing: st.missing, late: [] }, from: from13, to: today13 });
+    return {
+      today: today13,
+      start_date: start.date,
+      start_known: start.known,
+      visits: st.visits,
+      rated: st.rated,
+      happy: row.happy,
+      stars: info?.stars ?? null,
+      stars_count: info?.ratings_count ?? null,
+      rated_share: ratedShare,
+      on_time: row.on_time,
+      tracked: st.tracked,
+      reliability: rel,
+      residential: st.residential,
+      early_share: row.finished_early,
+      complaints: (side.complaints.get(st.id) || []).filter((c) => c.date >= from13 && c.date <= today13).length,
+      keeps: row.keeps,
+      clients_started: row.clients_started,
+      hours_per_week: round1((row.onsite_hours || row.booked_hours) / (RAISE_THRESHOLDS.windowDays / 7)),
+      restrictive: restrictiveTags(info?.tags || []),
+      google_reviews: (side.reviews.get(st.id) || []).filter((r) => r.date >= from13 && r.date <= today13).length,
+      rate: rates?.history?.current ?? null,
+      ladder: ladderOf(info?.tags || []),
+      margin: row.margin,
+      _to: to13,
+    };
+  }
+
+  const ratedShareOf = (s, from, to) => pct(new Set(s.visits.filter((v) => v.date >= from && v.date <= to && v.rating).map((v) => v.id)).size, s.visits.filter((v) => v.date >= from && v.date <= to).length);
+
   async function cleaners(period = '13w', { admin = false, locations = null } = {}) {
     const s = await needScoped(locations);
     const { from, to, days } = periodRange(s.today, period);
     const stats = cleanerStats(s.visits, s.byCustomer, from, to, s.today);
+    const r13 = periodRange(s.today, '13w');
+    const stats13 = period === '13w' ? stats : cleanerStats(s.visits, s.byCustomer, r13.from, r13.to, s.today);
+    const today = localDate(now());
+    const side = await sideData(from < r13.from ? from : r13.from);
+    const rates = ratesFor(s);
+    const ratedShare13 = ratedShareOf(s, r13.from, r13.to);
+    const team = teamLong(stats);
     const { ov, util } = await plannerView(locations);
     const info = new Map((ov?.rows || []).map((r) => [r.id, r]));
     const rows = [];
@@ -259,13 +361,24 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
       const i = info.get(st.id);
       const u = util.get(st.id);
       const row = cleanerRow(st, { name: i?.name });
+      const rel = reliability({ drops: side.drops.get(st.id) || [], checks: { missing: st.missing, late: [] }, from, to: today });
+      let raise;
+      if (admin) {
+        const st13 = stats13.get(st.id) || emptyStats(st.id, st.name);
+        const review = raiseReview(raiseInput({ st: st13, info: i, s, side, rates: rates.get(st.id), ratedShare: ratedShare13, today13: today, from13: r13.from, to13: r13.to }));
+        raise = { verdict: review.verdict, label: review.label, re_review: review.re_review, rank: VERDICT_RANK[review.verdict] ?? 0 };
+      }
       rows.push({
         ...row,
         earned: admin ? row.earned : undefined,
+        margin: admin ? row.margin : undefined,
         status: i?.status || 'unknown', status_label: i?.status_label || 'Not in the active list', assignable: !!i?.assignable, area: i?.area || null, color: i?.color || '#94A3B8', is_new: !!i?.is_new, hours_type: i?.hours_type || null,
         hours_per_week: round1((row.onsite_hours || row.booked_hours) / (days / 7)),
         hours_filled: u && u.capacity ? pct(u.booked, u.capacity) : null,
-        flags: flagsFor(st, u),
+        stars: i?.stars ?? null, ratings_count: i?.ratings_count ?? null,
+        reliability: { issues: rel.issues, no_shows: rel.no_shows, last_minute: rel.last_minute, short_notice: rel.short_notice, missing_checks: rel.missing_checks, partial: rel.partial, covers_from: rel.covers_from, uncoded: rel.uncoded },
+        raise,
+        flags: flagsFor(st, u, team),
       });
     }
     rows.sort((a, b) => b.visits - a.visits);
@@ -275,6 +388,8 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     const tracked = sumStats.reduce((a, s2) => a + s2.tracked, 0);
     return {
       taken_at: s.taken_at, period, from, to, admin,
+      change_log_start: CHANGE_LOG_START,
+      raise_window: admin ? { from: r13.from, to: today } : undefined,
       team: {
         cleaners: all.length,
         median_visits: median(all.map((r) => r.visits)),
@@ -282,10 +397,12 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
         on_time: pct(sumStats.reduce((a, s2) => a + s2.onTime, 0), tracked),
         check_ins: tracked,
         happy: pct(sumStats.reduce((a, s2) => a + s2.happy, 0), sumStats.reduce((a, s2) => a + s2.rated, 0)),
-        rated_share: pct(new Set(s.visits.filter((v) => v.date >= from && v.date <= to && v.rating).map((v) => v.id)).size, s.visits.filter((v) => v.date >= from && v.date <= to).length),
+        rated_share: ratedShareOf(s, from, to),
         revenue: tot('revenue'),
         earned: admin ? tot('earned') : undefined,
         flagged: rows.filter((r) => r.flags.length && r.assignable).length,
+        runs_long_median: team.median,
+        raise_ready: admin ? rows.filter((r) => r.raise?.verdict === 'ready').length : undefined,
       },
       rows,
     };
@@ -300,22 +417,103 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     const { ov, util } = await plannerView(locations);
     const i = (ov?.rows || []).find((r) => r.id === cid);
     if (!st && !i) throw Object.assign(new Error('No report for this cleaner'), { status: 404 });
-    const base = st || cleanerStats([], new Map(), from, to, s.today).get(cid) || { id: cid, name: i?.name, visits: 0, onsiteMin: 0, bookedMin: 0, tracked: 0, onTime: 0, lateMin: [], long: 0, enroute: 0, km: [], rated: 0, happy: 0, unhappy: 0, unhappyRecent: 0, revenue: 0, earned: 0, last40: [] };
+    const base = st || emptyStats(cid, i?.name);
     const row = cleanerRow(base, { name: i?.name });
     const u = util.get(cid);
+    const today = localDate(now());
+    const r13 = periodRange(s.today, '13w');
+    const stats13 = period === '13w' ? stats : cleanerStats(s.visits, s.byCustomer, r13.from, r13.to, s.today);
+    const side = await sideData(from < r13.from ? from : r13.from);
+    const rates = ratesFor(s).get(cid);
+    const team = teamLong(stats);
+    const start = startOf(i, rates, s);
     const lastRatings = s.visits.filter((v) => v.rating && v.teams.some((t) => t.id === cid)).sort((a, b) => b.at - a.at).slice(0, 8).map((v) => ({ date: v.date, customer: v.customer, r: v.rating.r, comment: v.rating.comment }));
-    const firstSeen = s.visits.filter((v) => v.teams.some((t) => t.id === cid)).reduce((m, v) => (!m || v.date < m ? v.date : m), null);
+    const firstSeen = rates?.first || null;
+    const rel = reliability({ drops: side.drops.get(cid) || [], checks: { missing: base.missing, late: base.lateList }, from, to: today });
+    let raise;
+    if (admin) {
+      const st13 = stats13.get(cid) || emptyStats(cid, i?.name);
+      const input = raiseInput({ st: st13, info: i, s, side, rates, ratedShare: ratedShareOf(s, r13.from, r13.to), today13: today, from13: r13.from, to13: r13.to });
+      const review = raiseReview(input);
+      const name = i?.name || row.name;
+      raise = {
+        ...review,
+        from: r13.from,
+        to: today,
+        rate: rates?.history || null,
+        margin: input.margin,
+        summary: slackSummary({ name, review, rate: rates?.history || null, from: r13.from, to: today }),
+      };
+    }
     return {
       taken_at: s.taken_at, period, from, to, admin,
-      cleaner: { id: cid, name: i?.name || row.name, status: i?.status || 'unknown', status_label: i?.status_label || 'Not in the active list', area: i?.area || null, color: i?.color || '#94A3B8', tags: i?.tags || [], hours_type: i?.hours_type || null, phone: i?.phone || null, weekly_hours: i?.weekly_hours ?? null, first_seen: firstSeen },
-      stats: { ...row, earned: admin ? row.earned : undefined, hours_per_week: round1((row.onsite_hours || row.booked_hours) / (days / 7)), hours_filled: u && u.capacity ? pct(u.booked, u.capacity) : null, booked_next4: u ? round1(u.booked) : null, capacity_next4: u ? round1(u.capacity) : null, per_hour: admin && row.earned && row.onsite_hours ? round1(row.earned / row.onsite_hours) : undefined },
-      flags: flagsFor(base, u),
+      change_log_start: CHANGE_LOG_START,
+      cleaner: { id: cid, name: i?.name || row.name, status: i?.status || 'unknown', status_label: i?.status_label || 'Not in the active list', area: i?.area || null, color: i?.color || '#94A3B8', tags: i?.tags || [], hours_type: i?.hours_type || null, phone: i?.phone || null, weekly_hours: i?.weekly_hours ?? null, first_seen: firstSeen, start_date: start.date, start_known: start.known, stars: i?.stars ?? null, ratings_count: i?.ratings_count ?? null, restrictive: restrictiveTags(i?.tags || []) },
+      stats: { ...row, earned: admin ? row.earned : undefined, margin: admin ? row.margin : undefined, hours_per_week: round1((row.onsite_hours || row.booked_hours) / (days / 7)), hours_filled: u && u.capacity ? pct(u.booked, u.capacity) : null, booked_next4: u ? round1(u.booked) : null, capacity_next4: u ? round1(u.capacity) : null, per_hour: admin && row.earned && row.onsite_hours ? round1(row.earned / row.onsite_hours) : undefined },
+      flags: flagsFor(base, u, team),
+      team: { runs_long_median: team.median },
       series: weeklySeries(s.visits, cid, from, to),
       clients: regularClients(cid, s.byCustomer, now()).slice(0, 25),
       lost: (base.lost || []).map((l) => ({ customer: l.customer, stopped: l.stopped, to: l.to != null ? (ov?.rows.find((r) => r.id === l.to)?.name || 'another cleaner') : null })),
       ratings: lastRatings,
       last40: [...(base.last40 || [])].reverse(),
+      reliability: { ...rel, weeks: reliabilityWeeks(rel, from, today) },
+      finished_early: [...base.earlyList].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 30),
+      complaints: (side.complaints.get(cid) || []).filter((c) => c.date >= from),
+      google_reviews: side.reviews.get(cid) || [],
+      raise,
     };
+  }
+
+  // ---------- drops: record and code ----------
+  // Dispatch removes a cleaner (reason picked there), or someone codes a drop the sync found.
+  async function recordDrop({ cleaner_id, visit_key, booking_id = null, customer = null, visit_at, reason }, userId) {
+    if (!DROP_REASONS[reason]) throw Object.assign(new Error('Pick a reason'), { status: 400 });
+    const cid = Number(cleaner_id);
+    const key = String(visit_key || booking_id || '');
+    if (!cid || !key) throw Object.assign(new Error('cleaner_id and visit_key are required'), { status: 400 });
+    const at = Date.parse(visit_at);
+    if (!Number.isFinite(at)) throw Object.assign(new Error('visit_at must be a date and time'), { status: 400 });
+    const row = (await db.query(
+      `INSERT INTO cleaner_drops (cleaner_id, visit_key, booking_id, customer, visit_at, dropped_at, reason, source, coded_by, coded_at) VALUES ($1,$2,$3,$4,$5,now(),$6,'dispatch',$7,now())
+       ON CONFLICT (visit_key, cleaner_id) DO UPDATE SET reason = EXCLUDED.reason, coded_by = EXCLUDED.coded_by, coded_at = now() RETURNING id`,
+      [cid, key, booking_id ? Number(booking_id) : null, customer ? String(customer).slice(0, 200) : null, new Date(at).toISOString(), reason, userId || null],
+    )).rows[0];
+    return { id: Number(row.id) };
+  }
+
+  // Code the drops behind one "Cleaner changed" card.
+  async function codeChange(changeId, reason, userId) {
+    if (!DROP_REASONS[reason]) throw Object.assign(new Error('Pick a reason'), { status: 400 });
+    const res = await db.query('UPDATE cleaner_drops SET reason = $2, coded_by = $3, coded_at = now() WHERE change_id = $1 RETURNING id', [Number(changeId), reason, userId || null]);
+    return { coded: res.rows.length };
+  }
+  async function dropsForChanges(ids) {
+    if (!ids.length) return new Map();
+    const rows = (await db.query('SELECT change_id, cleaner_id, reason FROM cleaner_drops WHERE change_id = ANY($1::bigint[])', [ids.map(Number)])).rows;
+    const m = new Map();
+    for (const r of rows) {
+      const k = Number(r.change_id);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push({ cleaner_id: Number(r.cleaner_id), reason: r.reason });
+    }
+    return m;
+  }
+
+  // ---------- Google reviews (phase 1: typed in) ----------
+  async function addReview(cleanerId, { review_date, reviewer, link = null, bonus_paid = false }, userId) {
+    const d = String(review_date || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) throw Object.assign(new Error('Review date is required'), { status: 400 });
+    if (!String(reviewer || '').trim()) throw Object.assign(new Error('Reviewer is required'), { status: 400 });
+    if (link && !/^https?:\/\//i.test(String(link))) throw Object.assign(new Error('Link must start with http'), { status: 400 });
+    const row = (await db.query('INSERT INTO cleaner_google_reviews (cleaner_id, review_date, reviewer, link, bonus_paid, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id', [Number(cleanerId), d, String(reviewer).trim().slice(0, 200), link ? String(link).slice(0, 1000) : null, !!bonus_paid, userId || null])).rows[0];
+    return { id: Number(row.id) };
+  }
+  async function updateReview(id, { bonus_paid }) {
+    await db.query('UPDATE cleaner_google_reviews SET bonus_paid = $2 WHERE id = $1', [Number(id), !!bonus_paid]);
+  }
+  async function deleteReview(id) {
+    await db.query('DELETE FROM cleaner_google_reviews WHERE id = $1', [Number(id)]);
   }
 
   async function status() {
@@ -350,5 +548,5 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
 
   // The raw year of visits (for the Commercial area).
   const visitsSnapshot = () => need();
-  return { sync, start, maybeRun, scheduling, utilization, cleaners, cleaner, status, visitsSnapshot, isRunning: () => !!running, mondayOf };
+  return { sync, start, maybeRun, scheduling, utilization, cleaners, cleaner, status, visitsSnapshot, recordDrop, codeChange, dropsForChanges, addReview, updateReview, deleteReview, isRunning: () => !!running, mondayOf };
 }

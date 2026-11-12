@@ -1,6 +1,7 @@
 // Scheduling planner: sync from Launch27 (read-only), detect changes, answer the screens.
 // Writes (assigning a cleaner) go to Launch27 with the signed-in user's own login.
 import { SAMPLE_VERSION } from '../mock/launch27.js';
+import { torontoInstant } from '../reports/raise.js';
 import { clientId, clientLabel, harmonizePartners, noteHints, partnerOf } from '../commercial/partners.js';
 import {
   FREQ_LABEL, STATUS_LABEL, addDays, areaOf, customerPrefs, cycleWeek, cycleWeeks, daysBetween, fitsDay, frequencyKind,
@@ -299,7 +300,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       const was = b.team_ids.join(',');
       const is = a.team_ids.join(',');
       if (was !== is && b.team_ids.length) {
-        out.push({ kind: 'cleaner_changed', key: `cleaner_changed:${k}:${is || 'none'}`, due: a.date, visit_key: k, customer_id: a.customer_id, cleaner_id: b.team_ids[0], title: `${a.customer} · ${nice(a.date)}: ${b.team_ids.map((id) => name(next, id)).join(' & ')} → ${a.team_ids.length ? a.team_ids.map((id) => name(next, id)).join(' & ') : 'no cleaner'}`, detail: { from: b.team_ids, to: a.team_ids } });
+        out.push({ kind: 'cleaner_changed', key: `cleaner_changed:${k}:${is || 'none'}`, due: a.date, visit_key: k, customer_id: a.customer_id, cleaner_id: b.team_ids[0], title: `${a.customer} · ${nice(a.date)}: ${b.team_ids.map((id) => name(next, id)).join(' & ')} → ${a.team_ids.length ? a.team_ids.map((id) => name(next, id)).join(' & ') : 'no cleaner'}`, detail: { from: b.team_ids, to: a.team_ids, date: a.date, start: a.start, booking_id: a.id || null, customer: a.customer } });
       }
     }
     for (const [k, b] of before) {
@@ -336,10 +337,23 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     for (const f of found) {
       const res = await q.query(
         `INSERT INTO schedule_changes (key, kind, due, visit_key, customer_id, cleaner_id, title, detail) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
-         ON CONFLICT (key) WHERE resolved_at IS NULL DO UPDATE SET title = EXCLUDED.title, detail = EXCLUDED.detail, due = EXCLUDED.due RETURNING (xmax = 0) AS inserted`,
+         ON CONFLICT (key) WHERE resolved_at IS NULL DO UPDATE SET title = EXCLUDED.title, detail = EXCLUDED.detail, due = EXCLUDED.due RETURNING id, (xmax = 0) AS inserted`,
         [f.key, f.kind, f.due || null, f.visit_key || null, f.customer_id ?? null, f.cleaner_id ?? null, f.title, JSON.stringify(f.detail || {})],
       );
       if (res.rows[0]?.inserted) added++;
+      // A cleaner taken off an assigned visit: log the drop so dispatch can code the reason
+      // (raise readiness counts cleaner-initiated ones). Dispatch's own removals are already
+      // logged, with the moment they happened, so those rows are left alone.
+      if (f.kind === 'cleaner_changed' && res.rows[0]?.id) {
+        const removed = (f.detail.from || []).filter((id) => !(f.detail.to || []).includes(id));
+        for (const cid of removed) {
+          await q.query(
+            `INSERT INTO cleaner_drops (cleaner_id, visit_key, booking_id, customer, visit_at, dropped_at, source, change_id) VALUES ($1,$2,$3,$4,$5,now(),'sync',$6)
+             ON CONFLICT (visit_key, cleaner_id) DO UPDATE SET change_id = COALESCE(cleaner_drops.change_id, EXCLUDED.change_id)`,
+            [cid, f.visit_key, f.detail.booking_id ?? null, f.detail.customer ?? null, new Date(torontoInstant(f.detail.date || f.due, f.detail.start ?? 9 * 60)).toISOString(), res.rows[0].id],
+          );
+        }
+      }
     }
     return added;
   }
@@ -370,6 +384,9 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       c.weekly_hours = weeklyHours(c.availability);
       c.area = areaOf(c);
       c.share = tm.share || null;
+      c.stars = tm.stars != null ? Number(tm.stars) : null;
+      c.ratings_count = tm.ratings_count != null ? Number(tm.ratings_count) : null;
+      c.created_at = tm.created_at || null;
       cleaners.push(c);
     }
     const visits = await pullRange(bearer, addDays(t, -PAST_DAYS), addDays(t, AHEAD_DAYS));
@@ -495,7 +512,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     if (!s) throw Object.assign(new Error('The schedule has not been loaded yet. It loads automatically within a few minutes, or click "Refresh now".'), { status: 409 });
     return s;
   }
-  const cleanerOut = (c) => ({ id: c.id, location_ids: c.location_ids || [], lat: c.lat, lng: c.lng, name: c.name, status: c.status, status_label: STATUS_LABEL[c.status], assignable: c.assignable, is_new: c.isNew, gender: c.gender, hours_type: c.hoursType, color: c.color, area: c.area, phone: c.phone, weekly_hours: c.weekly_hours, tags: c.tags, rules: c.rules });
+  const cleanerOut = (c) => ({ id: c.id, location_ids: c.location_ids || [], lat: c.lat, lng: c.lng, name: c.name, status: c.status, status_label: STATUS_LABEL[c.status], assignable: c.assignable, is_new: c.isNew, gender: c.gender, hours_type: c.hoursType, color: c.color, area: c.area, phone: c.phone, weekly_hours: c.weekly_hours, tags: c.tags, rules: c.rules, stars: c.stars ?? null, ratings_count: c.ratings_count ?? null, created_at: c.created_at ?? null, share: c.share ?? null });
 
   async function status() {
     const last = await latestRun();
@@ -994,6 +1011,14 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     };
   }
 
+  // The cleaner on a booking (for the Inbox's Cleaner field). null when unknown.
+  async function cleanerForBooking(bookingId) {
+    const s = await need();
+    const v = s.visits.find((x) => Number(x.id) === Number(bookingId));
+    const id = v?.team_ids?.[0];
+    return id ? { id, name: s.byId.get(id)?.name || `Cleaner ${id}` } : null;
+  }
+
   async function cleaners() {
     const s = await need();
     return { cleaners: s.cleaners.map(cleanerOut).sort((a, b) => Number(b.assignable) - Number(a.assignable) || a.name.localeCompare(b.name)) };
@@ -1031,6 +1056,6 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     };
   }
 
-  return { utilizationSource, reset, dataChanged, cleanerProfile, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load, _window: windowFor };
+  return { utilizationSource, reset, dataChanged, cleanerProfile, cleanerForBooking, sync, start, soon, maybeRun, status, overview, plan, gapOptions, unassigned, continuity, changes, resolveChange, findSlots, checkSlot, assign, markUnavailable, cleaners, isRunning: () => !!running, _load: load, _window: windowFor };
 }
 

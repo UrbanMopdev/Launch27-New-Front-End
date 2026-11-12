@@ -6,6 +6,7 @@ import { BrandPill, brandLabel } from '../brands/ui';
 import { segmentsApi } from '../segments/api';
 import { scheduleApi, type Candidate, type Change, type ChangeKind, type Overview, type Series, type Slot, type Visit } from '../schedule/api';
 import { FreqPill, Reasons, ScheduleStatus, niceDate, CleanerDot } from '../schedule/ui';
+import { DROP_REASONS, reportsApi } from '../reports/api';
 
 type Tab = 'changes' | 'capacity' | 'continuity' | 'find';
 const TABS: [Tab, string][] = [['changes', 'Changes to handle'], ['capacity', 'Capacity'], ['continuity', 'Same cleaner'], ['find', 'Find a slot']];
@@ -334,15 +335,36 @@ function ChangeCard({ c, onResolve, onAssign, busy }: { c: Change; onResolve: (r
           </div>
         )}
       </div>
+      {c.drops && c.drops.length > 0 && <DropReason c={c} />}
       <div className="sch-footer">
         {v?.id && <Link to={`/bookings/${v.id}`}>Open booking</Link>}
         {c.client && c.client.id > 0 && <Link to={`/customers/${c.client.id}`}>Client profile</Link>}
         <span className="sch-footer-right">
-          <button className="secondary" disabled={busy} onClick={() => onResolve('fixed')}>Handled</button>
-          <button className="link" disabled={busy} onClick={() => onResolve('dismissed')}>Dismiss</button>
+          <button className="secondary" disabled={busy || !!c.drops?.some((d) => !d.reason)} title={c.drops?.some((d) => !d.reason) ? 'Pick why the cleaner came off first' : undefined} onClick={() => onResolve('fixed')}>Handled</button>
+          <button className="link" disabled={busy || !!c.drops?.some((d) => !d.reason)} onClick={() => onResolve('dismissed')}>Dismiss</button>
         </span>
       </div>
     </article>
+  );
+}
+
+// A cleaner was taken off this visit: one tap to say why (feeds cleaner reliability).
+function DropReason({ c }: { c: Change }) {
+  const queryClient = useQueryClient();
+  const code = useMutation({ mutationFn: (reason: string) => reportsApi.codeChange(c.id, reason), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedule', 'changes'] }) });
+  const current = c.drops?.[0]?.reason || null;
+  const who = (c.detail.from_names || []).filter((n) => !(c.detail.to_names || []).includes(n)).join(' & ') || 'The cleaner';
+  return (
+    <div className="sch-rec">
+      <span className="eyebrow accent">Why did {who} come off it?</span>
+      <div className="drop-reasons">
+        {DROP_REASONS.map(([k, label, cleaner]) => (
+          <button key={k} className={`chip-btn${cleaner ? ' cleaner' : ''}${current === k ? ' active' : ''}`} aria-pressed={current === k} disabled={code.isPending} onClick={() => code.mutate(k)}>{label}</button>
+        ))}
+      </div>
+      <span className="muted small">{current ? 'Saved. ' : ''}Only the "Cleaner –" reasons count against them on Cleaner reports.</span>
+      {code.isError && <span className="error small">{(code.error as Error).message}</span>}
+    </div>
   );
 }
 

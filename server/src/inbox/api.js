@@ -264,7 +264,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
       ? await many(db, 'SELECT DISTINCT c.* FROM contacts c JOIN contact_identities i ON i.contact_id = c.id WHERE i.value = $1', [conv.their_identity])
       : [];
     await db.query("UPDATE notifications SET read_at = now() WHERE user_id = $1 AND conversation_id = $2 AND read_at IS NULL", [req.user.id, conv.id]);
-    res.json({ conversation: conv, messages, contact: contact && { ...contact, identities }, others, queue, owner, sla_policy: policy, candidates });
+    const cleaner_from_booking = !conv.cleaner_id && conv.l27_booking_id ? await cleanerForBooking(conv.l27_booking_id) : null;
+    res.json({ conversation: conv, messages, contact: contact && { ...contact, identities }, others, queue, owner, sla_policy: policy, candidates, cleaner_from_booking });
   }));
 
   r.post('/conversations/:id/messages', wrap(async (req, res) => {
@@ -285,9 +286,32 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     res.status(201).json(await db.tx((q) => svc.addEvent(q, req.user, req.params.id, text, req.body?.meta || {})));
   }));
 
+  // The cleaner a booking was with (for the conversation's Cleaner field). Past visits come
+  // from the reports' copy, upcoming ones from the planner's.
+  async function cleanerForBooking(bookingId) {
+    if (!bookingId) return null;
+    const id = Number(bookingId);
+    try {
+      const snap = reports ? await reports.visitsSnapshot() : null;
+      const v = snap?.visits.find((x) => Number(x.id) === id);
+      if (v?.teams?.length) return { id: v.teams[0].id, name: v.teams[0].name };
+    } catch { /* reports not built yet */ }
+    try {
+      const c = schedule?.cleanerForBooking ? await schedule.cleanerForBooking(id) : null;
+      if (c) return c;
+    } catch { /* planner not running */ }
+    return null;
+  }
+
   r.patch('/conversations/:id', wrap(async (req, res) => {
-    await loadConversation(req, req.params.id);
-    res.json(await db.tx((q) => svc.updateConversation(q, req.user, req.params.id, req.body || {})));
+    const conv = await loadConversation(req, req.params.id);
+    const body = { ...(req.body || {}) };
+    // Default the Cleaner from the linked booking when a complaint is logged or a booking linked.
+    if (body.cleaner_id === undefined && !conv.cleaner_id && (body.complaint || body.l27_booking_id)) {
+      const c = await cleanerForBooking(body.l27_booking_id || body.complaint?.booking_id || conv.l27_booking_id);
+      if (c) Object.assign(body, { cleaner_id: c.id, cleaner_name: c.name });
+    }
+    res.json(await db.tx((q) => svc.updateConversation(q, req.user, req.params.id, body)));
   }));
 
   r.post('/conversations/:id/claim', wrap(async (req, res) => {
@@ -1063,8 +1087,22 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     r.get('/schedule/gap', sched(async (req, res) => res.json(await schedule.gapOptions(req.query.cleaner, String(req.query.date), Number(req.query.start), Number(req.query.end)))));
     r.get('/schedule/unassigned', sched(async (req, res) => res.json(await schedule.unassigned())));
     r.get('/schedule/continuity', sched(async (req, res) => res.json(await schedule.continuity({ locations: brandLocs(req) }))));
-    r.get('/schedule/changes', sched(async (req, res) => res.json(await schedule.changes())));
+    r.get('/schedule/changes', sched(async (req, res) => {
+      const out = await schedule.changes();
+      // Cleaner taken off a visit: which drops still need a reason code.
+      if (reports && Array.isArray(out?.items)) {
+        const ids = out.items.filter((c) => c.kind === 'cleaner_changed').map((c) => c.id);
+        const drops = await reports.dropsForChanges(ids).catch(() => new Map());
+        for (const c of out.items) if (drops.has(c.id)) c.drops = drops.get(c.id);
+      }
+      res.json(out);
+    }));
     r.post('/schedule/changes/:id/resolve', sched(async (req, res) => {
+      // A cleaner taken off a visit needs a reason before the card is closed.
+      if (reports) {
+        const drops = (await reports.dropsForChanges([Number(req.params.id)])).get(Number(req.params.id)) || [];
+        if (drops.some((d) => !d.reason)) return res.status(422).json({ error: 'Pick why the cleaner came off this visit first' });
+      }
       await schedule.resolveChange(Number(req.params.id), req.body?.resolution, req.user.id);
       res.status(204).end();
     }));
@@ -1107,6 +1145,30 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     r.get('/reports/utilization', rep(async (req, res) => {
       if (!canSeeUtilization(config, req.user.email)) return res.status(404).json({ error: 'Not found' });
       res.json(await reports.utilization({ from: req.query.from ? String(req.query.from) : null, to: req.query.to ? String(req.query.to) : null, locations: repLocs(req) }));
+    }));
+    // Raise readiness: drops with a reason (Dispatch, Changes card) and Google reviews.
+    r.post('/reports/drops', rep(async (req, res) => {
+      const out = await reports.recordDrop(req.body || {}, req.user.id);
+      await svc.audit(db, req.user.id, 'cleaner.drop', 'cleaner', req.body?.cleaner_id, { visit_key: req.body?.visit_key, reason: req.body?.reason });
+      res.json(out);
+    }));
+    r.post('/reports/changes/:id/reason', rep(async (req, res) => {
+      const out = await reports.codeChange(req.params.id, req.body?.reason, req.user.id);
+      await svc.audit(db, req.user.id, 'cleaner.drop', 'schedule_change', req.params.id, { reason: req.body?.reason });
+      res.json(out);
+    }));
+    r.post('/reports/cleaners/:id/reviews', rep(async (req, res) => {
+      const out = await reports.addReview(req.params.id, req.body || {}, req.user.id);
+      await svc.audit(db, req.user.id, 'cleaner.google_review', 'cleaner', req.params.id, { reviewer: req.body?.reviewer });
+      res.json(out);
+    }));
+    r.patch('/reports/reviews/:id', needRole('admin'), rep(async (req, res) => {
+      await reports.updateReview(req.params.id, req.body || {});
+      res.status(204).end();
+    }));
+    r.delete('/reports/reviews/:id', needRole('admin'), rep(async (req, res) => {
+      await reports.deleteReview(req.params.id);
+      res.status(204).end();
     }));
     r.post('/reports/refresh', needRole('admin'), rep(async (req, res) => {
       reports.start({ bearer: req.bearer });
