@@ -10,7 +10,7 @@
 // Available hours = each cleaner's hours in Launch27 (weekly hours, or that date's own hours
 // when set), minus days off set in Launch27 or marked unavailable in this app, minus company
 // closed dates (unless the cleaner has their own hours set for that date).
-import { addDays, areaOf, km, mondayOf, toMinutes, travelMinutes, weekday, workingWindow } from '../schedule/rules.js';
+import { addDays, areaOf, km, mondayOf, toMinutes, travelMinutes, weekday, workingMinutes, workingWindow } from '../schedule/rules.js';
 import { UTILIZATION } from './utilization-config.js';
 
 const r1 = (x) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 10) / 10);
@@ -81,7 +81,7 @@ export function utilizationFacts({ today, cleaners, visits, holidays = [], unava
       const list = busy.get(`${c.id}|${d}`) || [];
       const mine = list.filter(inBrand);
       const other = list.filter((v) => !inBrand(v));
-      const base = w ? w[1] - w[0] : 0;
+      const base = w ? Math.min(w[1] - w[0], workingMinutes(c.availability, d, unavailable.get(c.id))) : 0;
       // Company closed date: not available, unless this cleaner has their own hours set that day.
       const closed = w && !ownHoursOn(c, d) ? clip(closedFor(c, d), w) : [];
       const otherBlocks = w ? clip(other.map((v) => [v.start, v.end]), w) : [];
@@ -308,6 +308,12 @@ export function dataCheck({ facts, inWin, cleaners = [], source = {} }) {
       cleaner_id: c.id, name: c.name, status_label: c.status_label || null, taking, area: c.area || 'Unknown',
       home_location: c.lat != null && c.lng != null, weekly_hours: weeklyH, weekly_rows: weekly.length, dated_rows: (c.availability || []).length - weekly.length,
       availability_error: c.availability_error || null,
+      // Exactly what Launch27 sent (weekly rows, and a few date rows), to compare with its screen.
+      sent: {
+        weekly: weekly.slice(0, 14).map((r) => ({ weekday: r.weekday ?? null, start: r.start_time ?? null, end: r.end_time ?? null, dayoff: !!r.dayoff })),
+        dated: (c.availability || []).filter((r) => r.date).slice(0, 6).map((r) => ({ date: String(r.date).slice(0, 10), weekday: r.weekday ?? null, start: r.start_time ?? null, end: r.end_time ?? null, dayoff: !!r.dayoff })),
+        dated_total: (c.availability || []).filter((r) => r.date).length,
+      },
       available_h: r1(p.avail / 60), booked_h: r1(p.booked / 60), visits: p.visits,
       flags: flags.map((k) => ({ kind: k, label: FLAG[k] })),
     });

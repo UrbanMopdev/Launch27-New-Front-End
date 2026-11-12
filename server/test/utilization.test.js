@@ -186,3 +186,31 @@ describe('utilization: data check', () => {
     await db.close();
   });
 });
+
+describe('reading Launch27 hours', () => {
+  test('times in any common format', async () => {
+    const { toMinutes } = await import('../src/schedule/rules.js');
+    assert.deepEqual(['09:00', '9:00:00', '9:00 AM', '9am', '5:00 PM', '5pm', '17:30', '12:00 PM', '12:30 AM'].map(toMinutes), [540, 540, 540, 540, 1020, 1020, 1050, 720, 30]);
+  });
+  test('a date row with no times does not wipe out the weekly hours; split days count; AM/PM read right', async () => {
+    const { workingWindow, weeklyHours } = await import('../src/schedule/rules.js');
+    const rows = [
+      { date: null, weekday: 1, dayoff: false, start_time: '9:00 AM', end_time: '5:00 PM' },
+      { date: null, weekday: 2, dayoff: false, start_time: '08:00', end_time: '12:00' },
+      { date: null, weekday: 2, dayoff: false, start_time: '13:00', end_time: '17:00' },
+      { date: '2026-11-16', weekday: null, dayoff: false, start_time: null, end_time: null }, // Monday, says nothing
+      { date: '2026-11-23', weekday: null, dayoff: true, start_time: null, end_time: null }, // Monday off
+      { date: '2026-11-30', weekday: null, dayoff: false, start_time: '10:00', end_time: '14:00' }, // short Monday
+    ];
+    assert.deepEqual(workingWindow(rows, '2026-11-16'), [540, 1020]);
+    assert.equal(workingWindow(rows, '2026-11-23'), null);
+    assert.deepEqual(workingWindow(rows, '2026-11-30'), [600, 840]);
+    assert.deepEqual(workingWindow(rows, '2026-11-17'), [480, 1020]);
+    assert.equal(weeklyHours(rows), 8 + 8);
+  });
+});
+test('a split day counts its blocks, not the gap', async () => {
+  const { workingMinutes } = await import('../src/schedule/rules.js');
+  const rows = [{ date: null, weekday: 2, dayoff: false, start_time: '08:00', end_time: '12:00' }, { date: null, weekday: 2, dayoff: false, start_time: '13:00', end_time: '17:00' }];
+  assert.equal(workingMinutes(rows, '2026-11-17'), 480);
+});

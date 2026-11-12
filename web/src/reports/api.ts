@@ -81,12 +81,13 @@ export interface UtilFigures {
   utilization: number | null; room_bookings: number; typical_booking_h: number;
 }
 export type DataFlag = 'refused' | 'booked_no_hours' | 'booked_not_taking' | 'no_hours' | 'no_home';
+export interface SentRow { weekday: number | null; start: string | null; end: string | null; dayoff: boolean }
 export interface DataCheck {
   refreshed_at: string | null;
   read_by: 'sync' | 'person' | null;
   counts: Record<DataFlag, number>;
   labels: Record<DataFlag, string>;
-  cleaners: { cleaner_id: number; name: string; status_label: string | null; taking: boolean; area: string; home_location: boolean; weekly_hours: number | null; weekly_rows: number; dated_rows: number; availability_error: string | null; available_h: number; booked_h: number; visits: number; flags: { kind: DataFlag; label: string }[] }[];
+  cleaners: { cleaner_id: number; name: string; status_label: string | null; taking: boolean; area: string; home_location: boolean; weekly_hours: number | null; weekly_rows: number; dated_rows: number; availability_error: string | null; sent: { weekly: SentRow[]; dated: (SentRow & { date: string })[]; dated_total: number }; available_h: number; booked_h: number; visits: number; flags: { kind: DataFlag; label: string }[] }[];
 }
 export interface UtilizationReport {
   taken_at: string | null; today: string; from: string; to: string; max_to: string; avg_leg_min: number;

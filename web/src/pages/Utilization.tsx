@@ -73,6 +73,22 @@ export function UtilizationPage() {
   );
 }
 
+// The cleaner's hours exactly as Launch27 sent them (weekday 0 = Sunday), to compare with its screen.
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function SentRows({ sent }: { sent: UtilizationReport['data_check']['cleaners'][number]['sent'] }) {
+  const line = (r: { weekday: number | null; start: string | null; end: string | null; dayoff: boolean }) =>
+    `${r.dayoff ? 'day off' : `${r.start ?? '(no start)'} – ${r.end ?? '(no end)'}`}`;
+  if (!sent.weekly.length && !sent.dated_total) return <p className="small muted">Nothing: no hours came back.</p>;
+  return (
+    <div className="small ut-sent-body">
+      <div><b>Weekly</b>{sent.weekly.length === 0 && ' none'}</div>
+      {sent.weekly.map((r, i) => <div key={i}>{r.weekday != null ? WD[r.weekday] ?? `weekday ${r.weekday}` : '(no weekday)'}: {line(r)}</div>)}
+      {sent.dated_total > 0 && <div><b>Dates</b> ({sent.dated_total}{sent.dated_total > sent.dated.length ? `, first ${sent.dated.length}` : ''})</div>}
+      {sent.dated.map((r, i) => <div key={`d${i}`}>{r.date}: {line(r)}</div>)}
+    </div>
+  );
+}
+
 const issues = (r: UtilizationReport) => r.data_check.cleaners.filter((c) => c.flags.length).length;
 
 // ---------- data check: what the report knows from Launch27, per cleaner ----------
@@ -115,7 +131,13 @@ function DataCheckView({ r, area }: { r: UtilizationReport; area: string | null 
             <tbody>
               {rows.map((c) => (
                 <tr key={c.cleaner_id}>
-                  <td><Link to={`/schedule/cleaner/${c.cleaner_id}`} className="seg-name">{c.name}</Link></td>
+                  <td>
+                    <Link to={`/schedule/cleaner/${c.cleaner_id}`} className="seg-name">{c.name}</Link>
+                    <details className="ut-sent">
+                      <summary className="small muted">What Launch27 sent</summary>
+                      <SentRows sent={c.sent} />
+                    </details>
+                  </td>
                   <td>
                     {c.flags.length === 0 ? <span className="ut-tick ok">✓ looks fine</span> : (
                       <ul className="ut-flags">
