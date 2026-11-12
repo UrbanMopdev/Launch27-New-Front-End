@@ -34,6 +34,7 @@ export function CustomerProfilePage() {
     }
   };
   const phone = contact.data?.identities.find((i) => i.kind === 'phone' && !i.opted_out)?.value;
+  const email = contact.data?.identities.find((i) => i.kind === 'email')?.value;
 
   if (customer.error) return <div className="error">{(customer.error as Error).message}</div>;
   const c = customer.data;
@@ -43,7 +44,7 @@ export function CustomerProfilePage() {
       <button type="button" onClick={() => start('sms')} disabled={!contact.data}>
         <Icon name="sms" /> Text
       </button>
-      <button type="button" className="secondary" onClick={() => start('email')} disabled={!contact.data}>
+      <button type="button" className="secondary" onClick={() => start('email')} disabled={!contact.data || !email} title={contact.data && !email ? 'No email address on this customer in Launch27' : email ? `Email ${email}` : undefined}>
         <Icon name="email" /> Email
       </button>
       <CallButton phone={phone || c?.phone} />
