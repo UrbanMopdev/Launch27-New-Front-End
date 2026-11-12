@@ -28,6 +28,8 @@ describe('dispatch', () => {
     expect(workingWindow(rows, DAY)).toEqual({ start: 540, end: 1020 });
     expect(workingWindow(rows, '2026-11-01')).toBe('off'); // Sunday
     expect(workingWindow([...rows, { date: DAY, weekday: 1, start_time: null, end_time: null, dayoff: true }], DAY)).toBe('off');
+    // A date row with neither a day off nor times does not wipe out the weekly hours.
+    expect(workingWindow([...rows, { date: DAY, weekday: null, start_time: null, end_time: null, dayoff: false } as unknown as AvailabilityRow], DAY)).toEqual({ start: 540, end: 1020 });
     expect(workingWindow(undefined, DAY)).toBeNull();
   });
 
