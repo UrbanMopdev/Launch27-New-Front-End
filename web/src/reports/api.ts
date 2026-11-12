@@ -82,7 +82,7 @@ export interface CleanerRow {
   stars: number | null;
   ratings_count: number | null;
   reliability: RowReliability;
-  raise?: { verdict: Verdict; label: string; re_review: string | null; rank: number };
+  google_reviews: number;
   flags: Flag[];
 }
 
@@ -91,8 +91,7 @@ export interface CleanersReport {
   period: Period;
   admin: boolean;
   change_log_start: string;
-  raise_window?: { from: string; to: string };
-  team: { cleaners: number; median_visits: number | null; max_visits: number; on_time: number | null; check_ins: number; happy: number | null; rated_share: number | null; revenue: number; earned?: number; flagged: number; runs_long_median: number | null; raise_ready?: number };
+  team: { cleaners: number; median_visits: number | null; max_visits: number; on_time: number | null; check_ins: number; happy: number | null; rated_share: number | null; revenue: number; earned?: number; flagged: number; runs_long_median: number | null };
   rows: CleanerRow[];
 }
 
@@ -102,7 +101,7 @@ export interface CleanerReport {
   admin: boolean;
   change_log_start: string;
   cleaner: { id: number; name: string; status: string; status_label: string; area: string | null; color: string; tags: string[]; hours_type: string | null; phone: string | null; weekly_hours: number | null; first_seen: string | null; start_date: string | null; start_known: boolean; stars: number | null; ratings_count: number | null; restrictive: { tag: string; kind: string }[] };
-  stats: Omit<CleanerRow, 'status' | 'status_label' | 'assignable' | 'area' | 'color' | 'is_new' | 'hours_type' | 'flags' | 'stars' | 'ratings_count' | 'reliability' | 'raise'> & { booked_next4: number | null; capacity_next4: number | null; per_hour?: number | null };
+  stats: Omit<CleanerRow, 'status' | 'status_label' | 'assignable' | 'area' | 'color' | 'is_new' | 'hours_type' | 'flags' | 'stars' | 'ratings_count' | 'reliability' | 'google_reviews'> & { booked_next4: number | null; capacity_next4: number | null; per_hour?: number | null };
   team: { runs_long_median: number | null };
   reliability: Reliability;
   finished_early: { date: string; customer: string; short_min: number; visit_id: number }[];

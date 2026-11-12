@@ -63,9 +63,10 @@ export const DROP_REASONS = {
 // bookings). Drop counts before it are unknown and show "—".
 export const CHANGE_LOG_START = '2026-10-31';
 
-// A late arrival is a check-in after the arrival window + 5 min (residential). Homemaking
-// visits (Carefor, OWCS, Bruyère) are fixed 2-hour visits: on time = start + 10 min.
-export const LATE_GRACE_MIN = 5;
+// On time = checked in within the first 15 minutes of the arrival window (residential).
+// Homemaking visits (Carefor, OWCS, Bruyère) are fixed 2-hour visits: on time = start + 10 min.
+// "Minutes late" counts from those marks.
+export const ON_TIME_MIN = 15;
 export const HOMEMAKING_GRACE_MIN = 10;
 // Finished early: on site this many minutes less than booked (residential, one cleaner).
 export const EARLY_MIN = 30;

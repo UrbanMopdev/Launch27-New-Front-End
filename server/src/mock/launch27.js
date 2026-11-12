@@ -591,7 +591,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const hours = Math.round((duration / 60) * 100) / 100;
     const past = start.getTime() + duration * 60_000 < now();
     const late = r.next() < 0.08 ? 50 : 0;
-    const checkin = new Date(start.getTime() + (5 + r.int(20) + late) * 60_000);
+    const checkin = new Date(start.getTime() + (r.int(20) + late) * 60_000);
     const tIdx = team ? team.id - 9000 : -1;
     // Drawn from the booking id, not the shared random stream, so other synthetic data is unchanged.
     const h = ((Number(id) * 2654435761) >>> 0) % 1000;

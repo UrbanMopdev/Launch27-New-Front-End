@@ -13,7 +13,7 @@ import { loadConfig } from '../src/config.js';
 const quiet = { info() {}, warn() {}, error() {} };
 let nextId = 1;
 // A visit at 9am Toronto. teams: [[id, onsiteMin]]; checkinAfter: minutes after the start.
-function V(date, cust, teams, { service = 'Standard Cleaning', checkinAfter = 20, duration = 180, rating = null, rate = 22, company = null } = {}) {
+function V(date, cust, teams, { service = 'Standard Cleaning', checkinAfter = 10, duration = 180, rating = null, rate = 22, company = null } = {}) {
   const start = Date.parse(`${date}T14:00:00Z`);
   const checkin = new Date(start + checkinAfter * 60_000).toISOString();
   const booking = { id: nextId++, service_date: `${date}T14:00:00Z`, arrival_window: 60, duration, frequency: { name: 'Biweekly' }, services: [{ name: service }], user: { id: cust, name: `Client ${cust}`, company_name: company }, summary: { revenue: 200 }, teams: teams.map(([id]) => ({ id, title: `(1)(F)Cleaner ${id}`, hours: duration / 60 / teams.length, share: rate })) };
@@ -104,16 +104,17 @@ describe('raise: drops and reliability', () => {
 });
 
 describe('raise: timing rules', () => {
-  test('homemaking on time = start + 10 min; residential = window + 5 min', () => {
+  test('homemaking on time = start + 10 min; residential = first 15 min of the window', () => {
     const home = V('2026-10-05', 1, [[7, 120]], { service: 'Carefor Homemaking', checkinAfter: 15, duration: 120 });
     assert.equal(home.partner_kind, 'homemaking');
     assert.equal(timing(home, home.teams[0]).onTime, false);
     const homeOk = V('2026-10-05', 1, [[7, 120]], { service: 'Carefor Homemaking', checkinAfter: 9, duration: 120 });
     assert.equal(timing(homeOk, homeOk.teams[0]).onTime, true);
-    const res = V('2026-10-05', 2, [[7, 180]], { checkinAfter: 64 });
+    const res = V('2026-10-05', 2, [[7, 180]], { checkinAfter: 15 });
     assert.equal(timing(res, res.teams[0]).onTime, true);
-    const resLate = V('2026-10-05', 2, [[7, 180]], { checkinAfter: 66 });
+    const resLate = V('2026-10-05', 2, [[7, 180]], { checkinAfter: 40 });
     assert.equal(timing(resLate, resLate.teams[0]).onTime, false);
+    assert.equal(timing(resLate, resLate.teams[0]).late, 25, 'minutes past the 15-minute mark');
   });
 
   test('finished early excludes homemaking and split team jobs', () => {
@@ -265,10 +266,10 @@ describe('raise: service on the sample Launch27', () => {
     await reports.sync();
     const agent = await reports.cleaners('4w', { admin: false });
     assert.ok(agent.rows.every((r) => r.raise === undefined && r.margin === undefined));
-    assert.ok(agent.rows.every((r) => typeof r.reliability.issues === 'number'));
+    assert.ok(agent.rows.every((r) => typeof r.reliability.issues === 'number' && typeof r.google_reviews === 'number'));
+    // The scorecard stays a scorecard: no raise verdicts on it, even for admins.
     const admin = await reports.cleaners('4w', { admin: true });
-    assert.ok(admin.rows.every((r) => r.raise && ['ready', 'watch', 'not_yet', 'thin', 'ceiling', 'ladder'].includes(r.raise.verdict)));
-    assert.equal(admin.raise_window.to, '2026-11-12');
+    assert.ok(admin.rows.every((r) => r.raise === undefined));
     const someone = admin.rows.find((r) => r.visits >= 20);
 
     // A no-show logged from Dispatch forces Not yet on the panel.

@@ -1,7 +1,7 @@
 // Scheduling and cleaner reports: pure calculations over a year of slimmed visits.
 import { clientId, clientLabel, partnerOf } from '../commercial/partners.js';
 import { addDays, areaOf, daysBetween, frequencyKind, localDate, localMinutes, mondayOf, weekday } from '../schedule/rules.js';
-import { EARLY_MIN, HOMEMAKING_GRACE_MIN, LATE_GRACE_MIN } from './raise-config.js';
+import { EARLY_MIN, HOMEMAKING_GRACE_MIN, ON_TIME_MIN } from './raise-config.js';
 
 const MIN = 60_000;
 export const PERIODS = { '4w': 28, '13w': 91, '12m': 365 };
@@ -83,16 +83,17 @@ export const isHomemaking = (v) => v.partner_kind === 'homemaking';
 // Residential: not homemaking, not a hospital program, not at a Commercial location.
 export const isResidential = (v) => v.partner_kind !== 'homemaking' && v.partner_kind !== 'program' && !/commercial|cornwall/i.test(v.location_name || '');
 
-// Per visit and cleaner: on time, minutes late, ran long, finished early, on-site minutes.
-// Residential on time = checked in by the end of the arrival window + 5 min; homemaking =
-// by the start time + 10 min. Finished early = on site 30+ min less than booked, on a
-// residential visit with one cleaner (split team jobs and homemaking are left out).
+// Per visit and cleaner: on time, minutes late, overtime (ran long), finished early, on site.
+// Residential on time = checked in within the first 15 min of the arrival window; homemaking
+// = by the start time + 10 min. Minutes late count from that mark. Finished early = on site
+// 30+ min less than booked, on a residential visit with one cleaner (split team jobs and
+// homemaking are left out).
 export function timing(v, t) {
   if (!t.checkin) return null;
   const home = isHomemaking(v);
-  const due = home ? v.at + HOMEMAKING_GRACE_MIN * MIN : v.at + v.window * MIN + LATE_GRACE_MIN * MIN;
+  const due = v.at + (home ? HOMEMAKING_GRACE_MIN : ON_TIME_MIN) * MIN;
   const ci = Date.parse(t.checkin);
-  const late = ci > due ? Math.round((ci - (home ? v.at : v.at + v.window * MIN)) / MIN) : 0;
+  const late = ci > due ? Math.round((ci - due) / MIN) : 0;
   const booked = t.hours ? t.hours * 60 : v.duration / Math.max(v.teams.length, 1);
   const onsite = t.checkout ? (Date.parse(t.checkout) - ci) / MIN : null;
   const earlyEligible = isResidential(v) && v.teams.length === 1 && onsite != null;
@@ -242,8 +243,8 @@ export function cleanerStats(visits, byCustomer, from, to, today) {
 const emptyStats = (id, name) => ({ id, name, visits: 0, onsiteMin: 0, bookedMin: 0, tracked: 0, onTime: 0, lateMin: [], lateList: [], long: 0, early: 0, earlyList: [], residential: 0, missing: [], enroute: 0, km: [], rated: 0, happy: 0, unhappy: 0, unhappyRecent: 0, revenue: 0, earned: 0, earnedKnown: false, marginRev: 0, marginPay: 0, last40: [] });
 export { emptyStats };
 
-// The team's "runs long" picture from everyone's last 40 visits: the median share and the
-// top-quartile line. Runs long is relative: if everyone runs long, booked times are too short.
+// The team's overtime picture (cleans 15%+ over booked time) from everyone's last 40 visits:
+// the median share and the top-quartile line.
 export function teamLong(stats, minVisits = 10) {
   const shares = [...stats.values()].map((s) => s.last40 || []).filter((l) => l.length >= minVisits).map((l) => l.filter((x) => x.long).length / l.length).sort((a, b) => a - b);
   if (!shares.length) return { median: null, p75: null, n: 0 };
@@ -258,13 +259,13 @@ export function flagsFor(s, util, team = null) {
   if (l40.length >= 10) {
     const late = l40.filter((x) => x.late);
     if (late.length / l40.length > 0.15) flags.push({ kind: 'late', label: 'Often late', detail: `Late on ${late.length} of the last ${l40.length} visits, ${Math.round(late.reduce((a, x) => a + x.late, 0) / late.length)} min on average` });
-    // Runs long: only well above the team (top quartile and 25%+ of visits). For raises it's
-    // neutral-to-positive (thorough); it's a booking-length question first.
+    // Overtime (worked 15%+ past booked time): only well above the team (top quartile and
+    // 25%+ of visits). If everyone does it, booked times are too short.
     const long = l40.filter((x) => x.long).length;
     const share = long / l40.length;
     const teamMed = team?.median;
     if (share >= 0.25 && (team?.p75 == null || share >= team.p75) && (teamMed == null || share > teamMed)) {
-      flags.push({ kind: 'long', label: 'Runs long vs the team', detail: `${long} of the last ${l40.length} cleans ran 15%+ over booked time${teamMed != null ? ` (team: ${Math.round(teamMed * 100)}%)` : ''}` });
+      flags.push({ kind: 'long', label: 'Overtime vs the team', detail: `${long} of the last ${l40.length} cleans went 15%+ over booked time${teamMed != null ? ` (team: ${Math.round(teamMed * 100)}%)` : ''}` });
     }
     // Finishing early on residential jobs is the quality risk.
     const eligible = l40.filter((x) => x.early != null);

@@ -10,7 +10,6 @@ import { PERIODS, cleanerRow, cleanerStats, emptyStats, flagsFor, indexVisits, m
 import { CHANGE_LOG_START, DROP_REASONS, RAISE_THRESHOLDS } from './raise-config.js';
 import { ladderOf, raiseReview, rateHistory, reliability, reliabilityWeeks, restrictiveTags, slackSummary } from './raise.js';
 
-const VERDICT_RANK = { ready: 4, watch: 3, not_yet: 2, ceiling: 1, ladder: 1, thin: 0 };
 
 const DAYS_BACK = 365;
 const HOUR = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', hour: 'numeric', hourCycle: 'h23' });
@@ -347,12 +346,8 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     const s = await needScoped(locations);
     const { from, to, days } = periodRange(s.today, period);
     const stats = cleanerStats(s.visits, s.byCustomer, from, to, s.today);
-    const r13 = periodRange(s.today, '13w');
-    const stats13 = period === '13w' ? stats : cleanerStats(s.visits, s.byCustomer, r13.from, r13.to, s.today);
     const today = localDate(now());
-    const side = await sideData(from < r13.from ? from : r13.from);
-    const rates = ratesFor(s);
-    const ratedShare13 = ratedShareOf(s, r13.from, r13.to);
+    const side = await sideData(from);
     const team = teamLong(stats);
     const { ov, util } = await plannerView(locations);
     const info = new Map((ov?.rows || []).map((r) => [r.id, r]));
@@ -362,12 +357,7 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
       const u = util.get(st.id);
       const row = cleanerRow(st, { name: i?.name });
       const rel = reliability({ drops: side.drops.get(st.id) || [], checks: { missing: st.missing, late: [] }, from, to: today });
-      let raise;
-      if (admin) {
-        const st13 = stats13.get(st.id) || emptyStats(st.id, st.name);
-        const review = raiseReview(raiseInput({ st: st13, info: i, s, side, rates: rates.get(st.id), ratedShare: ratedShare13, today13: today, from13: r13.from, to13: r13.to }));
-        raise = { verdict: review.verdict, label: review.label, re_review: review.re_review, rank: VERDICT_RANK[review.verdict] ?? 0 };
-      }
+      const reviews = (side.reviews.get(st.id) || []).filter((g) => g.date >= from && g.date <= today);
       rows.push({
         ...row,
         earned: admin ? row.earned : undefined,
@@ -377,7 +367,7 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
         hours_filled: u && u.capacity ? pct(u.booked, u.capacity) : null,
         stars: i?.stars ?? null, ratings_count: i?.ratings_count ?? null,
         reliability: { issues: rel.issues, no_shows: rel.no_shows, last_minute: rel.last_minute, short_notice: rel.short_notice, missing_checks: rel.missing_checks, partial: rel.partial, covers_from: rel.covers_from, uncoded: rel.uncoded },
-        raise,
+        google_reviews: reviews.length,
         flags: flagsFor(st, u, team),
       });
     }
@@ -389,7 +379,6 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     return {
       taken_at: s.taken_at, period, from, to, admin,
       change_log_start: CHANGE_LOG_START,
-      raise_window: admin ? { from: r13.from, to: today } : undefined,
       team: {
         cleaners: all.length,
         median_visits: median(all.map((r) => r.visits)),
@@ -402,7 +391,6 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
         earned: admin ? tot('earned') : undefined,
         flagged: rows.filter((r) => r.flags.length && r.assignable).length,
         runs_long_median: team.median,
-        raise_ready: admin ? rows.filter((r) => r.raise?.verdict === 'ready').length : undefined,
       },
       rows,
     };
