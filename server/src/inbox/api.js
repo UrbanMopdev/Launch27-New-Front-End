@@ -1,6 +1,7 @@
 // /api: the support workspace. Every route needs a signed-in agent (same Launch27 login
 // as the rest of the app); the agent's Launch27 token is used for lookups so Launch27
 // keeps enforcing their permissions.
+import { canSeeHeadroom } from '../config.js';
 import express from 'express';
 import { json as toJson } from '../db/index.js';
 import { lintRules, route } from './routing.js';
@@ -1029,9 +1030,9 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     r.get('/reports/scheduling', rep(async (req, res) => res.json(await reports.scheduling(period(req), { locations: repLocs(req) }))));
     r.get('/reports/cleaners', rep(async (req, res) => res.json(await reports.cleaners(period(req), { admin: admin(req), locations: repLocs(req) }))));
     r.get('/reports/cleaners/:id', rep(async (req, res) => res.json(await reports.cleaner(req.params.id, period(req), { admin: admin(req), locations: repLocs(req) }))));
-    // Headroom: only the logins in HEADROOM_EMAILS (never production for now); 404 for everyone else.
+    // Headroom: everyone outside production unless HEADROOM_EMAILS narrows it; 404 otherwise.
     r.get('/reports/headroom', rep(async (req, res) => {
-      if (!(config.headroomEmails || []).includes(String(req.user.email).toLowerCase())) return res.status(404).json({ error: 'Not found' });
+      if (!canSeeHeadroom(config, req.user.email)) return res.status(404).json({ error: 'Not found' });
       const weeks = [1, 2, 4, 8].includes(Number(req.query.weeks)) ? Number(req.query.weeks) : 4;
       res.json(await reports.headroom(weeks, { locations: repLocs(req) }));
     }));

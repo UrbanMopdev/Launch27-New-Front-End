@@ -6,7 +6,7 @@ import { createReports } from '../src/reports/service.js';
 import { createSchedule } from '../src/schedule/service.js';
 import { createMockLaunch27 } from '../src/mock/launch27.js';
 import { openDb } from '../src/db/index.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, canSeeHeadroom } from '../src/config.js';
 import { createApp } from '../src/app.js';
 
 const quiet = { info() {}, warn() {}, error() {} };
@@ -108,31 +108,28 @@ describe('headroom: on the sample Launch27', () => {
     await db.close();
   });
 
-  test('only HEADROOM_EMAILS see it, and never in production', async () => {
-    assert.deepEqual(loadConfig({ APP_ENV: 'production', HEADROOM_EMAILS: 'boss@example.com', DATABASE_URL: 'x', SESSION_SECRET: 'x'.repeat(40) }).headroomEmails, []);
+  test('everyone sees it outside production; HEADROOM_EMAILS can narrow it; never in production', async () => {
+    assert.equal(canSeeHeadroom(loadConfig({ APP_ENV: 'production', DATABASE_URL: 'x', SESSION_SECRET: 'x'.repeat(40) }), 'boss@example.com'), false);
+    assert.equal(canSeeHeadroom(loadConfig({ APP_ENV: 'development', HEADROOM_EMAILS: 'Boss@Example.com' }), 'someone@example.com'), false);
+    assert.equal(canSeeHeadroom(loadConfig({ APP_ENV: 'development', HEADROOM_EMAILS: 'Boss@Example.com' }), 'boss@example.com'), true);
     const db = await openDb();
-    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo', HEADROOM_EMAILS: 'Boss@Example.com' });
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
     const fetchImpl = createMockLaunch27({ password: 'demo' });
     const schedule = createSchedule({ db, config, fetchImpl, log: quiet });
     const reports = createReports({ db, config, fetchImpl, schedule, log: quiet });
     await schedule.sync();
     const server = createApp(config, { fetchImpl, db, schedule, reports }).listen(0);
     const base = `http://127.0.0.1:${server.address().port}`;
-    const as = async (email) => {
-      const res = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'demo' }) });
-      const cookie = res.headers.get('set-cookie').split(';')[0];
-      const me = await (await fetch(`${base}/auth/me`, { headers: { cookie } })).json();
-      const hr = await fetch(`${base}/api/reports/headroom?weeks=2`, { headers: { cookie } });
-      return { me, status: hr.status, body: await hr.json() };
-    };
     try {
-      const boss = await as('boss@example.com');
-      assert.equal(boss.me.features.headroom, true);
-      assert.equal(boss.status, 200);
-      assert.equal(boss.body.weeks, 2);
-      const other = await as('someone@example.com');
-      assert.equal(other.me.features.headroom, false);
-      assert.equal(other.status, 404);
+      for (const email of ['boss@example.com', 'someone@example.com']) {
+        const res = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'demo' }) });
+        const cookie = res.headers.get('set-cookie').split(';')[0];
+        const me = await (await fetch(`${base}/auth/me`, { headers: { cookie } })).json();
+        assert.equal(me.features.headroom, true, email);
+        const hr = await fetch(`${base}/api/reports/headroom?weeks=2`, { headers: { cookie } });
+        assert.equal(hr.status, 200, email);
+        assert.equal((await hr.json()).weeks, 2);
+      }
     } finally {
       server.close();
       await db.close();

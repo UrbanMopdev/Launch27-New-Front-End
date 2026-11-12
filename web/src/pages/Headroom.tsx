@@ -1,4 +1,4 @@
-// Headroom (read-only report, limited to the logins in HEADROOM_EMAILS): how much room is left
+// Headroom (read-only report; everyone outside production): how much room is left
 // in cleaners' availability once booked work is placed, raw and after travel and fragments.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -22,7 +22,7 @@ export function HeadroomPage() {
     <div className="seg-page">
       <header className="page-header">
         <div className="seg-head">
-          <span className="small muted">Reports · only you can see this</span>
+          <span className="small muted">Reports</span>
           <h1>Headroom{brand.view !== 'both' && <span className="muted"> · {brandLabel(brand.view)}</span>}</h1>
           <p className="muted">Room left in cleaners' availability once booked work is placed. Monday to Saturday; Sundays are left out everywhere.</p>
           {r && <span className="small muted">{weekLabel(r.from)} – {weekLabel(r.to)} · schedule copy from {r.taken_at ? new Date(r.taken_at).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</span>}
