@@ -165,10 +165,10 @@ export function loadConfig(env = process.env) {
     migrateOnBoot: env.MIGRATE_ON_BOOT === undefined ? true : truthy(env.MIGRATE_ON_BOOT),
     adminEmails: env.ADMIN_EMAILS || '',
     supervisorEmails: env.SUPERVISOR_EMAILS || '',
-    // Headroom report: everyone outside production (off in production for now). HEADROOM_EMAILS,
-    // if set, narrows it to those logins.
-    headroomEnabled: !isProd,
-    headroomEmails: String(env.HEADROOM_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
+    // Utilization report: everyone outside production (off in production for now).
+    // UTILIZATION_EMAILS, if set, narrows it to those logins.
+    utilizationEnabled: !isProd,
+    utilizationEmails: String(env.UTILIZATION_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
     simulator: env.INBOX_SIMULATOR === undefined ? !isProd : truthy(env.INBOX_SIMULATOR),
     // Sample inbox conversations on an empty database. Never in production.
     sampleData: !isProd && truthy(env.SAMPLE_DATA),
@@ -231,9 +231,9 @@ export function configErrors(config) {
   return errors;
 }
 
-// Who sees the Headroom report: everyone outside production, unless HEADROOM_EMAILS narrows it.
-export function canSeeHeadroom(config, email) {
-  if (!config?.headroomEnabled) return false;
-  const list = config.headroomEmails || [];
+// Who sees the Utilization report: everyone outside production, unless UTILIZATION_EMAILS narrows it.
+export function canSeeUtilization(config, email) {
+  if (!config?.utilizationEnabled) return false;
+  const list = config.utilizationEmails || [];
   return !list.length || list.includes(String(email || '').toLowerCase());
 }
