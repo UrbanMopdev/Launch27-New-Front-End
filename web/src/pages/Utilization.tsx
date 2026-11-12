@@ -1,4 +1,4 @@
-// Utilization (read-only report; everyone outside production): of the hours cleaners have open,
+// Utilization (read-only report; everyone can see it): of the hours cleaners have open,
 // how much is already spoken for (assigned, unassigned, travel) and how much is left to book.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
