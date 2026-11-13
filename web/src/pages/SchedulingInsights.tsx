@@ -30,7 +30,7 @@ export function SchedulingInsightsPage() {
           <div className="seg-stats">
             <Kpi label="Same cleaner" value={pct(r.kpis.same_cleaner)} note={`of ${r.kpis.same_cleaner_visits} recurring visits · goal ${pct(GOAL)}`} tone={r.kpis.same_cleaner != null && r.kpis.same_cleaner < 0.7 ? 'warn' : undefined} />
             <Kpi label="On time" value={pct(r.kpis.on_time, 1)} note={r.kpis.late_avg ? `late ones by ${r.kpis.late_avg} min on average` : `${r.kpis.check_ins} check-ins`} />
-            <Kpi label="Ran long" value={pct(r.kpis.ran_long, 1)} note="cleans 15%+ over booked time" />
+            <Kpi label="Overtime" value={pct(r.kpis.ran_long, 1)} note="cleans 15%+ over booked time" />
             <Kpi label="Hours filled" value={pct(r.kpis.hours_filled)} note="booked of available, next 4 weeks" />
             <Kpi label="No cleaner yet" value={r.kpis.unassigned_visits == null ? '—' : String(r.kpis.unassigned_visits)} note="visits in the next 8 weeks" />
             <Kpi label="Drive per visit" value={r.kpis.km_per_visit == null ? '—' : `${r.kpis.km_per_visit} km`} note={`from "en route" taps (${pct(r.kpis.enroute)} of visits)`} />

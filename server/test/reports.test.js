@@ -9,10 +9,10 @@ import { loadConfig } from '../src/config.js';
 
 const quiet = { info() {}, warn() {}, error() {} };
 let id = 1;
-// A visit at 9am Toronto on `date` with cleaner `team`; checkin `lateMin` after the 60-min window.
+// A visit at 9am Toronto on `date` with cleaner `team`; checkin `lateMin` after the 15-min on-time mark.
 function V(date, cust, team, { kind = 'Biweekly - 10% off', lateMin = 0, onsite = 180, rating = null, earned = 66, km = null } = {}) {
   const start = Date.parse(`${date}T14:00:00Z`);
-  const checkin = new Date(start + (lateMin ? 60 + lateMin : 20) * 60_000).toISOString();
+  const checkin = new Date(start + (lateMin ? 15 + lateMin : 10) * 60_000).toISOString();
   const checkout = new Date(Date.parse(checkin) + onsite * 60_000).toISOString();
   const booking = { id: id++, service_date: `${date}T14:00:00Z`, arrival_window: 60, duration: 180, frequency: { name: kind }, user: { id: cust, name: `Client ${cust}` }, summary: { revenue: 200 }, teams: [{ id: team, title: `(1)(F)Cleaner ${team}`, hours: 3 }] };
   const tt = { id: booking.id, teams: [{ id: team, earned, time_tracking: { checkin_at: checkin, checkout_at: checkout, enroute_started_at: km != null ? checkin : null, distance: km } }] };

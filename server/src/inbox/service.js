@@ -447,6 +447,13 @@ export async function updateConversation(q, user, convId, patch) {
       changes[key] = [conv[key], patch[key]];
     }
   }
+  if (patch.cleaner_id !== undefined && (patch.cleaner_id ?? null) !== (conv.cleaner_id == null ? null : Number(conv.cleaner_id))) {
+    const cid = patch.cleaner_id == null || patch.cleaner_id === '' ? null : Number(patch.cleaner_id);
+    if (cid !== null && !Number.isInteger(cid)) throw new InboxError(400, 'cleaner_id must be a Launch27 team id');
+    set('cleaner_id', cid);
+    set('cleaner_name', cid === null ? null : String(patch.cleaner_name || '').slice(0, 200) || null);
+    changes.cleaner = cid === null ? null : patch.cleaner_name || `#${cid}`;
+  }
   if (patch.contact_id !== undefined) sets.push('needs_match = false');
   if (patch.complaint !== undefined) {
     set('complaint', json(patch.complaint), '::jsonb');
@@ -470,6 +477,7 @@ function describeChanges(c) {
   if (c.l27_booking_id) parts.push(c.l27_booking_id[1] ? `Linked to booking #${c.l27_booking_id[1]}` : 'Booking unlinked');
   if (c.contact_id) parts.push('Matched to a contact');
   if (c.complaint) parts.push('Complaint updated');
+  if (c.cleaner !== undefined) parts.push(c.cleaner ? `Cleaner set to ${c.cleaner}` : 'Cleaner cleared');
   return parts.join('; ');
 }
 
