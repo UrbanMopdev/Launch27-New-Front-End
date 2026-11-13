@@ -2,7 +2,7 @@
 // run) a read-only sync pulls a year of bookings, check-in/out times, ratings and cleaner pay
 // from Launch27 and stores them slimmed; reports are computed from that plus the planner's
 // live schedule. Cleaner pay is only returned to admins.
-import { addDays, localDate, mondayOf } from '../schedule/rules.js';
+import { addDays, daysBetween, localDate, mondayOf } from '../schedule/rules.js';
 import { harmonizePartners } from '../commercial/partners.js';
 import { clampRange, utilizationFacts, utilizationReport } from './utilization.js';
 import { UTILIZATION } from './utilization-config.js';
@@ -453,6 +453,67 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
     };
   }
 
+  // ---------- monthly raise check ----------
+  // Once a month (the first build of the month, after 8 am Toronto), each admin (or just the
+  // people in RAISE_DIGEST_EMAILS) gets a private bell notification for every cleaner taking
+  // bookings who looks ready for a raise review. Nothing is shown to the team, nothing is sent
+  // when nobody is ready, and cleaners raised in the last 90 days are left out.
+  let digestDone = null; // the month already handled, so later ticks skip the database
+  async function raiseCheckCandidates(today) {
+    const s = await need();
+    const r13 = periodRange(s.today, '13w');
+    const stats13 = cleanerStats(s.visits, s.byCustomer, r13.from, r13.to, s.today);
+    const side = await sideData(r13.from);
+    const rates = ratesFor(s);
+    const ratedShare = ratedShareOf(s, r13.from, r13.to);
+    const { ov } = await plannerView(null);
+    const info = new Map((ov?.rows || []).map((r) => [r.id, r]));
+    const out = [];
+    for (const st of stats13.values()) {
+      const i = info.get(st.id);
+      if (!i?.assignable) continue;
+      const rt = rates.get(st.id);
+      const review = raiseReview(raiseInput({ st, info: i, s, side, rates: rt, ratedShare, today13: today, from13: r13.from, to13: r13.to }));
+      if (review.underlying !== 'ready' || review.verdict === 'thin' || review.verdict === 'ceiling') continue;
+      if (review.verdict === 'ladder' && !review.ladder?.next) continue;
+      if (rt?.history?.changed_on && daysBetween(rt.history.changed_on, today) < 90) continue;
+      out.push({ id: st.id, name: i.name, next_step: review.verdict === 'ladder' ? review.ladder.next : null });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async function raiseDigest({ force = false } = {}) {
+    const today = localDate(now());
+    const month = today.slice(0, 7);
+    if (digestDone === month && !force) return null;
+    const s = await load();
+    if (!s) return null;
+    if (!force && (s.today < today || Number(HOUR.format(new Date(now()))) < 8)) return null;
+    if (!force && (await db.query('SELECT 1 FROM raise_digests WHERE month = $1', [month])).rows.length) {
+      digestDone = month;
+      return null;
+    }
+    const cleaners = await raiseCheckCandidates(today);
+    const only = String(config.raiseDigestEmails || '').toLowerCase().split(',').map((x) => x.trim()).filter(Boolean);
+    const admins = (await db.query("SELECT id, lower(email) AS email FROM users WHERE role = 'admin' AND active")).rows.filter((u) => !only.length || only.includes(u.email));
+    const sent = await db.tx(async (q) => {
+      const claimed = await q.query("INSERT INTO raise_digests (month, cleaners, recipients) VALUES ($1, $2::jsonb, $3) ON CONFLICT (month) DO UPDATE SET sent_at = now(), cleaners = EXCLUDED.cleaners, recipients = EXCLUDED.recipients WHERE $4::boolean RETURNING month", [month, JSON.stringify(cleaners), admins.length, force]);
+      if (!claimed.rows.length) return 0;
+      let n = 0;
+      for (const c of cleaners) {
+        const text = c.next_step ? `Raise check: ${c.name} looks ready for ${c.next_step}` : `Raise check: ${c.name} looks ready for a raise review`;
+        for (const u of admins) {
+          await q.query("INSERT INTO notifications (user_id, kind, conversation_id, text, link) VALUES ($1, 'raise_check', NULL, $2, $3)", [u.id, text, `/reports/cleaners/${c.id}#raise`]);
+          n++;
+        }
+      }
+      return n;
+    });
+    digestDone = month;
+    log.info('monthly raise check', { month, cleaners: cleaners.length, notifications: sent });
+    return { month, cleaners, notifications: sent };
+  }
+
   // ---------- drops: record and code ----------
   // Dispatch removes a cleaner (reason picked there), or someone codes a drop the sync found.
   async function recordDrop({ cleaner_id, visit_key, booking_id = null, customer = null, visit_at, reason }, userId) {
@@ -536,5 +597,5 @@ export function createReports({ db, config, fetchImpl = fetch, schedule, log = {
 
   // The raw year of visits (for the Commercial area).
   const visitsSnapshot = () => need();
-  return { sync, start, maybeRun, scheduling, utilization, cleaners, cleaner, status, visitsSnapshot, recordDrop, codeChange, dropsForChanges, addReview, updateReview, deleteReview, isRunning: () => !!running, mondayOf };
+  return { sync, start, maybeRun, scheduling, utilization, cleaners, cleaner, status, visitsSnapshot, recordDrop, codeChange, dropsForChanges, raiseDigest, raiseCheckCandidates, addReview, updateReview, deleteReview, isRunning: () => !!running, mondayOf };
 }

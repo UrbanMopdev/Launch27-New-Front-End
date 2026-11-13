@@ -186,6 +186,8 @@ export function loadConfig(env = process.env) {
     pgliteDir: env.PGLITE_DIR || '.data/pglite',
     migrateOnBoot: env.MIGRATE_ON_BOOT === undefined ? true : truthy(env.MIGRATE_ON_BOOT),
     adminEmails: env.ADMIN_EMAILS || '',
+    // Monthly raise check: who gets the bell notification (comma-separated). Empty = every admin.
+    raiseDigestEmails: env.RAISE_DIGEST_EMAILS || '',
     supervisorEmails: env.SUPERVISOR_EMAILS || '',
     // Utilization report (read-only): everyone, production included. UTILIZATION_EMAILS, if set,
     // narrows it to those logins.

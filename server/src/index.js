@@ -109,6 +109,7 @@ const worker = setInterval(async () => {
     await segments.maybeRun();
     await schedule.maybeRun();
     await reports.maybeRun();
+    await reports.raiseDigest().catch((err) => log.error('monthly raise check failed', { error: err.message }));
     await placement.purge();
     if (jobs.consecutiveFailures) log.info('worker recovered', { after: jobs.consecutiveFailures });
     jobs.consecutiveFailures = 0;

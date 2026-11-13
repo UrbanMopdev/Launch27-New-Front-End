@@ -1,6 +1,6 @@
 import { useBrand } from '../brands/useBrand';
 import { brandLabel } from '../brands/ui';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { reportsApi, money, pct, type CleanerReport, type CleanerRow, type Factor, type Grade, type Period, type RaiseReview, type Verdict } from '../reports/api';
@@ -177,7 +177,12 @@ function FactorRow({ f }: { f: Factor }) {
 // decision starts from (current rate, last raise, margin); the verdict and its reasons sit
 // one click deeper. Admins only.
 function RaisePanel({ r, name }: { r: RaiseReview; name: string }) {
-  const [open, setOpen] = useState(false);
+  // Arriving from the monthly raise check (…#raise): open it and bring it into view.
+  const fromCheck = typeof window !== 'undefined' && window.location.hash === '#raise';
+  const [open, setOpen] = useState(fromCheck);
+  useEffect(() => {
+    if (fromCheck) document.getElementById('raise')?.scrollIntoView({ block: 'start' });
+  }, [fromCheck]);
   const [copied, setCopied] = useState<string | null>(null);
   const copy = async () => {
     try {

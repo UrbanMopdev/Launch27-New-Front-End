@@ -356,6 +356,8 @@ export interface Notification {
   id: number;
   kind: string;
   conversation_id: number | null;
+  // A page to open instead of a conversation (e.g. the monthly raise check).
+  link: string | null;
   text: string;
   read_at: string | null;
   created_at: string;

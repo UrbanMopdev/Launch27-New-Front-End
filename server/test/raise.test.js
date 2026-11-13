@@ -294,3 +294,45 @@ describe('raise: service on the sample Launch27', () => {
     await assert.rejects(() => reports.recordDrop({ cleaner_id: someone.id, visit_key: 'x', visit_at: '2026-11-11T14:00:00Z', reason: 'because' }, null), /reason/);
   });
 });
+
+describe('raise: monthly raise check', () => {
+  test('a private bell notification per raise-ready cleaner, once a month, admins only', async () => {
+    const db = await openDb();
+    const config = { ...loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' }), raiseDigestEmails: '' };
+    const fetchImpl = createMockLaunch27({ password: 'demo' });
+    let clock = Date.parse('2026-11-12T17:00:00Z'); // 12 pm Toronto
+    const schedule = createSchedule({ db, config, fetchImpl, log: quiet });
+    const reports = createReports({ db, config, fetchImpl, schedule, log: quiet, now: () => clock });
+    await schedule.sync();
+    await reports.sync();
+    const ids = {};
+    for (const [email, role] of [['derek@example.com', 'admin'], ['leslie@example.com', 'admin'], ['grace@example.com', 'agent']]) {
+      ids[email] = Number((await db.query('INSERT INTO users (email, name, role) VALUES ($1, $1, $2) RETURNING id', [email, role])).rows[0].id);
+    }
+    const notes = async (email) => (await db.query("SELECT text, link FROM notifications WHERE user_id = $1 AND kind = 'raise_check' ORDER BY id", [ids[email]])).rows;
+
+    const ready = await reports.raiseCheckCandidates('2026-11-12');
+    assert.ok(ready.length >= 1, 'the synthetic data has someone who looks ready');
+    const first = await reports.raiseDigest();
+    assert.equal(first.month, '2026-11');
+    assert.equal((await notes('derek@example.com')).length, ready.length);
+    assert.equal((await notes('leslie@example.com')).length, ready.length);
+    assert.equal((await notes('grace@example.com')).length, 0, 'never to non-admins');
+    assert.match((await notes('derek@example.com'))[0].link, /^\/reports\/cleaners\/\d+#raise$/);
+    assert.match((await notes('derek@example.com'))[0].text, /^Raise check: .+ looks ready for /);
+
+    // Once a month: later ticks the same month send nothing more.
+    assert.equal(await reports.raiseDigest(), null);
+    assert.equal((await notes('derek@example.com')).length, ready.length);
+
+    // Next month, before that day's build: wait. Narrowed to one person by RAISE_DIGEST_EMAILS.
+    clock = Date.parse('2026-12-01T17:00:00Z');
+    assert.equal(await reports.raiseDigest(), null, 'waits for the first build of the month');
+    config.raiseDigestEmails = 'Derek@example.com';
+    await reports.sync();
+    const dec = await reports.raiseDigest();
+    assert.equal(dec.month, '2026-12', 'runs again in a new month');
+    assert.equal((await notes('leslie@example.com')).length, ready.length, 'Leslie not included this time');
+    assert.equal((await notes('derek@example.com')).length, ready.length + dec.cleaners.length);
+  });
+});

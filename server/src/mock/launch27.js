@@ -103,6 +103,8 @@ const RAISED_AUG = new Set([1, 3, 6]);
 const RAISE_DATE = '2026-08-04';
 // A few cleaners who often finish residential cleans early (shortcutting risk).
 const EARLY_FINISHERS = new Set([7]);
+// A reliable cleaner (always on time, never forgets to check out): the one who looks raise-ready.
+const STAR_CLEANER = 9000;
 // Weekly hours per cleaner (weekday 0 = Sunday): varied so the planner has gaps to show.
 export function mockAvailability(teamId) {
   const i = Number(teamId) - 9000;
@@ -590,8 +592,9 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     }
     const hours = Math.round((duration / 60) * 100) / 100;
     const past = start.getTime() + duration * 60_000 < now();
-    const late = r.next() < 0.08 ? 50 : 0;
-    const checkin = new Date(start.getTime() + (r.int(20) + late) * 60_000);
+    // The star cleaner is never badly late, so dev has someone who looks raise-ready.
+    const late = r.next() < 0.08 && team?.id !== STAR_CLEANER ? 50 : 0;
+    const checkin = new Date(start.getTime() + (Math.floor(r.int(20) * 0.75) + late) * 60_000);
     const tIdx = team ? team.id - 9000 : -1;
     // Drawn from the booking id, not the shared random stream, so other synthetic data is unchanged.
     const h = ((Number(id) * 2654435761) >>> 0) % 1000;
@@ -599,7 +602,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     const shortcut = EARLY_FINISHERS.has(tIdx) && h < 350;
     const checkout = new Date(checkin.getTime() + duration * 60_000 * (shortcut ? 0.55 + (h % 15) / 100 : 0.85 + spread * 0.4));
     // Now and then a cleaner forgets to check out.
-    const forgotCheckout = h % 67 === 3;
+    const forgotCheckout = h % 67 === 3 && tIdx !== STAR_CLEANER - 9000;
     const rate = team ? (RAISED_AUG.has(tIdx) && date < RAISE_DATE ? team.share - 1 : team.share) : 0;
     // About half of visits have the cleaner tapping 'en route' (as in real data), with a drive distance.
     const tapsEnroute = r.next() < 0.5;
