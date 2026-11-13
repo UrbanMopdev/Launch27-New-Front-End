@@ -130,6 +130,8 @@ function world() {
     if (u.pathname === '/v1/staff/teams') return json(Number(u.searchParams.get('offset')) ? [] : teams);
     const m = u.pathname.match(/^\/v1\/staff\/teams\/(\d+)\/availability$/);
     // Like Launch27: one-day changes come back only when a date range is asked for.
+    if (m && opts.availability === 'down') return json({ error: 'busy' }, 503);
+    if (m && opts.refuseRange && u.searchParams.get('from')) return json({ error: 'range too long' }, 400);
     if (m) return json([...avail[m[1]], ...(u.searchParams.get('from') && u.searchParams.get('to') ? (dated[m[1]] || []).filter((r) => r.date >= u.searchParams.get('from') && r.date <= u.searchParams.get('to')) : [])]);
     if (u.pathname === '/v1/staff/bookings/assign/teams' && init.method === 'POST') {
       const body = JSON.parse(init.body);
@@ -154,7 +156,8 @@ function world() {
     }
     return json({ error: 'nf' }, 404);
   };
-  return { teams, avail, dated, bookings, posts, fetchImpl };
+  const opts = {}; // test switches: refuseRange, availability: 'down'
+  return { teams, avail, dated, bookings, posts, fetchImpl, opts };
 }
 
 describe('schedule: sync, plan, assign, changes', () => {
@@ -342,6 +345,49 @@ describe('schedule: sync, plan, assign, changes', () => {
     assert.ok(!day('2026-11-11').gaps.length, 'no open time offered on a day off');
     assert.match(day('2026-11-13').hours, /12:30/, 'short day ends at 12:30');
     assert.ok(day('2026-11-13').gaps.every((g) => g.end <= 12 * 60 + 30));
+  });
+
+  test('Launch27 refusing the dated request keeps the weekly hours (never reads as all off)', async () => {
+    const w = world();
+    w.opts.refuseRange = true;
+    const warned = [];
+    const db = await openDb();
+    const s = createSchedule({ db, config: loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' }), fetchImpl: w.fetchImpl, log: { ...quiet, warn: (m, f) => warned.push([m, f]) }, now: () => NOW, retryDelayMs: 0 });
+    await s.sync();
+    const cells = (await s.plan(1)).weeks.flatMap((wk) => wk.cells);
+    assert.ok(!cells.find((c) => c.date === '2026-11-04').off, 'a weekday is still a working day');
+    const profile = await s.cleanerProfile(1);
+    assert.ok(profile.hours.some((h) => h.label !== 'Off'), 'weekly hours shown on the cleaner page');
+    assert.ok(warned.some(([m, f]) => /hours/.test(m) && f.refused > 0), 'the refusal is logged');
+  });
+
+  test('Launch27 hours unavailable on a refresh: the last known hours are kept', async () => {
+    const w = world();
+    const db = await openDb();
+    let at = NOW;
+    const s = createSchedule({ db, config: loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' }), fetchImpl: w.fetchImpl, log: quiet, now: () => at, retryDelayMs: 0 });
+    await s.sync();
+    w.opts.availability = 'down';
+    at += 2 * 3600_000;
+    await s.sync();
+    const profile = await s.cleanerProfile(1);
+    assert.ok(profile.hours.some((h) => h.label !== 'Off'), 'still has its hours');
+    assert.ok(!(await s.changes()).items.some((c) => c.kind === 'availability'), 'no "hours changed" alerts from a failed read');
+  });
+
+  test('hours read by an older version: the next look at the planner re-reads them in full', async () => {
+    const w = world();
+    const db = await openDb();
+    const cfg = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const s = createSchedule({ db, config: cfg, fetchImpl: w.fetchImpl, log: quiet, now: () => NOW, retryDelayMs: 0 });
+    await s.sync();
+    await db.query("UPDATE schedule_snapshots SET data = data - 'hours_v'");
+    const s2 = createSchedule({ db, config: cfg, fetchImpl: w.fetchImpl, log: quiet, now: () => NOW + 60_000, retryDelayMs: 0 });
+    await s2.maybeRun({ bearer: 'b' });
+    while (s2.isRunning()) await new Promise((r) => setTimeout(r, 20));
+    const runs = (await db.query('SELECT trigger FROM schedule_runs ORDER BY id')).rows.map((r) => r.trigger);
+    assert.equal(runs.at(-1), 'viewer:full');
+    await db.close();
   });
 
   test('quick refresh: next 14 days every few minutes; moved further out reads as moved, not cancelled', async () => {

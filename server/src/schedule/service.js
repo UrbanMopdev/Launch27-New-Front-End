@@ -11,6 +11,10 @@ import {
 
 const PAST_DAYS = 91;
 const AHEAD_DAYS = 56;
+// How cleaners' hours are read. Bump when that changes: the next look at the planner then re-reads
+// everyone's hours instead of waiting for the hourly refresh.
+const HOURS_VERSION = 2;
+const AVAIL_CHUNK = 28; // days per availability request (Launch27's calendar asks for 42)
 const NEAR_DAYS = 14; // problems are raised for this many days ahead
 const NEAR_EVERY_MS = 3 * 60_000; // next 14 days of bookings
 const FULL_EVERY_MS = 60 * 60_000; // cleaners' hours and status, the whole window
@@ -103,7 +107,7 @@ export function slimVisit(b) {
 }
 
 // dataTag (dev/QA): names the data underneath (sample version or QA copy) so a switch is noticed.
-export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {}, warn() {}, error() {} }, now = () => Date.now(), dataTag = () => SAMPLE_VERSION, writes = null }) {
+export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {}, warn() {}, error() {} }, now = () => Date.now(), dataTag = () => SAMPLE_VERSION, writes = null, retryDelayMs = 2000 }) {
   let snap = null; // latest snapshot (in memory)
   let unavailable = new Map(); // cleanerId -> Set(dates)
   let running = null;
@@ -115,7 +119,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const u = new URL(config.l27BaseUrl + path);
     for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null) u.searchParams.set(k, String(v));
     const res = await fetchImpl(u.toString(), { headers: { authorization: `Bearer ${bearer}`, accept: 'application/json' }, signal: AbortSignal.timeout(30_000) });
-    if (!res.ok) throw new Error(`Launch27 ${path} returned ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(`Launch27 ${path} returned ${res.status}`), { l27Status: res.status });
     return res.json();
   };
   const pullAll = async (bearer, path, query, maxPages = 400) => {
@@ -373,26 +377,96 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return b;
   }
 
-  async function fullData(bearer, t) {
+  // A cleaner's hours from Launch27 (Team Availability), asked in two parts so one can never wipe
+  // the other:
+  //  - weekly hours: a plain request (no dates), as before Nov 9;
+  //  - one-day changes (a day off, a short day): dated rows, asked AVAIL_CHUNK days at a time
+  //    (Launch27's own calendar asks for 6 weeks at once).
+  // A refusal that looks temporary (too many requests, server error, network) is retried once after
+  // a pause. One that still fails keeps what the last snapshot had for that part and is recorded on
+  // the cleaner (Utilization → Data check) and in the log; it is never read as "no hours".
+  async function availabilityFor(bearer, id, t, prevRows) {
+    const path = `/v1/staff/teams/${id}/availability`;
+    const old = Array.isArray(prevRows) ? prevRows : null;
+    const read = async (query) => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const rows = await get(bearer, path, query);
+          if (!Array.isArray(rows)) return { rows: null, error: 'Launch27 answered with no list of hours' };
+          return { rows, error: null };
+        } catch (err) {
+          const s = err.l27Status;
+          const temporary = !s || s === 429 || s >= 500;
+          if (temporary && attempt === 0) {
+            await new Promise((r) => setTimeout(r, retryDelayMs));
+            continue;
+          }
+          const why = s === 401 || s === 403 ? `not allowed for this login (${s})` : s === 404 ? 'not found (404)' : s === 429 ? 'too many requests (429)' : s ? `error ${s}` : `no answer (${String(err.message).slice(0, 80)})`;
+          return { rows: null, error: `Launch27 refused: ${why}` };
+        }
+      }
+    };
+    const errors = [];
+    const w = await read({});
+    if (w.error) errors.push(w.error);
+    const weekly = (w.rows || old || []).filter((r) => !r.date);
+    const end = addDays(t, AHEAD_DAYS);
+    const dated = [];
+    for (let from = addDays(t, -7); from <= end; from = addDays(from, AVAIL_CHUNK)) {
+      const to = addDays(from, AVAIL_CHUNK - 1) < end ? addDays(from, AVAIL_CHUNK - 1) : end;
+      const d = await read({ from, to });
+      if (d.error) errors.push(`${d.error} (one-day changes ${from} to ${to})`);
+      for (const r of d.rows || old || []) {
+        const day = r.date ? String(r.date).slice(0, 10) : null;
+        if (day && day >= from && day <= to) dated.push(r);
+      }
+    }
+    return { rows: [...weekly, ...dated], error: errors[0] || null };
+  }
+
+  async function fullData(bearer, t, byPerson = false, prev = null) {
     const teams = (await pullAll(bearer, '/v1/staff/teams', {}, 40)).filter((x) => x.active !== false);
+    const before = new Map((prev?.cleaners || []).map((c) => [c.id, c.availability]));
     const cleaners = [];
-    for (const tm of teams) {
-      const c = parseCleaner(tm);
-      // With a date range Launch27 also returns one-day changes (a day off, a short day) on top of
-      // the weekly hours; without one it returns only the weekly hours.
-      c.availability = await get(bearer, `/v1/staff/teams/${tm.id}/availability`, { from: addDays(t, -7), to: addDays(t, AHEAD_DAYS) }).catch(() => []);
-      c.weekly_hours = weeklyHours(c.availability);
-      c.area = areaOf(c);
-      c.share = tm.share || null;
-      c.stars = tm.stars != null ? Number(tm.stars) : null;
-      c.ratings_count = tm.ratings_count != null ? Number(tm.ratings_count) : null;
-      c.created_at = tm.created_at || null;
-      cleaners.push(c);
+    let refused = 0;
+    let firstError = null;
+    for (let i = 0; i < teams.length; i += 4) {
+      const batch = await Promise.all(teams.slice(i, i + 4).map(async (tm) => {
+        const c = parseCleaner(tm);
+        const av = await availabilityFor(bearer, tm.id, t, before.get(c.id));
+        c.availability = av.rows;
+        c.availability_error = av.error;
+        if (av.error) {
+          refused++;
+          firstError ||= av.error;
+        }
+        c.weekly_hours = weeklyHours(c.availability);
+        c.area = areaOf(c);
+        c.share = tm.share || null;
+        // For cleaner reports: Launch27 star rating and when the provider was created.
+        c.stars = tm.stars != null ? Number(tm.stars) : null;
+        c.ratings_count = tm.ratings_count != null ? Number(tm.ratings_count) : null;
+        c.created_at = tm.created_at || null;
+        return c;
+      }));
+      cleaners.push(...batch);
     }
     const visits = await pullRange(bearer, addDays(t, -PAST_DAYS), addDays(t, AHEAD_DAYS));
     const holidays = await closedDates(bearer, cleaners, t);
+    if (refused) log.warn("schedule: Launch27 refused some cleaners' hours; kept the last ones read", { refused, cleaners: teams.length, first_error: firstError });
+    // What Launch27 sent, in short, for cleaners who come out with no working hours at all (names
+    // and row shapes only), so a wrong reading can be compared with Launch27's Team Availability.
+    const noHours = cleaners.filter((c) => !weeklyHours(c.availability) && c.assignable);
+    const shape = (r) => [r.date ? String(r.date).slice(0, 10) : `wd${r.weekday}`, r.dayoff ? 'off' : `${r.start_time ?? '-'}/${r.end_time ?? '-'}`].join(' ');
+    log.info('schedule: cleaner hours read', {
+      cleaners: cleaners.length,
+      with_weekly_hours: cleaners.filter((c) => weeklyHours(c.availability) > 0).length,
+      no_hours: noHours.length,
+      examples: noHours.slice(0, 12).map((c) => ({ id: c.id, name: c.name, weekly_rows: c.availability.filter((r) => !r.date).length, dated_rows: c.availability.filter((r) => r.date).length, first_rows: c.availability.slice(0, 4).map(shape) })),
+    });
     const iso = new Date(now()).toISOString();
-    return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits, holidays };
+    // cleaners_by: whose login read the cleaners' hours ("sync login" or a person who opened the planner).
+    return { taken_at: iso, full_at: iso, today: t, cycle_anchor: '2026-11-02', cleaners, visits, holidays, cleaners_by: byPerson ? 'person' : 'sync', hours_v: HOURS_VERSION };
   }
 
   // Company closed dates (Launch27 "closed dates", per location) in the planner's window.
@@ -428,13 +502,14 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     }
     const replaced = new Set([...freshKeys, ...extra.map((v) => v.key), ...gone]);
     const kept = prev.visits.filter((v) => !(v.date >= t && v.date <= until) && !replaced.has(v.key));
-    return { taken_at: new Date(now()).toISOString(), full_at: prev.full_at || prev.taken_at, today: t, cycle_anchor: prev.cycle_anchor, cleaners: prev.cleaners, holidays: prev.holidays || [], visits: [...kept, ...fresh, ...extra] };
+    return { taken_at: new Date(now()).toISOString(), full_at: prev.full_at || prev.taken_at, today: t, cycle_anchor: prev.cycle_anchor, cleaners: prev.cleaners, holidays: prev.holidays || [], cleaners_by: prev.cleaners_by || null, hours_v: prev.hours_v || null, visits: [...kept, ...fresh, ...extra] };
   }
 
   async function sync({ bearer, trigger = 'manual', kind = 'full' } = {}) {
     const run = (await db.query('INSERT INTO schedule_runs (trigger) VALUES ($1) RETURNING *', [`${trigger}:${kind}`])).rows[0];
     lastRun = run;
     try {
+      const byPerson = !!bearer; // a signed-in person's own login, not the sync login
       bearer = await bearerFor(bearer);
       if (!bearer) throw new Error('No Launch27 login for the schedule sync (set L27_SYNC_EMAIL and L27_SYNC_PASSWORD)');
       const t = today();
@@ -444,7 +519,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
       const restart = config.l27Mode === 'mock' && loaded && loaded.sample !== sample;
       const prev = restart ? null : loaded;
       const doNear = kind === 'near' && prev && prev.today === t;
-      const data = { ...(doNear ? await nearData(bearer, prev, t) : await fullData(bearer, t)), sample };
+      const data = { ...(doNear ? await nearData(bearer, prev, t) : await fullData(bearer, t, byPerson, prev)), sample };
       await loadUnavailable();
       const next = index(data);
       const found = [...(prev ? diff(prev, next) : []), ...problems(next)];
@@ -502,7 +577,7 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     const fullAge = s ? t - new Date(s.full_at || s.taken_at).getTime() : Infinity;
     const anyAge = s ? t - new Date(s.taken_at).getTime() : Infinity;
     const trigger = bearer ? 'viewer' : s ? 'auto' : 'boot';
-    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today()) start({ bearer: bearer || undefined, trigger, kind: 'full' });
+    if (!s || fullAge >= FULL_EVERY_MS || s.today !== today() || s.hours_v !== HOURS_VERSION) start({ bearer: bearer || undefined, trigger, kind: 'full' });
     else if (anyAge >= NEAR_EVERY_MS) start({ bearer: bearer || undefined, trigger, kind: 'near' });
   }
 
@@ -1049,7 +1124,9 @@ export function createSchedule({ db, config, fetchImpl = fetch, log = { info() {
     return {
       taken_at: s.taken_at,
       today: s.today,
-      cleaners: s.cleaners.map((c) => ({ ...cleanerOut(c), availability: c.availability || [] })),
+      full_at: s.full_at || s.taken_at,
+      cleaners_by: s.cleaners_by || null,
+      cleaners: s.cleaners.map((c) => ({ ...cleanerOut(c), availability: c.availability || [], availability_error: c.availability_error || null })),
       visits: s.future,
       holidays: s.holidays || [],
       unavailable,
