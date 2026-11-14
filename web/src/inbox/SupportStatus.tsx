@@ -51,7 +51,7 @@ export function SupportStatus() {
           </div>
           {notes.data?.length === 0 && <div className="muted small">Nothing yet.</div>}
           {notes.data?.slice(0, 20).map((n) => (
-            <button key={n.id} className={n.read_at ? 'notif read' : 'notif'} onClick={() => { setOpen(false); if (n.conversation_id) navigate(`/inbox/${n.conversation_id}?view=all`); }}>
+            <button key={n.id} className={n.read_at ? 'notif read' : 'notif'} onClick={() => { setOpen(false); if (n.link) navigate(n.link); else if (n.conversation_id) navigate(`/inbox/${n.conversation_id}?view=all`); }}>
               <span>{n.text}{n.contact_name ? `: ${n.contact_name}` : ''}</span>
               <span className="muted small">{ago(n.created_at)}</span>
             </button>

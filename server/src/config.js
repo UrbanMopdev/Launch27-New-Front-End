@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { brandKey } from './placement/mapping.js';
+import { parseMailboxes, parseServiceAccount } from './inbox/email/gmail.js';
+
 // Runtime configuration, with guards that keep non-production environments away from
 // real customers and real data. See docs/environments.md and docs/security.md.
 
@@ -146,6 +148,25 @@ export function loadConfig(env = process.env) {
     warnings.push('Some PORTALS entries were ignored: each must be Name=https://address, separated by commas.');
   }
 
+  // Email channel (Gmail). Production only: dev and QA must never read real customers' mail,
+  // so they use the sandbox email channel (compose and thread, nothing sent or read).
+  const gmailSet = !!(env.GMAIL_SERVICE_ACCOUNT_JSON || env.GMAIL_REFRESH_TOKEN);
+  let gmail = null;
+  if (gmailSet && !isProd) {
+    warnings.push(`Gmail settings ignored in ${appEnv}: only production reads and sends real email. Email runs in sandbox mode here.`);
+  } else if (gmailSet) {
+    const serviceAccount = parseServiceAccount(env.GMAIL_SERVICE_ACCOUNT_JSON);
+    const oauth = env.GMAIL_REFRESH_TOKEN && env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET ? { clientId: env.GMAIL_CLIENT_ID, clientSecret: env.GMAIL_CLIENT_SECRET, refreshToken: env.GMAIL_REFRESH_TOKEN } : null;
+    const mailboxes = parseMailboxes(env.GMAIL_MAILBOXES);
+    if (env.GMAIL_SERVICE_ACCOUNT_JSON && !serviceAccount) warnings.push('GMAIL_SERVICE_ACCOUNT_JSON is not a service-account key (needs client_email and private_key); email is not connected.');
+    else if (!serviceAccount && !oauth) warnings.push('GMAIL_REFRESH_TOKEN also needs GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET; email is not connected.');
+    else if (!mailboxes.accounts.length) warnings.push('GMAIL_MAILBOXES is empty: list the mailboxes to read and send from (e.g. info@urbanmop.ca,billing@urbanmop.ca); email is not connected.');
+    else if (!serviceAccount && mailboxes.accounts.length > 1) warnings.push('A Gmail refresh token signs in to one mailbox; list the others as send-as aliases (alias=mailbox) or use a service account. Email is not connected.');
+    else gmail = { auth: serviceAccount ? { serviceAccount } : oauth, mailboxes, fromName: env.EMAIL_FROM_NAME || 'UrbanMop', pollIntervalMs: Math.max(15_000, Number(env.EMAIL_POLL_INTERVAL_MS || 60_000)) };
+  }
+
+  if (isProd && !gmail && !gmailSet) warnings.push('Email is not connected: set GMAIL_SERVICE_ACCOUNT_JSON and GMAIL_MAILBOXES (docs/email.md). Email replies are saved, not sent.');
+
   return {
     appEnv,
     production: isProd,
@@ -159,11 +180,14 @@ export function loadConfig(env = process.env) {
     sessionSecret: env.SESSION_SECRET || 'dev-only-secret',
     allowWrites,
     notificationsMode,
+    gmail,
     // Support workspace
     databaseUrl: env.DATABASE_URL || null,
     pgliteDir: env.PGLITE_DIR || '.data/pglite',
     migrateOnBoot: env.MIGRATE_ON_BOOT === undefined ? true : truthy(env.MIGRATE_ON_BOOT),
     adminEmails: env.ADMIN_EMAILS || '',
+    // Monthly raise check: who gets the bell notification (comma-separated). Empty = every admin.
+    raiseDigestEmails: env.RAISE_DIGEST_EMAILS || '',
     supervisorEmails: env.SUPERVISOR_EMAILS || '',
     // Utilization report (read-only): everyone, production included. UTILIZATION_EMAILS, if set,
     // narrows it to those logins.

@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { inbox, type HistoryEntry, type L27Write, type SettingsEditors, type SlaPolicy, type User, type WorkspaceSettings } from '../inbox/api';
+import { inbox, type ChannelState, type HistoryEntry, type L27Write, type SettingsEditors, type SlaPolicy, type User, type WorkspaceSettings } from '../inbox/api';
 import { ago, useInboxMe, useMeta } from '../inbox/util';
 import { DurationInput, Switch } from '../inbox/settingsUi';
 import { formatMinutes } from '../lib/routingRules';
@@ -11,7 +11,7 @@ import { RulesEditor } from './RoutingRules';
 import { BrandsSettings } from '../brands/BrandsSettings';
 import { AgentsSettings, HoursSettings, PoliciesSettings, QaCopySettings, QueuesSettings, StatusesSettings, TeamsSettings } from './WorkforceSettings';
 
-type Tab = 'rules' | 'queues' | 'sla' | 'hours' | 'policies' | 'agents' | 'teams' | 'statuses' | 'canned' | 'history' | 'writes' | 'qa' | 'brands' | 'placement';
+type Tab = 'channels' | 'rules' | 'queues' | 'sla' | 'hours' | 'policies' | 'agents' | 'teams' | 'statuses' | 'canned' | 'history' | 'writes' | 'qa' | 'brands' | 'placement';
 
 const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }[] }[] = [
   {
@@ -34,7 +34,10 @@ const SECTIONS: { title: string; items: { id: Tab; label: string; desc: string }
   },
   {
     title: 'Replies',
-    items: [{ id: 'canned', label: 'Saved replies', desc: 'Shortcuts for common answers' }],
+    items: [
+      { id: 'channels', label: 'Channels', desc: 'Email and text: what is connected' },
+      { id: 'canned', label: 'Saved replies', desc: 'Shortcuts for common answers' },
+    ],
   },
   {
     title: 'Company',
@@ -121,6 +124,7 @@ export function InboxSettingsPage() {
           {tab === 'agents' && <AgentsSettings canEdit={canEdit} isAdmin={isAdmin} />}
           {tab === 'teams' && <TeamsSettings canEdit={isAdmin} />}
           {tab === 'statuses' && <StatusesSettings canEdit={canEdit} />}
+          {tab === 'channels' && <ChannelsPanel />}
           {tab === 'canned' && <CannedEditor canEdit={canEdit} />}
           {tab === 'history' && <HistoryPanel />}
           {tab === 'brands' && <BrandsSettings canEdit={isAdmin} />}
@@ -426,6 +430,54 @@ function PlacementAudit() {
           </tbody>
         </table>
       )}
+    </>
+  );
+}
+
+const CHANNEL_STATE: Record<ChannelState, { label: string; cls: string; text: string }> = {
+  live: { label: 'Connected', cls: 'wl-done', text: 'Replies are sent to customers and new mail is read into the inbox every minute.' },
+  sandbox: { label: 'Sandbox', cls: 'wl-refused', text: 'This is a test environment: replies are recorded on the conversation but never sent, and no real mailbox is read. Use the Channel simulator for inbound mail.' },
+  not_connected: { label: 'Not connected', cls: 'wl-blocked', text: 'Replies are saved but not sent. An admin sets this up on the server (see docs/email.md).' },
+};
+
+function ChannelsPanel() {
+  const q = useQuery({ queryKey: ['inbox', 'channels'], queryFn: inbox.channels, refetchInterval: 30_000 });
+  if (q.isLoading) return <div className="muted">Loading…</div>;
+  if (q.isError || !q.data) return <div className="muted">Couldn't load the channels.</div>;
+  const { email, sms } = q.data;
+  return (
+    <>
+      <section className="channel-block">
+        <h3>Email {email.provider && email.provider !== 'sandbox' ? <span className="muted small">· {email.provider === 'gmail' ? 'Gmail' : email.provider}</span> : null}</h3>
+        {email.read_only ? (
+          <p className="small"><span className="wl-pill wl-blocked">Read-only</span> Emails can be read here but not sent: nothing can be emailed to anyone from this platform. Reply by text, or add an internal note.</p>
+        ) : (
+          <p className="small"><span className={`wl-pill ${CHANNEL_STATE[email.state].cls}`}>{CHANNEL_STATE[email.state].label}</span> {CHANNEL_STATE[email.state].text}</p>
+        )}
+        {email.read_only && email.state !== 'not_connected' && <p className="muted small">Reading mail: {email.state === 'live' ? 'Gmail, checked every minute' : 'sandbox (Channel simulator only)'}.</p>}
+        {!email.read_only && email.send_from && email.state !== 'not_connected' && <p className="muted small">Agents can send from: {email.send_from.join(', ')}</p>}
+      </section>
+      {email.accounts.length > 0 && (
+        <table className="table wl-table">
+          <thead><tr><th>Mailbox</th><th>Last checked</th><th>Last success</th><th>Emails read in</th><th>Problem</th></tr></thead>
+          <tbody>
+            {email.accounts.map((a) => (
+              <tr key={a.address}>
+                <td>{a.address}</td>
+                <td>{a.last_poll_at ? ago(a.last_poll_at) : '—'}</td>
+                <td>{a.last_ok_at ? ago(a.last_ok_at) : 'never'}</td>
+                <td>{a.ingested_count}</td>
+                <td>{a.last_error ? <span className="error small">{a.last_error}</span> : <span className="wl-pill wl-done">OK</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {email.state === 'live' && !email.accounts.length && <p className="muted small">Waiting for the first mailbox check (runs every minute).</p>}
+      <section className="channel-block">
+        <h3>Text messages</h3>
+        <p className="small"><span className={`wl-pill ${CHANNEL_STATE[sms.state].cls}`}>{CHANNEL_STATE[sms.state].label}</span> {sms.state === 'not_connected' ? 'Texts are not connected yet: replies are saved, not sent.' : CHANNEL_STATE[sms.state].text}</p>
+      </section>
     </>
   );
 }

@@ -75,3 +75,20 @@ export function createL27Client({ baseUrl, fetchImpl = fetch }) {
     },
   };
 }
+
+// Background Launch27 login (no agent is signed in when the mailbox sync runs): the
+// synthetic Launch27 in dev/QA, or the read-only L27_SYNC_EMAIL staff user in production.
+// The token is reused for 30 minutes.
+export function createSyncBearer({ config, fetchImpl = fetch, ttlMs = 30 * 60_000 }) {
+  let cached = null;
+  return async function syncBearer() {
+    if (cached && cached.at > Date.now() - ttlMs) return cached.bearer;
+    const creds = config.l27Mode === 'mock' ? { email: 'inbox-sync@example.com', password: config.mockPassword || 'demo' } : config.l27SyncEmail && config.l27SyncPassword ? { email: config.l27SyncEmail, password: config.l27SyncPassword } : null;
+    if (!creds) return null;
+    const res = await fetchImpl(`${config.l27BaseUrl}/latest/login`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(creds), signal: AbortSignal.timeout(30_000) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.bearer) throw new Error(`Launch27 login for the inbox sync failed (${res.status})`);
+    cached = { bearer: body.bearer, at: Date.now() };
+    return cached.bearer;
+  };
+}

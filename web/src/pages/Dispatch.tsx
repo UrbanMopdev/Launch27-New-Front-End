@@ -19,6 +19,7 @@ import {
   type DispatchTeam,
 } from '../lib/dispatch';
 import { buildRoutes, fmtKm, fmtMin, type CleanerRoute } from '../lib/routes';
+import { DROP_REASONS, reportsApi } from '../reports/api';
 
 // Dispatch board: one row per cleaner, the day's bookings as blocks on a timeline.
 //   GET  /v1/staff/bookings?from=D&to=D                 (refreshes every minute)
@@ -67,6 +68,8 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R
 
 type TeamPayload = { id: number; hours: number; share: number };
 type Pending = { booking: DispatchBooking; toTeam: DispatchTeam; fromTeamId: number | null };
+// Taking a cleaner off a visit: dispatch picks why first (feeds cleaner reliability).
+type DropAsk = { booking: DispatchBooking; teamId: number; verb: string; run: () => Promise<boolean> };
 
 export function DispatchPage() {
   const canWrite = useCanWrite();
@@ -77,6 +80,7 @@ export function DispatchPage() {
   const [showAll, setShowAll] = useState(false);
   const [selected, setSelected] = useState<{ key: string; teamId: number | null } | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
+  const [dropAsk, setDropAsk] = useState<DropAsk | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
   const dragRef = useRef<{ booking: DispatchBooking; fromTeamId: number | null } | null>(null);
@@ -198,18 +202,34 @@ export function DispatchPage() {
     return b.duration ? Math.round((b.duration / 60 / n) * 100) / 100 : 0;
   };
 
-  async function saveTeams(b: DispatchBooking, next: TeamPayload[], message: string) {
+  async function saveTeams(b: DispatchBooking, next: TeamPayload[], message: string): Promise<boolean> {
     setBusy(true);
     try {
       if (!b.id) throw new Error('Projected visits can only be assigned on their series in Launch27.');
       await l27Write('POST', '/v1/staff/bookings/assign/teams', { booking_ids: [b.id], teams: next });
       setToast({ ok: true, text: message });
       await queryClient.invalidateQueries({ queryKey: ['dispatch', date] });
+      return true;
     } catch (err) {
       setToast({ ok: false, text: `Couldn't save: ${(err as Error).message}` });
+      return false;
     } finally {
       setBusy(false);
       setPending(null);
+    }
+  }
+
+  // Run the change, then record why the cleaner came off the visit.
+  async function dropWithReason(reason: string) {
+    const ask = dropAsk;
+    setDropAsk(null);
+    if (!ask) return;
+    const ok = await ask.run();
+    if (!ok || !ask.booking.id) return;
+    try {
+      await reportsApi.recordDrop({ cleaner_id: ask.teamId, visit_key: String(ask.booking.id), booking_id: ask.booking.id, customer: ask.booking.user?.name || null, visit_at: ask.booking.service_date, reason });
+    } catch (err) {
+      setToast({ ok: false, text: `Saved in Launch27, but the reason wasn't recorded: ${(err as Error).message}` });
     }
   }
 
@@ -223,14 +243,19 @@ export function DispatchPage() {
       next = current.map((t) => (t.id === from ? { id: to.id, hours: t.hours || perCleanerHours(b, current.length), share: t.share || to.share || 0 } : t));
     }
     const verb = mode === 'add' ? 'added to' : 'assigned to';
-    return saveTeams(b, next, `${cleanName(to.title)} ${verb} ${b.user?.name || `booking #${b.id}`} at ${fmtClock(localStart(b))}`);
+    const run = () => saveTeams(b, next, `${cleanName(to.title)} ${verb} ${b.user?.name || `booking #${b.id}`} at ${fmtClock(localStart(b))}`);
+    const from = mode === 'replace' && current.length ? (fromTeamId ?? current[0]?.id) : null;
+    if (from == null) return run();
+    setPending(null);
+    setDropAsk({ booking: b, teamId: from, verb: `Move to ${cleanName(to.title)}`, run });
   };
   const unassign = (b: DispatchBooking, teamId: number) =>
-    saveTeams(
-      b,
-      teamPayload(b).filter((t) => t.id !== teamId),
-      `${cleanName(b.teams?.find((t) => t.id === teamId)?.title)} removed from ${b.user?.name || `booking #${b.id}`}`,
-    );
+    setDropAsk({
+      booking: b,
+      teamId,
+      verb: 'Remove',
+      run: () => saveTeams(b, teamPayload(b).filter((t) => t.id !== teamId), `${cleanName(b.teams?.find((t) => t.id === teamId)?.title)} removed from ${b.user?.name || `booking #${b.id}`}`),
+    });
 
   // ---- Drag and drop (desktop) ----
   const onDragStart = (e: DragEvent, block: Block) => {
@@ -459,6 +484,23 @@ export function DispatchPage() {
               <button disabled={busy} onClick={() => assign(pending.booking, pending.toTeam, 'replace', pending.fromTeamId)}>
                 {busy ? 'Saving…' : pending.fromTeamId !== null ? 'Move it' : 'Assign'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dropAsk && (
+        <div className="modal-backdrop" onClick={() => !busy && setDropAsk(null)}>
+          <div className="card modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Why is {cleanName(dropAsk.booking.teams?.find((t) => t.id === dropAsk.teamId)?.title)} coming off {dropAsk.booking.user?.name}'s {fmtClock(localStart(dropAsk.booking))} visit?</h2>
+            <p className="muted small">One tap saves the change. Only the "Cleaner –" reasons count against the cleaner's reliability.</p>
+            <div className="drop-reasons">
+              {DROP_REASONS.map(([code, label, cleaner]) => (
+                <button key={code} className={cleaner ? 'chip-btn cleaner' : 'chip-btn'} disabled={busy} onClick={() => dropWithReason(code)}>{label}</button>
+              ))}
+            </div>
+            <div className="actions end">
+              <button className="secondary" disabled={busy} onClick={() => setDropAsk(null)}>Cancel</button>
             </div>
           </div>
         </div>

@@ -149,6 +149,8 @@ export interface Change {
   client: ClientInfo | null;
   suggestions: Candidate[];
   series: { count: number; when: string; first: string; last: string; visit_keys: string[]; projected: number } | null;
+  // Cleaner taken off the visit: the reason picked for each (null = still needed).
+  drops?: { cleaner_id: number; reason: string | null }[];
 }
 
 export interface Slot {

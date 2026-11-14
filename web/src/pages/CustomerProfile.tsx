@@ -23,7 +23,7 @@ export function CustomerProfilePage() {
   // if they've already written in). It carries their conversations and channel identities.
   const contact = useQuery({ queryKey: ['inbox', 'contact-for-customer', cid], queryFn: async () => inbox.contact((await inbox.fromL27({ customer_id: cid })).id), staleTime: 60_000 });
 
-  const start = async (channel: 'sms' | 'email') => {
+  const start = async (channel: 'sms') => {
     if (!contact.data) return;
     setError(null);
     try {
@@ -43,7 +43,7 @@ export function CustomerProfilePage() {
       <button type="button" onClick={() => start('sms')} disabled={!contact.data}>
         <Icon name="sms" /> Text
       </button>
-      <button type="button" className="secondary" onClick={() => start('email')} disabled={!contact.data}>
+      <button type="button" className="secondary" disabled title="Email is read-only: emails can't be sent from this platform">
         <Icon name="email" /> Email
       </button>
       <CallButton phone={phone || c?.phone} />

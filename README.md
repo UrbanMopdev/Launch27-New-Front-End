@@ -33,6 +33,7 @@ real messages; only production touches the real Launch27.
 | [docs/deployment.md](docs/deployment.md) | Branch flow, CI/CD, QA approval, GitHub + Railway settings, rollback, domains |
 | [docs/database.md](docs/database.md) | Migrations, failed-migration plan, indexing, backups, restore |
 | [docs/security.md](docs/security.md) | Secrets, sessions, least privilege, log redaction |
+| [docs/email.md](docs/email.md) | Email channel: Gmail setup, threading, sandbox in dev/QA, troubleshooting |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Failed deploys, health checks, sign-in problems |
 | [docs/placement.md](docs/placement.md) | The placement API the Sales Hub books through: endpoints, setup, limits |
 
@@ -120,11 +121,14 @@ inside a conversation.
 | Phone | RingCentral Embeddable widget (loads when `RINGCENTRAL_CLIENT_ID` is set): calls ring in the browser, the caller's profile pops, finished calls are logged; click-to-call from a profile |
 | Search | Ctrl+K: people by name, phone or email; message text; jump to a booking number |
 
-**Phase 1 boundary: no channels are connected.** Replies are saved and shown as "not
-sent: channel not connected". Inbound traffic comes from the Channel simulator
-(`/inbox-simulator`), which runs the same matching, threading, routing and SLA code a
-real webhook will. Phase 2 adds connectors in `server/src/inbox/channels.js` (Gmail for
-email, Twilio for SMS) and webhook routes that call `ingestInbound()`.
+**Email is read-only.** In production new mail in each Gmail mailbox becomes a conversation
+within a minute, matched to the Launch27 customer, but **nothing can be emailed to anyone from
+the platform**: email replies and new email conversations are refused, and Gmail is asked only
+for read access (`EMAIL_SENDING_ENABLED` in `server/src/inbox/channels.js`). Dev and QA run a sandbox email channel (recorded, never
+sent, no mailbox read). Setup and how it works: [docs/email.md](docs/email.md); status in
+Support settings → Channels. **SMS is not connected yet**: text replies are saved and shown
+as "not sent: channel not connected", and inbound texts come from the Channel simulator
+(`/inbox-simulator`), which runs the same matching, threading, routing and SLA code.
 
 Data: Launch27 stays the record for bookings, customers, cleaners and money. The workspace
 stores only people's channel identities, conversations, notes, routing, SLAs and an audit
