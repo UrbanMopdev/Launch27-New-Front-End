@@ -197,6 +197,9 @@ export interface ConversationRow {
 export interface Conversation extends Omit<ConversationRow, 'queue_name' | 'owner_name' | 'contact_name' | 'contact_roles' | 'has_complaint'> {
   disposition: Disposition | null;
   complaint: Complaint | null;
+  // The cleaner the conversation is about (feeds complaint counts on Cleaner reports).
+  cleaner_id: number | null;
+  cleaner_name: string | null;
   routed_by: string | null;
   first_response_at: string | null;
   created_at: string;
@@ -291,6 +294,8 @@ export interface ConversationDetail {
   owner: { id: number; name: string | null; email: string; presence: Presence } | null;
   sla_policy: SlaPolicy | null;
   candidates: Contact[];
+  // The linked booking's cleaner, when the conversation has no Cleaner set yet.
+  cleaner_from_booking?: { id: number; name: string } | null;
 }
 
 export interface Canned {
@@ -311,7 +316,7 @@ export interface ChannelAccount {
   ingested_count: number;
 }
 export interface ChannelStatus {
-  email: { state: ChannelState; provider: string | null; send_from?: string[]; accounts: ChannelAccount[] };
+  email: { state: ChannelState; provider: string | null; send_from?: string[]; accounts: ChannelAccount[]; read_only: boolean };
   sms: { state: ChannelState; provider: string | null };
 }
 
@@ -351,6 +356,8 @@ export interface Notification {
   id: number;
   kind: string;
   conversation_id: number | null;
+  // A page to open instead of a conversation (e.g. the monthly raise check).
+  link: string | null;
   text: string;
   read_at: string | null;
   created_at: string;
@@ -405,7 +412,7 @@ export const inbox = {
   reply: (id: number, body: { body: string; channel?: Channel; to?: string; subject?: string; from?: string }) => call<Message>('POST', `/conversations/${id}/messages`, body),
   note: (id: number, body: string) => call<Message>('POST', `/conversations/${id}/notes`, { body }),
   addEvent: (id: number, text: string, meta: Record<string, unknown> = {}) => call<Message>('POST', `/conversations/${id}/events`, { text, meta }),
-  patch: (id: number, patch: Partial<{ status: Status; snooze_until: string; disposition: Disposition; queue_id: number; priority: number; l27_booking_id: number | null; complaint: Complaint | null; subject: string }>) => call<Conversation>('PATCH', `/conversations/${id}`, patch),
+  patch: (id: number, patch: Partial<{ status: Status; snooze_until: string; disposition: Disposition; queue_id: number; priority: number; l27_booking_id: number | null; complaint: Complaint | null; subject: string; cleaner_id: number | null; cleaner_name: string | null }>) => call<Conversation>('PATCH', `/conversations/${id}`, patch),
   claim: (id: number) => call<Conversation>('POST', `/conversations/${id}/claim`),
   assign: (id: number, userId: number | null, reason?: string) => call<Conversation>('POST', `/conversations/${id}/assign`, { user_id: userId, reason }),
   match: (id: number, contactId: number) => call<Conversation>('POST', `/conversations/${id}/match`, { contact_id: contactId }),

@@ -11,7 +11,7 @@ import { buildMessage, parseGmailMessage, stripQuoted, htmlToText, decodeHeader 
 import { createGmailClient, createGmailConnector, parseMailboxes, parseServiceAccount } from '../src/inbox/email/gmail.js';
 import { createEmailSync } from '../src/inbox/email/sync.js';
 import { createL27Client } from '../src/inbox/lookup.js';
-import { guardConnectors } from '../src/inbox/channels.js';
+import { EMAIL_SENDING_ENABLED, guardConnectors, sendOutbound } from '../src/inbox/channels.js';
 
 const b64 = (s) => Buffer.from(s, 'utf8').toString('base64url');
 const unraw = (raw) => Buffer.from(raw, 'base64url').toString('utf8');
@@ -37,6 +37,7 @@ function fakeGmail() {
   const boxes = new Map(); // account -> { historyId, messages: Map, history: [{id, msgId}] }
   const sent = [];
   let tokenCalls = 0;
+  const scopes = [];
   const box = (a) => {
     if (!boxes.has(a)) boxes.set(a, { historyId: 100, messages: new Map(), history: [] });
     return boxes.get(a);
@@ -52,6 +53,7 @@ function fakeGmail() {
       tokenCalls += 1;
       const p = new URLSearchParams(init.body);
       assert.ok(p.get('assertion') || p.get('refresh_token'));
+      if (p.get('assertion')) scopes.push(...JSON.parse(Buffer.from(p.get('assertion').split('.')[1], 'base64url').toString('utf8')).scope.split(' '));
       return Response.json({ access_token: `tok${tokenCalls}`, expires_in: 3600 });
     }
     const m = /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/([^/]+)(\/[^?]*)(?:\?(.*))?$/.exec(url);
@@ -86,7 +88,7 @@ function fakeGmail() {
     }
     throw new Error(`unhandled ${path}`);
   };
-  return { fetchImpl, deliver, sent, box, tokens: () => tokenCalls };
+  return { fetchImpl, deliver, sent, box, scopes, tokens: () => tokenCalls };
 }
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
@@ -232,54 +234,48 @@ describe('customer email conversations end to end (fake Gmail)', () => {
     assert.ok(full.body.conversations.some((c) => c.id === convId && c.channel === 'email'));
   });
 
-  test('the agent replies by email: sent through Gmail, in the same thread', async () => {
-    const sent = await api(`/api/conversations/${convId}/messages`, { body: 'Thursday 9am works. See you then!' });
-    assert.equal(sent.status, 201);
-    assert.equal(sent.body.delivery_state, 'sent');
-    assert.equal(sent.body.subject, 'Re: Reschedule next week');
-    const out = gmail.sent.at(-1);
-    assert.equal(out.account, 'info@urbanmop.ca');
-    assert.equal(out.threadId, 'T1');
-    assert.match(out.raw, /^To: jane@example\.com$/m);
-    assert.match(out.raw, /^In-Reply-To: <cust-1@example\.com>$/m);
-    assert.equal(bodyOf(out.raw), 'Thursday 9am works. See you then!');
-    const stored = (await db.query('SELECT meta, external_id FROM messages WHERE id = $1', [sent.body.id])).rows[0];
-    assert.equal(stored.meta.message_id, out.messageId);
-    assert.equal(stored.external_id, `gmail:${out.id}`);
+  test('email is read-only: an email reply is refused and nothing reaches Gmail, even in production with notifications live', async () => {
+    const res = await api(`/api/conversations/${convId}/messages`, { body: 'Thursday 9am works. See you then!' });
+    assert.equal(res.status, 403);
+    assert.match(res.body.error, /read-only/);
+    // Asking for email explicitly on any conversation is refused the same way.
+    assert.equal((await api(`/api/conversations/${convId}/messages`, { body: 'x', channel: 'email', to: 'jane@example.com' })).status, 403);
+    assert.equal(gmail.sent.length, 0);
+    const out = (await db.query("SELECT count(*)::int AS n FROM messages WHERE direction = 'out' AND channel = 'email'")).rows[0].n;
+    assert.equal(out, 0);
+    // Internal notes still work on email conversations.
+    assert.equal((await api(`/api/conversations/${convId}/notes`, { body: 'Called her instead' })).status, 201);
+    const ch = await api('/api/channels');
+    assert.equal(ch.body.email.read_only, true);
+    assert.equal(ch.body.email.state, 'live'); // still reading mail
   });
 
   test('their reply joins the conversation, even in another mailbox, by References', async () => {
-    const ours = gmail.sent.at(-1).messageId;
-    gmail.deliver('billing@urbanmop.ca', gmailMsg({ id: 'in2', threadId: 'OTHER', from: 'jane@example.com', to: 'billing@urbanmop.ca', subject: 'Re: Reschedule next week', messageId: '<cust-2@example.com>', inReplyTo: ours, references: `<cust-1@example.com> ${ours}`, text: 'Perfect, thanks!\n\nOn Tue, UrbanMop wrote:\n> Thursday 9am works.' }));
+    gmail.deliver('billing@urbanmop.ca', gmailMsg({ id: 'in2', threadId: 'OTHER', from: 'jane@example.com', to: 'billing@urbanmop.ca', subject: 'Re: Reschedule next week', messageId: '<cust-2@example.com>', inReplyTo: '<cust-1@example.com>', references: '<cust-1@example.com>', text: 'Also, the fridge please.\n\nOn Tue, Jane wrote:\n> Could we move Tuesday?' }));
     assert.equal(await sync.run(), 1);
     const detail = await api(`/api/conversations/${convId}`);
     const msgs = detail.body.messages.filter((m) => m.kind === 'message');
-    assert.deepEqual(msgs.map((m) => m.direction), ['in', 'out', 'in']);
-    assert.equal(msgs.at(-1).body, 'Perfect, thanks!');
+    assert.deepEqual(msgs.map((m) => m.direction), ['in', 'in']);
+    assert.equal(msgs.at(-1).body, 'Also, the fridge please.');
     const n = (await db.query("SELECT count(*)::int AS n FROM conversations WHERE channel = 'email'")).rows[0].n;
     assert.equal(n, 1);
   });
 
-  test('emailing a customer from their page starts a thread their reply comes back to', async () => {
+  test("an email can't be started from a customer's page", async () => {
     const contact = await api('/api/contacts/from-l27', { customer_id: 88 });
-    const conv = await api('/api/conversations', { contact_id: contact.body.id, channel: 'email' });
-    assert.equal(conv.status, 201);
-    assert.equal(conv.body.our_identity, UM.info);
-    assert.equal(conv.body.their_identity, 'raj@example.com');
-    const sent = await api(`/api/conversations/${conv.body.id}/messages`, { body: 'Hi Raj, a quick question about Friday.', subject: 'Your Friday clean' });
-    assert.equal(sent.body.delivery_state, 'sent');
-    const out = gmail.sent.at(-1);
-    assert.equal(out.threadId, null); // new thread
-    assert.match(out.raw, /^Subject: Your Friday clean$/m);
-    const row = (await db.query('SELECT subject, thread_key FROM conversations WHERE id = $1', [conv.body.id])).rows[0];
-    assert.equal(row.subject, 'Your Friday clean');
-    assert.equal(row.thread_key, `gmail:info@urbanmop.ca:t-${out.id}`);
-    gmail.deliver('info@urbanmop.ca', gmailMsg({ id: 'in3', threadId: `t-${out.id}`, from: 'raj@example.com', to: 'info@urbanmop.ca', subject: 'Re: Your Friday clean', messageId: '<raj-1@example.com>', text: 'Sure, ask away.' }));
-    assert.equal(await sync.run(), 1);
-    const detail = await api(`/api/conversations/${conv.body.id}`);
-    assert.deepEqual(detail.body.messages.filter((m) => m.kind === 'message').map((m) => m.body), ['Hi Raj, a quick question about Friday.', 'Sure, ask away.']);
+    const conv = await api('/api/conversations', { contact_id: contact.body.id, channel: 'email', subject: 'Your Friday clean', body: 'Hi Raj' });
+    assert.equal(conv.status, 403);
+    assert.match(conv.body.error, /read-only/);
     const full = await api(`/api/contacts/${contact.body.id}`);
-    assert.equal(full.body.conversations.length, 1);
+    assert.equal(full.body.conversations.length, 0);
+    assert.equal(gmail.sent.length, 0);
+    // Texting still works.
+    assert.equal((await api('/api/conversations', { contact_id: contact.body.id, channel: 'sms' })).status, 201);
+  });
+
+  test('Gmail is asked only for read access', () => {
+    assert.ok(gmail.scopes.length > 0);
+    assert.ok(gmail.scopes.every((s) => s === 'https://www.googleapis.com/auth/gmail.readonly'), gmail.scopes.join(', '));
   });
 
   test('mail from our own addresses is skipped; mail to billing@ routes to Billing', async () => {
@@ -307,13 +303,23 @@ describe('customer email conversations end to end (fake Gmail)', () => {
   });
 });
 
-describe('sandbox email (dev and QA)', () => {
-  test('replies are recorded, never sent', async () => {
-    const g = fakeGmail();
-    const guarded = guardConnectors({ email: createGmailConnector({ client: createGmailClient({ auth: { serviceAccount: SA }, fetchImpl: g.fetchImpl }), mailboxes: parseMailboxes('info@urbanmop.ca') }) }, 'sandbox');
-    const res = await guarded.email.send({ from: UM.info, to: 'x@example.com', subject: 's', body: 'b' });
-    assert.equal(res.id, null);
-    assert.equal(g.sent.length, 0);
-    assert.equal(g.tokens(), 0);
+describe('read-only email in every environment', () => {
+  test('the connector the app gets cannot send, in sandbox or live mode', async () => {
+    for (const mode of ['sandbox', 'live']) {
+      const g = fakeGmail();
+      const guarded = guardConnectors({ email: createGmailConnector({ client: createGmailClient({ auth: { serviceAccount: SA }, fetchImpl: g.fetchImpl }), mailboxes: parseMailboxes('info@urbanmop.ca') }) }, mode);
+      assert.equal(guarded.email.readOnly, true);
+      await assert.rejects(guarded.email.send({ from: UM.info, to: 'x@example.com', subject: 's', body: 'b' }), /read-only/);
+      assert.equal(g.sent.length, 0, mode);
+      assert.equal(g.tokens(), 0, mode);
+    }
+  });
+
+  test('the outbound path never hands an email to a connector', async () => {
+    let called = 0;
+    const res = await sendOutbound({ channel: 'email', from: UM.info, to: 'x@example.com', subject: 's', body: 'b' }, { email: { name: 'gmail', send: async () => ++called } });
+    assert.equal(res.state, 'not_sent');
+    assert.equal(called, 0);
+    assert.equal(EMAIL_SENDING_ENABLED, false);
   });
 });

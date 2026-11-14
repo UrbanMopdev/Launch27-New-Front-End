@@ -94,7 +94,17 @@ const TEAM_TAGS = [
   ['Own Equipment', 'Vehicle', 'Female'],
   ['Own Equipment', 'Vehicle', 'Male'],
   ['Own Equipment', 'Vehicle', 'Female', 'Do not assign new booking without cleaner\'s confirmation via call or text'],
+  ['Own Equipment', 'Vehicle', 'Female', 'Employee', 'Team Lead'],
 ];
+// Raise readiness in the synthetic data: when each cleaner started, who got a raise in August
+// (their visits before it pay $1 less), and one cleaner already at the $25 ceiling.
+const TEAM_STARTED_DAYS_AGO = [900, 1400, 760, 520, 75, 640, 1100, 110, 450, 40, 820, 300, 980, 610, 1200, 700, 160];
+const RAISED_AUG = new Set([1, 3, 6]);
+const RAISE_DATE = '2026-08-04';
+// A few cleaners who often finish residential cleans early (shortcutting risk).
+const EARLY_FINISHERS = new Set([7]);
+// A reliable cleaner (always on time, never forgets to check out): the one who looks raise-ready.
+const STAR_CLEANER = 9000;
 // Weekly hours per cleaner (weekday 0 = Sunday): varied so the planner has gaps to show.
 export function mockAvailability(teamId) {
   const i = Number(teamId) - 9000;
@@ -211,7 +221,8 @@ function buildTeams() {
       bg_color: COLORS[i % COLORS.length],
       active: true,
       confirmed: true,
-      share: [20, 21, 22, 22, 22, 23, 24][i % 7],
+      share: i === 2 ? 25 : [20, 21, 22, 22, 22, 23, 24][i % 7],
+      created_at: iso(new Date(Date.UTC(2026, 10, 12) - TEAM_STARTED_DAYS_AGO[i] * 86_400_000)),
       tags_info: (TEAM_TAGS[i] || ['Own Equipment', 'Vehicle', 'Female', 'Best for homemaking/recurring clients']).map((name, k) => ({ id: 700 + i * 10 + k, name })),
             // 0-9 Residential Ottawa; 10 works both (shared); 11-12 Commercial Ottawa; 13 Cornwall.
       locations: (i < 10 ? [LOCATIONS[0]] : i === 10 ? [LOCATIONS[0], LOCATIONS[1]] : i < 13 || i > 13 ? [LOCATIONS[1]] : [LOCATIONS[4]]).map(({ id, name }) => ({ id, name, active: true, default: id === 1 })),
@@ -581,14 +592,23 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
     }
     const hours = Math.round((duration / 60) * 100) / 100;
     const past = start.getTime() + duration * 60_000 < now();
-    const late = r.next() < 0.08 ? 50 : 0;
-    const checkin = new Date(start.getTime() + (5 + r.int(20) + late) * 60_000);
-    const checkout = new Date(checkin.getTime() + duration * 60_000 * (0.85 + r.next() * 0.4));
+    // The star cleaner is never badly late, so dev has someone who looks raise-ready.
+    const late = r.next() < 0.08 && team?.id !== STAR_CLEANER ? 50 : 0;
+    const checkin = new Date(start.getTime() + (Math.floor(r.int(20) * 0.75) + late) * 60_000);
+    const tIdx = team ? team.id - 9000 : -1;
+    // Drawn from the booking id, not the shared random stream, so other synthetic data is unchanged.
+    const h = ((Number(id) * 2654435761) >>> 0) % 1000;
+    const spread = r.next();
+    const shortcut = EARLY_FINISHERS.has(tIdx) && h < 350;
+    const checkout = new Date(checkin.getTime() + duration * 60_000 * (shortcut ? 0.55 + (h % 15) / 100 : 0.85 + spread * 0.4));
+    // Now and then a cleaner forgets to check out.
+    const forgotCheckout = h % 67 === 3 && tIdx !== STAR_CLEANER - 9000;
+    const rate = team ? (RAISED_AUG.has(tIdx) && date < RAISE_DATE ? team.share - 1 : team.share) : 0;
     // About half of visits have the cleaner tapping 'en route' (as in real data), with a drive distance.
     const tapsEnroute = r.next() < 0.5;
     const driveKm = Math.round((2 + r.next() * 22) * 10) / 10;
     const tracking = !unassigned && (past || checkin.getTime() < now())
-      ? [{ id: id * 10, booking_id: id, team: { id: team.id, title: team.title, image: null }, state: 'draft', enroute_started_at: tapsEnroute ? iso(new Date(checkin.getTime() - (10 + Math.round(driveKm * 2)) * 60_000)) : null, enroute_finished_at: tapsEnroute ? iso(checkin) : null, checkin_at: iso(checkin), checkin_latitude: c.latitude, checkin_longitude: c.longitude, checkout_at: past ? iso(checkout) : null, distance: tapsEnroute ? driveKm : null, distance_unit: 'km', active: true }]
+      ? [{ id: id * 10, booking_id: id, team: { id: team.id, title: team.title, image: null }, state: 'draft', enroute_started_at: tapsEnroute ? iso(new Date(checkin.getTime() - (10 + Math.round(driveKm * 2)) * 60_000)) : null, enroute_finished_at: tapsEnroute ? iso(checkin) : null, checkin_at: iso(checkin), checkin_latitude: c.latitude, checkin_longitude: c.longitude, checkout_at: past && !forgotCheckout ? iso(checkout) : null, distance: tapsEnroute ? driveKm : null, distance_unit: 'km', active: true }]
       : [];
     const rated = past && r.next() < 0.15;
     const rating = r.next() < 0.78 ? 2 : r.next() < 0.5 ? 1 : 0;
@@ -607,7 +627,7 @@ export function createMockLaunch27({ password = 'demo', now = () => Date.now(), 
       frequency: freq,
       payment_method_info: card ? { code: 'stripe', text: 'visa - 4242', brand: 'visa', last4: '4242' } : { code: 'check', text: 'Cash / cheque' },
       services: [{ id: svc.id, name: svc.name, price: svc.price, extras: extras.map((x) => ({ ...x, total: x.price, recurring: false })), pricing_parameters: pp, commercial: svc.id === 21 }],
-      teams: unassigned ? [] : [{ id: team.id, title: team.title, image: null, share: team.share, hours, earned: Math.round(team.share * hours * 100) / 100, fg_color: '#000000', bg_color: team.bg_color }],
+      teams: unassigned ? [] : [{ id: team.id, title: team.title, image: null, share: rate, hours, earned: Math.round(rate * hours * 100) / 100, fg_color: '#000000', bg_color: team.bg_color }],
       staff_notes: sp?.notes || null,
       customer_notes: r.next() < 0.1 ? 'Please use the side door.' : null,
       duration,

@@ -4,7 +4,7 @@ import { json } from '../db/index.js';
 import { route } from './routing.js';
 import { addBusinessMinutes, URBANMOP_HOURS } from './hours.js';
 import { normalizeEmail, normalizeIdentity, normalizePhone, kindForChannel, isStopWord, isStartWord } from './normalize.js';
-import { sendOutbound } from './channels.js';
+import { EMAIL_READ_ONLY_MESSAGE, EMAIL_SENDING_ENABLED, sendOutbound } from './channels.js';
 import { eligibleAgents, getSettings, setStatus as setAgentStatus, workforceTick } from './workforce.js';
 
 const DAY = 24 * 3600_000;
@@ -339,6 +339,7 @@ export async function reply(q, user, convId, { body, channel, to, subject, from 
   if (!body?.trim()) throw new InboxError(400, 'Write a message first');
   const ch = channel || conv.channel;
   if (ch === 'voice') throw new InboxError(400, 'Use the phone to call; replies go by email or text');
+  if (ch === 'email' && !EMAIL_SENDING_ENABLED) throw new InboxError(403, EMAIL_READ_ONLY_MESSAGE);
   const kind = kindForChannel(ch);
   const target = normalizeIdentity(kind, to || (ch === conv.channel ? conv.their_identity : null));
   if (!target) throw new InboxError(400, `Pick a ${kind === 'email' ? 'email address' : 'phone number'} to send to`);
@@ -447,6 +448,13 @@ export async function updateConversation(q, user, convId, patch) {
       changes[key] = [conv[key], patch[key]];
     }
   }
+  if (patch.cleaner_id !== undefined && (patch.cleaner_id ?? null) !== (conv.cleaner_id == null ? null : Number(conv.cleaner_id))) {
+    const cid = patch.cleaner_id == null || patch.cleaner_id === '' ? null : Number(patch.cleaner_id);
+    if (cid !== null && !Number.isInteger(cid)) throw new InboxError(400, 'cleaner_id must be a Launch27 team id');
+    set('cleaner_id', cid);
+    set('cleaner_name', cid === null ? null : String(patch.cleaner_name || '').slice(0, 200) || null);
+    changes.cleaner = cid === null ? null : patch.cleaner_name || `#${cid}`;
+  }
   if (patch.contact_id !== undefined) sets.push('needs_match = false');
   if (patch.complaint !== undefined) {
     set('complaint', json(patch.complaint), '::jsonb');
@@ -470,6 +478,7 @@ function describeChanges(c) {
   if (c.l27_booking_id) parts.push(c.l27_booking_id[1] ? `Linked to booking #${c.l27_booking_id[1]}` : 'Booking unlinked');
   if (c.contact_id) parts.push('Matched to a contact');
   if (c.complaint) parts.push('Complaint updated');
+  if (c.cleaner !== undefined) parts.push(c.cleaner ? `Cleaner set to ${c.cleaner}` : 'Cleaner cleared');
   return parts.join('; ');
 }
 
