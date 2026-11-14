@@ -5,11 +5,30 @@ conversation (routed, threaded, matched to the Launch27 customer, with a reply t
 agents answer from the inbox or start an email from a customer's page. Every email
 conversation is listed in the inbox and on the customer's page (Story → Conversations).
 
+## Email is read-only
+
+For now **no email can be sent to anyone from this platform**, in any environment. Email can
+be read (the Gmail sync below keeps working), but:
+
+- email replies and new email conversations are refused by the server (403, "Email is read-only");
+- the outbound path never hands an email to the Gmail connector, and the connector the app
+  receives refuses to send;
+- Gmail is asked only for read access (`gmail.readonly`), so Google itself would refuse a send;
+- the composer shows email as read-only, and the customer page's Email button is off.
+
+Agents answer by text or add an internal note. This is a code constant
+(`EMAIL_SENDING_ENABLED = false` in `server/src/inbox/channels.js`), not an environment
+setting: turning sending on needs an approved code change, plus the `gmail.send` scope in
+`gmail.js` and in Google Workspace. Customer history will come from Kustomer later.
+
+Launch27 itself may still email customers about booking changes made through the app in
+production (its own notifications); that is outside this setting.
+
 ## How it works
 
 | Part | Code | What it does |
 | --- | --- | --- |
-| Sending | `server/src/inbox/email/gmail.js` | `createGmailConnector`: sends a plain-text email through the Gmail API from the chosen address. Replies stay in the customer's thread: same Gmail thread, plus `In-Reply-To` / `References` headers so other mail apps thread it too |
+| Sending (**off**) | `server/src/inbox/email/gmail.js` | `createGmailConnector`: sends a plain-text email through the Gmail API from the chosen address. Replies stay in the customer's thread: same Gmail thread, plus `In-Reply-To` / `References` headers so other mail apps thread it too |
 | Receiving | `server/src/inbox/email/sync.js` | Every minute (`EMAIL_POLL_INTERVAL_MS`), reads new INBOX mail from each mailbox using Gmail's history id, and calls `ingestInbound()`: the same matching, threading, routing and SLA code the simulator uses |
 | Reading mail | `server/src/inbox/email/mime.js` | Picks the text part (or converts HTML), cuts quoted history ("On … wrote:"), keeps Cc and attachment names |
 | Health | Support settings → Channels, `GET /api/channels` | Connected / sandbox / not connected, and per mailbox: last check, last success, emails read, last error |
@@ -39,7 +58,7 @@ see docs/architecture.md).
 | | Development / QA | Production |
 | --- | --- | --- |
 | Email in the inbox | Works end to end with the **sandbox** channel: compose, thread, route | Gmail |
-| Sending | Recorded as "sandbox: not sent to customer" | Sent |
+| Sending | Off (read-only) | Off (read-only) |
 | Reading mailboxes | Never (dev and QA must not hold real mail). Use the Channel simulator | Every minute |
 
 `GMAIL_*` variables are ignored outside production (with a warning in the logs), so a copied
@@ -55,7 +74,7 @@ and sends for every mailbox, and no person's login is involved.
    the file safe; it is a secret.
 3. Google Workspace Admin → Security → Access and data control → API controls → Domain-wide
    delegation → Add new: the service account's **client ID** with these scopes:
-   `https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.send`
+   `https://www.googleapis.com/auth/gmail.readonly` (add `gmail.send` only when sending is approved)
 4. In Railway (production) set:
    - `GMAIL_SERVICE_ACCOUNT_JSON`: the whole JSON key (raw JSON, or base64 of it)
    - `GMAIL_MAILBOXES`: the mailboxes to read and send from, comma-separated, e.g.
@@ -63,7 +82,6 @@ and sends for every mailbox, and no person's login is involved.
      an alias or group delivered into another mailbox is written `alias=mailbox`
      (e.g. `management@urbanmop.ca=info@urbanmop.ca`); it must be set up as a "Send mail as"
      address on that mailbox in Gmail.
-   - `NOTIFICATIONS_MODE=live` (otherwise replies are recorded, not sent)
    - `L27_SYNC_EMAIL` / `L27_SYNC_PASSWORD` (already used by segments) so new senders are
      matched to their Launch27 customer
    - optional: `EMAIL_FROM_NAME` (default "UrbanMop"), `EMAIL_POLL_INTERVAL_MS` (default 60000)

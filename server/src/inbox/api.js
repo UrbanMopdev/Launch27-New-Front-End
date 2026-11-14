@@ -6,7 +6,7 @@ import express from 'express';
 import { json as toJson } from '../db/index.js';
 import { lintRules, route } from './routing.js';
 import { DISPOSITIONS, OUR_IDENTITIES, UM } from './seed.js';
-import { connectedChannels, sendableIdentities } from './channels.js';
+import { EMAIL_READ_ONLY_MESSAGE, EMAIL_SENDING_ENABLED, connectedChannels, sendableIdentities } from './channels.js';
 import { normalizeEmail, normalizeIdentity, normalizePhone, kindForChannel } from './normalize.js';
 import * as svc from './service.js';
 import { CHANNELS, canEditSettings, getSettings, normalizeCapacity, validateSettings } from './workforce.js';
@@ -160,7 +160,8 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
     const email = connectors.email;
     const accounts = email ? await many(db, "SELECT address, provider, last_poll_at, last_ok_at, last_error, ingested_count FROM channel_accounts WHERE channel = 'email' ORDER BY address") : [];
     return {
-      email: !email ? { state: 'not_connected', provider: null, accounts: [] } : { state: email.sandbox ? 'sandbox' : 'live', provider: email.name, send_from: email.identities || OUR_IDENTITIES.email, accounts },
+      // state: how mail is read (live Gmail, sandbox, or not connected). read_only: sending is off.
+      email: !email ? { state: 'not_connected', provider: null, accounts: [], read_only: !EMAIL_SENDING_ENABLED } : { state: email.sandbox ? 'sandbox' : 'live', provider: email.name, send_from: email.identities || OUR_IDENTITIES.email, accounts, read_only: !EMAIL_SENDING_ENABLED },
       sms: !connectors.sms ? { state: 'not_connected', provider: null } : { state: connectors.sms.sandbox ? 'sandbox' : 'live', provider: connectors.sms.name },
     };
   }
@@ -329,6 +330,7 @@ export function createInboxRouter({ db, sessions, cookieName, config, l27, conne
   r.post('/conversations', wrap(async (req, res) => {
     const { contact_id, channel = 'sms', to, from, subject, body, l27_booking_id } = req.body || {};
     if (!['email', 'sms'].includes(channel)) throw new svc.InboxError(400, 'Start conversations by email or text');
+    if (channel === 'email' && !EMAIL_SENDING_ENABLED) throw new svc.InboxError(403, EMAIL_READ_ONLY_MESSAGE);
     const out = await db.tx(async (q) => {
       const contact = await one(q, 'SELECT * FROM contacts WHERE id = $1', [contact_id]);
       if (!contact) throw new svc.InboxError(404, 'Contact not found');

@@ -224,6 +224,8 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
   const sender = from || (channel === c.channel ? c.our_identity : fromOptions?.[0]) || '';
   const connected = meta.data?.connected_channels.includes(channel);
   const sandboxed = meta.data?.channels?.[channel === 'email' ? 'email' : 'sms']?.state === 'sandbox';
+  // Email is read-only on this platform: nothing can be sent. Locked until the server says otherwise.
+  const emailLocked = mode === 'reply' && channel === 'email' && meta.data?.channels?.email?.read_only !== false;
   // A new email (or a conversation started without one) needs a subject line.
   const needsSubject = channel === 'email' && (channel !== c.channel || !c.subject);
 
@@ -283,7 +285,8 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
           </div>
         )}
       </div>
-      {mode === 'reply' && needsSubject && <input className="full" placeholder="Subject" aria-label="Email subject" value={subject} onChange={(e) => setSubject(e.target.value)} />}
+      {emailLocked && <div className="notice small" role="status">Email is read-only: emails can't be sent from this platform. Reply by text, or add an internal note.</div>}
+      {mode === 'reply' && needsSubject && !emailLocked && <input className="full" placeholder="Subject" aria-label="Email subject" value={subject} onChange={(e) => setSubject(e.target.value)} />}
       <div className="composer-box">
         <textarea
           ref={area}
@@ -292,7 +295,7 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
           placeholder={mode === 'note' ? 'Only your team sees this. @name to notify someone.' : 'Write a reply…'}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim() && !busy && !optedOut) send();
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim() && !busy && !optedOut && !emailLocked) send();
           }}
         />
         {!!canned.length && (
@@ -310,11 +313,11 @@ const Composer = forwardRef<ComposerHandle, { detail: ConversationDetail; mine: 
       <div className="composer-foot">
         <span className="muted small">
           {mode === 'reply' && !connected && `${CHANNEL_LABEL[channel]} isn't connected yet: replies are saved, not sent.`}
-          {mode === 'reply' && connected && sandboxed && 'Sandbox: replies are recorded here, not sent to the customer.'}
+          {mode === 'reply' && connected && sandboxed && !emailLocked && 'Sandbox: replies are recorded here, not sent to the customer.'}
           {mode === 'reply' && channel === 'sms' && text && <span className="mono"> {text.length} chars · {segments} text{segments === 1 ? '' : 's'}</span>}
           {!text && <span> Type <span className="kbd">/</span> for saved replies · <span className="kbd">Ctrl</span>+<span className="kbd">Enter</span> to send</span>}
         </span>
-        <button disabled={busy || !text.trim() || !!optedOut || (mode === 'reply' && needsSubject && !subject.trim())} title={mode === 'reply' && needsSubject && !subject.trim() ? 'Add a subject first' : undefined} className={mode === 'note' ? 'note-btn' : ''} onClick={send}>
+        <button disabled={busy || !text.trim() || !!optedOut || emailLocked || (mode === 'reply' && needsSubject && !subject.trim())} title={emailLocked ? 'Email is read-only' : mode === 'reply' && needsSubject && !subject.trim() ? 'Add a subject first' : undefined} className={mode === 'note' ? 'note-btn' : ''} onClick={send}>
           {mode !== 'note' && <Icon name="send" />}
           {busy ? 'Saving…' : mode === 'note' ? 'Add note' : 'Send'}
         </button>

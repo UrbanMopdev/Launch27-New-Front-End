@@ -4,7 +4,7 @@ import { json } from '../db/index.js';
 import { route } from './routing.js';
 import { addBusinessMinutes, URBANMOP_HOURS } from './hours.js';
 import { normalizeEmail, normalizeIdentity, normalizePhone, kindForChannel, isStopWord, isStartWord } from './normalize.js';
-import { sendOutbound } from './channels.js';
+import { EMAIL_READ_ONLY_MESSAGE, EMAIL_SENDING_ENABLED, sendOutbound } from './channels.js';
 import { eligibleAgents, getSettings, setStatus as setAgentStatus, workforceTick } from './workforce.js';
 
 const DAY = 24 * 3600_000;
@@ -339,6 +339,7 @@ export async function reply(q, user, convId, { body, channel, to, subject, from 
   if (!body?.trim()) throw new InboxError(400, 'Write a message first');
   const ch = channel || conv.channel;
   if (ch === 'voice') throw new InboxError(400, 'Use the phone to call; replies go by email or text');
+  if (ch === 'email' && !EMAIL_SENDING_ENABLED) throw new InboxError(403, EMAIL_READ_ONLY_MESSAGE);
   const kind = kindForChannel(ch);
   const target = normalizeIdentity(kind, to || (ch === conv.channel ? conv.their_identity : null));
   if (!target) throw new InboxError(400, `Pick a ${kind === 'email' ? 'email address' : 'phone number'} to send to`);

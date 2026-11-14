@@ -449,8 +449,13 @@ function ChannelsPanel() {
     <>
       <section className="channel-block">
         <h3>Email {email.provider && email.provider !== 'sandbox' ? <span className="muted small">· {email.provider === 'gmail' ? 'Gmail' : email.provider}</span> : null}</h3>
-        <p className="small"><span className={`wl-pill ${CHANNEL_STATE[email.state].cls}`}>{CHANNEL_STATE[email.state].label}</span> {CHANNEL_STATE[email.state].text}</p>
-        {email.send_from && email.state !== 'not_connected' && <p className="muted small">Agents can send from: {email.send_from.join(', ')}</p>}
+        {email.read_only ? (
+          <p className="small"><span className="wl-pill wl-blocked">Read-only</span> Emails can be read here but not sent: nothing can be emailed to anyone from this platform. Reply by text, or add an internal note.</p>
+        ) : (
+          <p className="small"><span className={`wl-pill ${CHANNEL_STATE[email.state].cls}`}>{CHANNEL_STATE[email.state].label}</span> {CHANNEL_STATE[email.state].text}</p>
+        )}
+        {email.read_only && email.state !== 'not_connected' && <p className="muted small">Reading mail: {email.state === 'live' ? 'Gmail, checked every minute' : 'sandbox (Channel simulator only)'}.</p>}
+        {!email.read_only && email.send_from && email.state !== 'not_connected' && <p className="muted small">Agents can send from: {email.send_from.join(', ')}</p>}
       </section>
       {email.accounts.length > 0 && (
         <table className="table wl-table">

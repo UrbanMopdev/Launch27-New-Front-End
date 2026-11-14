@@ -316,7 +316,7 @@ export interface ChannelAccount {
   ingested_count: number;
 }
 export interface ChannelStatus {
-  email: { state: ChannelState; provider: string | null; send_from?: string[]; accounts: ChannelAccount[] };
+  email: { state: ChannelState; provider: string | null; send_from?: string[]; accounts: ChannelAccount[]; read_only: boolean };
   sms: { state: ChannelState; provider: string | null };
 }
 

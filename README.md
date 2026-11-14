@@ -121,9 +121,10 @@ inside a conversation.
 | Phone | RingCentral Embeddable widget (loads when `RINGCENTRAL_CLIENT_ID` is set): calls ring in the browser, the caller's profile pops, finished calls are logged; click-to-call from a profile |
 | Search | Ctrl+K: people by name, phone or email; message text; jump to a booking number |
 
-**Email is connected through Gmail** (production): replies are sent from our addresses in
-the customer's thread, and new mail in each mailbox becomes a conversation within a minute,
-matched to the Launch27 customer. Dev and QA run a sandbox email channel (recorded, never
+**Email is read-only.** In production new mail in each Gmail mailbox becomes a conversation
+within a minute, matched to the Launch27 customer, but **nothing can be emailed to anyone from
+the platform**: email replies and new email conversations are refused, and Gmail is asked only
+for read access (`EMAIL_SENDING_ENABLED` in `server/src/inbox/channels.js`). Dev and QA run a sandbox email channel (recorded, never
 sent, no mailbox read). Setup and how it works: [docs/email.md](docs/email.md); status in
 Support settings → Channels. **SMS is not connected yet**: text replies are saved and shown
 as "not sent: channel not connected", and inbound texts come from the Channel simulator
