@@ -274,6 +274,9 @@ describe('raise: service on the sample Launch27', () => {
 
     // A no-show logged from Dispatch forces Not yet on the panel.
     await reports.recordDrop({ cleaner_id: someone.id, visit_key: '999001', booking_id: 999001, customer: 'Test client', visit_at: '2026-11-11T14:00:00Z', reason: 'cleaner_no_show' }, null);
+    // recordDrop stamps dropped_at with the database clock; pin it inside this test's fixed "now"
+    // (Nov 12) so the test doesn't start failing once the real date passes it.
+    await db.query("UPDATE cleaner_drops SET dropped_at = '2026-11-11T14:30:00Z' WHERE visit_key = '999001'");
     await reports.addReview(someone.id, { review_date: '2026-11-01', reviewer: 'A. Client', link: 'https://g.co/x' }, null);
     await assert.rejects(() => reports.addReview(someone.id, { review_date: '', reviewer: 'x' }, null), /date/);
     const one = await reports.cleaner(someone.id, '13w', { admin: true });
