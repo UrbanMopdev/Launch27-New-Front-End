@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState, type ReactNode, useRef } from 'react';
+import { scheduleApi } from '../schedule/api';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { inbox } from '../inbox/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -922,9 +923,13 @@ function TeamPicker({ teams, selected, onChange, customerId }: { teams: { id: nu
   const affinity = useMemo(() => cleanerAffinity(history.data || []), [history.data]);
   const statsFor = (id: number) => affinity.all.find((c) => c.id === id);
   const rank = (id: number) => (affinity.preferred?.id === id ? 0 : statsFor(id) ? 1 : affinity.avoid.some((a) => a.id === id) ? 3 : 2);
+  // What the client's tags say ("do not assign…", "prefers…"), read live by the planner.
+  const wishes = useQuery({ queryKey: ['schedule', 'client-wishes', customerId], queryFn: () => scheduleApi.clientWishes(customerId!), enabled: !!customerId, retry: false, staleTime: 60_000 });
+  const blockedWhy = (id: number) => wishes.data?.blocked.find((b) => b.id === id)?.reason;
+  const askedFor = (id: number) => !!wishes.data?.asked_for.includes(id);
   const shown = teams
     .filter((t) => selected.includes(t.id) || t.title.toLowerCase().includes(filter.toLowerCase()))
-    .sort((a, b) => Number(selected.includes(b.id)) - Number(selected.includes(a.id)) || rank(a.id) - rank(b.id) || (statsFor(b.id)?.visits || 0) - (statsFor(a.id)?.visits || 0));
+    .sort((a, b) => Number(selected.includes(b.id)) - Number(selected.includes(a.id)) || Number(!!blockedWhy(a.id)) - Number(!!blockedWhy(b.id)) || Number(askedFor(b.id)) - Number(askedFor(a.id)) || rank(a.id) - rank(b.id) || (statsFor(b.id)?.visits || 0) - (statsFor(a.id)?.visits || 0));
   return (
     <>
       <label className="bf-search">
@@ -937,13 +942,21 @@ function TeamPicker({ teams, selected, onChange, customerId }: { teams: { id: nu
           const on = selected.includes(t.id);
           const st = statsFor(t.id);
           const avoid = affinity.avoid.some((a) => a.id === t.id);
+          const blocked = blockedWhy(t.id);
+          const pick = () => {
+            if (on) return onChange(selected.filter((x) => x !== t.id));
+            if (blocked && !window.confirm(`${blocked}: ${t.title}.\n\nAssign them anyway?`)) return;
+            onChange([...selected, t.id]);
+          };
           return (
-            <button key={t.id} type="button" aria-pressed={on} className={on ? 'bf-team on' : 'bf-team'} onClick={() => onChange(on ? selected.filter((x) => x !== t.id) : [...selected, t.id])}>
+            <button key={t.id} type="button" aria-pressed={on} className={on ? 'bf-team on' : 'bf-team'} onClick={pick}>
               <Avatar name={t.title} size={32} />
               <span className="grow">
                 <strong>{t.title}</strong>
                 {affinity.preferred?.id === t.id && <span className="chip ok">preferred</span>}
                 {avoid && <span className="chip neg">rated unhappy</span>}
+                {blocked && <span className="chip neg">{blocked.toLowerCase()}</span>}
+                {!blocked && askedFor(t.id) && <span className="chip ok">client asked for them</span>}
                 <span className="muted small"> {st ? `${st.visits} visit${st.visits === 1 ? '' : 's'} for this customer · ${st.happy} happy` : customerId ? 'New to this customer' : ''}</span>
               </span>
               {on && <Icon name="check" />}
@@ -951,6 +964,7 @@ function TeamPicker({ teams, selected, onChange, customerId }: { teams: { id: nu
           );
         })}
       </div>
+      {selected.some((id) => blockedWhy(id)) && <div className="error">{selected.filter((id) => blockedWhy(id)).map((id) => `${teams.find((t) => t.id === id)?.title || 'This cleaner'}: ${blockedWhy(id)!.toLowerCase()}`).join(' · ')}</div>}
       <div className="muted small">{selected.length ? `${selected.length} selected · Launch27 notifies assigned cleaners` : 'Unassigned: you can assign from the dispatch board later'}</div>
     </>
   );

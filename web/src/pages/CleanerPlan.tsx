@@ -2,7 +2,7 @@ import { useBrand } from '../brands/useBrand';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { scheduleApi, type PlanCell } from '../schedule/api';
+import { assignAsking, scheduleApi, type PlanCell } from '../schedule/api';
 import { CleanerDot, FreqPill, ScheduleStatus, niceDate } from '../schedule/ui';
 
 export function CleanerPlanPage() {
@@ -118,7 +118,7 @@ function GapPanel({ cleanerId, gap, onDone }: { cleanerId: number; gap: { date: 
   const queryClient = useQueryClient();
   const data = useQuery({ queryKey: ['schedule', 'gap', cleanerId, gap.date, gap.start], queryFn: () => scheduleApi.gap(cleanerId, gap.date, gap.start, gap.end) });
   const assign = useMutation({
-    mutationFn: (key: string) => scheduleApi.assign([key], cleanerId),
+    mutationFn: (key: string) => assignAsking([key], cleanerId),
     onSuccess: (r) => {
       onDone(`Assigned to ${r.cleaner}.${r.confirm_first ? ` ${r.cleaner} asks to be called or texted to confirm.` : ''}`);
       queryClient.invalidateQueries({ queryKey: ['schedule'] });

@@ -167,6 +167,9 @@ export interface Slot {
   reasons: Reason[];
   travel: number | null;
 }
+export interface ClientPrefs { female_only: boolean; prefers_female: boolean; prefers_male: boolean; consistent: boolean; prefers: string[]; avoid: string[] }
+// source: 'profile' = read from the Launch27 profile just now; 'synced' = from the last sync.
+export interface ClientWishes { prefs: ClientPrefs | null; source: 'profile' | 'synced' | null; blocked: { id: number; name: string; reason: string }[]; asked_for: number[] }
 export interface SlotQuery { customer_id?: number; duration: number; kind: Visit['kind']; from?: string; days?: number; weekdays?: number[]; earliest?: number; latest?: number; cleaner?: 'same' | 'any'; booking_id?: number }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -194,8 +197,20 @@ export const scheduleApi = {
   continuity: (locations?: number[] | null) => call<Continuity>('GET', `/continuity${locations ? `?locations=${locations.join(',')}` : ''}`),
   changes: () => call<{ items: Change[]; today: string }>('GET', '/changes'),
   resolve: (id: number, resolution: 'fixed' | 'dismissed') => call<void>('POST', `/changes/${id}/resolve`, { resolution }),
-  findSlots: (q: SlotQuery) => call<{ place_known: boolean; kind: Visit['kind']; frequency: string; duration: number; customer: { id: number; name: string; main: string | null } | null; cleaner: 'same' | 'any'; no_usual: boolean; any_count: number | null; slots: Slot[] }>('POST', '/find-slots', q),
-  assign: (visit_keys: string[], cleaner_id: number, recommended = false) => call<{ assigned: number; projected: number; cleaner: string; confirm_first: boolean }>('POST', '/assign', { visit_keys, cleaner_id, recommended }),
+  findSlots: (q: SlotQuery) => call<{ place_known: boolean; kind: Visit['kind']; frequency: string; duration: number; customer: { id: number; name: string; main: string | null } | null; cleaner: 'same' | 'any'; no_usual: boolean; any_count: number | null; wishes: { prefs: ClientPrefs; source: 'profile' | 'synced' } | null; slots: Slot[] }>('POST', '/find-slots', q),
+  clientWishes: (customerId: number) => call<ClientWishes>('GET', `/client/${customerId}/wishes`),
+  assign: (visit_keys: string[], cleaner_id: number, recommended = false, override = false) => call<{ assigned: number; projected: number; cleaner: string; confirm_first: boolean }>('POST', '/assign', { visit_keys, cleaner_id, recommended, override }),
   unavailable: (cleaner_id: number, day: string, unavailable = true) => call<{ cleaner: string; day: string; unavailable: boolean; affected: number }>('PUT', '/unavailable', { cleaner_id, day, unavailable }),
   refresh: () => call<{ running: boolean }>('POST', '/refresh'),
 };
+
+// Assign from the planner. When the client's tags rule the cleaner out ("do not assign…",
+// female only), the server refuses; ask, and assign anyway only on a clear yes.
+export async function assignAsking(visit_keys: string[], cleaner_id: number, recommended = false) {
+  try {
+    return await scheduleApi.assign(visit_keys, cleaner_id, recommended);
+  } catch (err) {
+    if (err instanceof ApiError && err.fields?.code === 'client_wishes' && window.confirm(`${err.message}\n\nAssign anyway?`)) return scheduleApi.assign(visit_keys, cleaner_id, recommended, true);
+    throw err;
+  }
+}
