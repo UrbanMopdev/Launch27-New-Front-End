@@ -1002,6 +1002,18 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
       contact_emails: (await q(`WITH n AS (SELECT contact_id, count(*)::int AS n FROM contact_identities WHERE kind = 'email' GROUP BY 1)
         SELECT count(*)::int AS contacts_with_email, count(*) FILTER (WHERE n >= 5)::int AS with_five_or_more_emails, count(*) FILTER (WHERE n >= 50)::int AS with_fifty_or_more_emails, max(n)::int AS most_emails_on_one_contact FROM n`))[0],
       unmatched_by_category: pairs(await q(`SELECT category AS k, count(*)::int AS n FROM complaint_cases c WHERE ${live} AND l27_customer_id IS NULL GROUP BY 1 ORDER BY 2 DESC`)),
+      // Refunds, Slack against Launch27, month by month (counts and dollars only). Posts: refund
+      // posts read from the finance channels. Costs: refunds Launch27 shows on a complaint's
+      // booking, and Slack posts on cases where Launch27 shows none.
+      refund_posts_by_month: Object.fromEntries((await q(`SELECT to_char(date_trunc('month', occurred_at), 'YYYY_Mon') AS k, min(occurred_at) AS o, count(*)::int AS posts, count(case_id)::int AS linked,
+          round(coalesce(sum(nullif(data->>'amount', '')::numeric), 0))::int AS dollars, count(*) FILTER (WHERE data->>'amount' IS NULL)::int AS no_amount
+        FROM complaint_source_items WHERE source = 'slack' AND occurred_at > now() - interval '400 days' GROUP BY 1 ORDER BY 2`)).map((r) => [r.k ?? 'error', r.error || [r.posts, 'posts', r.dollars, 'dollars', r.linked, 'linked to a case', r.no_amount, 'with no amount'].join(' ')])),
+      refund_posts_by_channel: pairs(await q(`SELECT coalesce(data->>'channel', 'none') || ' / ' || kind AS k, count(*)::int AS n FROM complaint_source_items WHERE source = 'slack' AND occurred_at > now() - interval '400 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 20`)),
+      refund_costs_by_month: Object.fromEntries((await q(`SELECT to_char(date_trunc('month', c.opened_at), 'YYYY_Mon') AS k, min(c.opened_at) AS o,
+          count(DISTINCT c.id) FILTER (WHERE k.source = 'launch27')::int AS l_n, round(coalesce(sum(k.amount) FILTER (WHERE k.source = 'launch27'), 0))::int AS l_d,
+          count(DISTINCT c.id) FILTER (WHERE k.source = 'slack')::int AS s_n, round(coalesce(sum(k.amount) FILTER (WHERE k.source = 'slack'), 0))::int AS s_d,
+          count(DISTINCT c.id) FILTER (WHERE k.source NOT IN ('launch27', 'slack'))::int AS o_n, round(coalesce(sum(k.amount) FILTER (WHERE k.source NOT IN ('launch27', 'slack')), 0))::int AS o_d
+        FROM complaint_cases c JOIN complaint_costs k ON k.case_id = c.id AND k.kind = 'refund' WHERE ${live} AND c.opened_at > now() - interval '400 days' GROUP BY 1 ORDER BY 2`)).map((r) => [r.k ?? 'error', r.error || ['launch27', r.l_n, 'cases', r.l_d, 'dollars; slack only', r.s_n, 'cases', r.s_d, 'dollars; other', r.o_n, 'cases', r.o_d, 'dollars'].join(' ')])),
       matched_how: pairs(await q(`SELECT coalesce(client_match, 'when_read') AS k, count(*)::int AS n FROM complaint_cases c WHERE ${live} AND l27_customer_id IS NOT NULL GROUP BY 1`)),
       // Step 0 of the numbers fix (docs/complaints-engine.md): where the history is, what the
       // page says today per response, and which cause/category pairs exist. Month keys are
