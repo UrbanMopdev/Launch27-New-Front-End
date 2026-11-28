@@ -1166,6 +1166,48 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     return out;
   }
 
+  // What the system senders' emails are: their subject lines as templates, with everything that
+  // is not template wording taken out. A word is kept only if it appears in the subjects of at
+  // least 5 different cases from that mail domain and is not part of any client's or contact's
+  // name; every other word becomes "_" and every number "#". So no name or address is logged.
+  async function subjectPatterns(domains = ['launch27mail.com', 'ringcentral.com', 'stripe.com', 'e.read.ai']) {
+    const names = new Set();
+    for (const r of await many(db, `SELECT customer_name AS n FROM complaint_cases WHERE customer_name IS NOT NULL AND lower(customer_email) NOT LIKE ALL($1::text[])
+      UNION SELECT name FROM contacts WHERE name IS NOT NULL`, [domains.map((d) => `%@${d}`)])) {
+      for (const w of String(r.n).toLowerCase().split(/[^a-z']+/)) if (w.length >= 3) names.add(w);
+    }
+    // Words that are also names but belong to these templates.
+    for (const w of ['new', 'star', 'may', 'grace', 'rose', 'page', 'bill', 'will', 'mark', 'voice', 'text', 'message', 'from', 'booking', 'rating', 'feedback', 'customer', 'review', 'cleaning', 'payment', 'dispute', 'meeting', 'missed', 'call', 'fax', 'sms', 'voicemail']) names.delete(w);
+    const out = {};
+    for (const d of domains) {
+      const rows = await many(db, `SELECT c.category, c.raw->>'subject' AS subject, c.l27_customer_id IS NOT NULL AS matched,
+          (SELECT s.final_kind FROM complaint_solutions s WHERE s.case_id = c.id) AS final_kind
+        FROM complaint_cases c WHERE c.merged_into IS NULL AND c.excluded_at IS NULL AND lower(c.customer_email) LIKE $1`, [`%@${d}`]);
+      if (!rows.length) continue;
+      const words = (subject) => String(subject || '').toLowerCase().replace(/[0-9][0-9.,:/-]*/g, ' # ').split(/[^a-z#']+/).filter(Boolean);
+      const seen = new Map();
+      for (const r of rows) for (const w of new Set(words(r.subject))) seen.set(w, (seen.get(w) || 0) + 1);
+      const templates = new Map();
+      for (const r of rows) {
+        const t = words(r.subject).map((w) => (w === '#' ? '#' : seen.get(w) >= 5 && !names.has(w) ? w : '_')).join(' ').replace(/(_ )+_/g, '_').replace(/(# )+#/g, '#').slice(0, 90) || '(no subject)';
+        templates.set(t, (templates.get(t) || 0) + 1);
+      }
+      const count = (key) => {
+        const m = {};
+        for (const r of rows) m[r[key] ?? 'none'] = (m[r[key] ?? 'none'] || 0) + 1;
+        return m;
+      };
+      out[d] = {
+        cases: rows.length,
+        matched: rows.filter((r) => r.matched).length,
+        subjects: Object.fromEntries([...templates].sort((a, b) => b[1] - a[1]).slice(0, 14)),
+        categories: count('category'),
+        what_was_agreed: count('final_kind'),
+      };
+    }
+    return out;
+  }
+
   // One log line per section, so no line is too long for the log viewer.
   async function logCoverage() {
     const c = await coverage();
@@ -1175,6 +1217,10 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
       if (entries && JSON.stringify(value).length > 900) {
         for (let i = 0; i < entries.length; i += 6) log.info('complaints coverage', { section: `${section} ${i / 6 + 1}`, value: JSON.stringify(Object.fromEntries(entries.slice(i, i + 6))) });
       } else log.info('complaints coverage', { section, value: JSON.stringify(value) });
+    }
+    const subjects = await subjectPatterns().catch((err) => ({ error: err.message }));
+    for (const [domain, v] of Object.entries(subjects)) {
+      for (const [part, value] of Object.entries(v && typeof v === 'object' ? v : { error: v })) log.info('complaints system sender', { domain, part, value: JSON.stringify(value) });
     }
     const sample = await matchDiagnostics().catch((err) => [{ error: err.message }]);
     for (const row of sample) log.info('complaints unmatched case', { value: JSON.stringify(row) });
@@ -1377,7 +1423,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     return buildReviewStats(rows, waiting);
   }
 
-  return { linkClients, coverage, logCoverage, importReviews, linkReviews, reviewsSummary, rankFor, mineSolutions, getSettings, saveSettings, kustomerDiscover, start, run, status, markInterrupted, maybeRun, listCases, getCase, setCategory, playbook, clients, sources, reviewQueue, reviewCase, reviewStats };
+  return { subjectPatterns, linkClients, coverage, logCoverage, importReviews, linkReviews, reviewsSummary, rankFor, mineSolutions, getSettings, saveSettings, kustomerDiscover, start, run, status, markInterrupted, maybeRun, listCases, getCase, setCategory, playbook, clients, sources, reviewQueue, reviewCase, reviewStats };
 }
 
 // Measured accuracy from hand checks: of the cases the engine put in a category, how many a
