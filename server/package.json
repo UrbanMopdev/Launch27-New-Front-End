@@ -11,8 +11,8 @@
     "migrate:verify": "node --env-file-if-exists=../.env src/db/migrate-cli.js verify"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.8.0",
-    "@electric-sql/pglite": "^0.5.14",
+    "@anthropic-ai/sdk": "^1.14.0",
+    "@electric-sql/pglite": "^0.6.0",
     "cookie-parser": "^1.4.7",
     "express": "^4.21.2",
     "pg": "^8.23.1",
