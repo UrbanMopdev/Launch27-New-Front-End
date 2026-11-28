@@ -385,7 +385,9 @@ function WorkedBefore({ id, record }: { id: number; record: ComplaintRecord }) {
             : <span className="muted">Only {d.cause_decided} past {d.cause_decided === 1 ? 'complaint' : 'complaints'} with this root cause and a known outcome, so the answer below is for all {d.label} complaints.</span>}
         </div>
       )}
-      {c ? (
+      {c && !c.name ? (
+        <div className="muted small">{c.reason}{d.typical ? `. We usually do: ${d.typical}` : ''}.</div>
+      ) : c ? (
         <div className="ct-worked-best">
           <div><span className="muted small">Cheapest that works</span><b>{c.name}</b></div>
           <div><span className="muted small">Clients kept</span><b>{pctOf(c.saved)}</b></div>

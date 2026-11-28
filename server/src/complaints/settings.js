@@ -50,7 +50,11 @@ export const DEFAULT_SETTINGS = {
   costs: {
     cleaner_hourly_default: 22,
     margin_per_hour_default: 18,
-    travel_per_visit: 8,
+    travel_per_visit: 0,
+    // Derek, Nov 28 2026: a reclean costs hours x the cleaner's wage, nothing else for now.
+    // Switch these on to add travel or the lost slot's margin back.
+    include_travel: false,
+    include_lost_slot: false,
     reclean_default_hours: 2,
     reclean_spot_share: 0.5,
   },
@@ -79,6 +83,8 @@ export function normalizeSettings(input = {}) {
   s.budget.alert_slack_user = typeof b.alert_slack_user === 'string' && /^[UW][A-Z0-9]{6,}$/.test(b.alert_slack_user) ? b.alert_slack_user : null;
   const c = src.costs || {};
   for (const k of Object.keys(s.costs)) s.costs[k] = n(c[k], 0, 500, s.costs[k]);
+  s.costs.include_travel = c.include_travel === true;
+  s.costs.include_lost_slot = c.include_lost_slot === true;
   s.costs.reclean_spot_share = n(c.reclean_spot_share, 0.1, 1, DEFAULT_SETTINGS.costs.reclean_spot_share);
   return s;
 }

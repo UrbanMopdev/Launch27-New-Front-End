@@ -3,11 +3,11 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseRefundPost, reasonKind } from '../src/complaints/slackRefunds.js';
-import { classifyRules, mergeClassification, hardRouteFor, causeRules, causeFacts, CAUSES, CAUSE_GROUPS } from '../src/complaints/taxonomy.js';
+import { classifyRules, mergeClassification, hardRouteFor, causeRules, causeFacts, causeFits, CAUSES, CAUSE_FITS, CAUSE_GROUPS } from '../src/complaints/taxonomy.js';
 import { redact } from '../src/complaints/redact.js';
-import { outcomeAt, journeyAt, recleanCost, cleanerLastWorkedIndex, regularCleaner, planValue } from '../src/complaints/journey.js';
+import { outcomeAt, journeyAt, recleanCost, recleanVisitCost, cleanerRateIndex, cleanerLastWorkedIndex, regularCleaner, planValue } from '../src/complaints/journey.js';
 import { normalizeSettings, canApprove, rungForRefund, budgetStatus, DEFAULT_SETTINGS } from '../src/complaints/settings.js';
-import { buildPlaybook } from '../src/complaints/playbook.js';
+import { buildPlaybook, monthRead } from '../src/complaints/playbook.js';
 import { formatThread, offerToResolution, normalizeSolution } from '../src/complaints/solutions.js';
 import { caseRows, rankResponses, threatOf, valueTier } from '../src/complaints/rank.js';
 import { parseTakeout, matchCase, nameKey } from '../src/complaints/reviews.js';
@@ -125,20 +125,30 @@ describe('complaints: outcomes and journey', () => {
   const at0 = Date.parse('2026-03-01T15:00:00Z');
   const V = (offsetDays, extra = {}) => ({ id: offsetDays + 1000, at: at0 + offsetDays * DAY, date: new Date(at0 + offsetDays * DAY).toISOString().slice(0, 10), revenue: 180, freq: 'Biweekly', teams: [{ id: 7, name: 'Cleaner 7', hours: 3, earned: 66 }], ...extra });
   const today = at0 + 200 * DAY;
-  test('still booking past day 60 = saved', () => {
-    const list = [V(-14), V(0), V(14), V(28), V(42), V(56), V(70), V(84)];
-    assert.equal(outcomeAt(list, at0 + DAY, 60, { today }).outcome, 'saved');
-    assert.equal(outcomeAt(list, at0 + DAY, 30, { today }).outcome, 'pending');
+  test('still booking 60+ days after, and not gone within 90 = saved', () => {
+    const list = [V(-14), V(0), V(14), V(28), V(42), V(56), V(70), V(84), V(98), V(112)];
+    assert.equal(outcomeAt(list, at0 + DAY, 60, { today: at0 + 115 * DAY }).outcome, 'saved');
+    assert.equal(outcomeAt(list, at0 + DAY, 30, { today: at0 + 115 * DAY }).outcome, 'pending', 'the 30-day check is never a verdict');
+    // Booked past day 60 and still coming: saved as soon as day 60 has a visit past it.
+    assert.equal(outcomeAt([V(0), V(14), V(28), V(42), V(56), V(70)], at0 + DAY, 60, { today: at0 + 75 * DAY }).outcome, 'saved');
   });
-  test('stopped within 60 days = lost; left after 60 = partial save', () => {
-    assert.equal(outcomeAt([V(-14), V(0), V(14)], at0 + DAY, 60, { today }).outcome, 'lost');
-    assert.equal(outcomeAt([V(0), V(14), V(28), V(42), V(56), V(70)], at0 + DAY, 90, { today }).outcome, 'partial_save');
+  test('a client who left within 90 days is lost, review or no review; there is no partial save', () => {
+    assert.equal(outcomeAt([V(-14), V(0), V(14)], at0 + DAY, 60, { today }).outcome, 'lost', 'stopped within 60 days');
+    const leftAt70 = outcomeAt([V(0), V(14), V(28), V(42), V(56), V(70)], at0 + DAY, 60, { today });
+    assert.equal(leftAt70.outcome, 'lost', 'was booking at day 60, gone by day 90: lost, not a partial save');
+    assert.equal(leftAt70.public_review_stars, null, 'left without a bad review: the flag is kept beside the outcome');
+    assert.equal(outcomeAt([V(0), V(14), V(28), V(42), V(56), V(70), V(84), V(98)], at0 + DAY, 60, { today }).outcome, 'saved', 'left after day 90: the complaint did not lose them');
+    assert.ok(![30, 60, 90].some((d) => outcomeAt([V(0), V(14), V(70)], at0 + DAY, d, { today }).outcome === 'partial_save'));
   });
   test('negative public review = lost even if still booking', () => {
-    assert.equal(outcomeAt([V(0), V(80)], at0 + DAY, 60, { today, negativeReview: { stars: 1, platform: 'google' } }).outcome, 'lost');
+    const o = outcomeAt([V(0), V(80), V(190)], at0 + DAY, 60, { today, negativeReview: { stars: 1, platform: 'google' } });
+    assert.deepEqual([o.outcome, o.public_review_stars], ['lost', 1]);
   });
-  test('too recent to tell = pending', () => {
-    assert.equal(outcomeAt([V(0), V(14)], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'pending');
+  test('too recent to tell = pending; gone for a full normal gap = lost already', () => {
+    assert.equal(outcomeAt([V(0), V(14), V(28)], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'pending', 'last visit 12 days ago');
+    assert.equal(outcomeAt([V(0), V(14)], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'lost', 'nothing for 26 days on a biweekly plan');
+    assert.equal(outcomeAt([V(0), V(14), V(49)], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'pending', 'a visit is booked ahead');
+    assert.equal(outcomeAt([V(0, { freq: 'Monthly' }), V(14, { freq: 'Monthly' })], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'pending', 'monthly clients get 35 days');
   });
   test('journey: cleaner change and price change', () => {
     const list = [V(-42), V(-28), V(-14, { revenue: 200, teams: [{ id: 9, name: 'Cleaner 9', hours: 3 }] })];
@@ -148,11 +158,27 @@ describe('complaints: outcomes and journey', () => {
     assert.equal(j.cleans_total, 3);
     assert.ok(j.price_change_pct > 0.1);
   });
-  test('reclean cost includes the lost slot', () => {
-    const c = recleanCost({ hours: 3, cleanerHourly: 22, marginPerHour: 20 }, DEFAULT_SETTINGS.costs);
-    assert.equal(c.labour, 66);
-    assert.equal(c.lost_slot, 60);
-    assert.equal(c.total, 66 + 60 + DEFAULT_SETTINGS.costs.travel_per_visit);
+  test('reclean cost = hours x the wage of the cleaner who did it; no travel or lost slot unless switched on', () => {
+    const c = recleanCost({ hours: 3, cleanerHourly: 24, marginPerHour: 20 }, DEFAULT_SETTINGS.costs);
+    assert.deepEqual([c.labour, c.travel, c.lost_slot, c.total], [72, 0, 0, 72]);
+    assert.equal(recleanCost({}, DEFAULT_SETTINGS.costs).total, 44, 'no hours, no wage: 2 hours at $22');
+    const on = recleanCost({ hours: 3, cleanerHourly: 24, marginPerHour: 20 }, { ...DEFAULT_SETTINGS.costs, include_travel: true, travel_per_visit: 8, include_lost_slot: true });
+    assert.deepEqual([on.travel, on.lost_slot, on.total], [8, 60, 140], 'both can be switched back on');
+    assert.deepEqual([normalizeSettings({ costs: { travel_per_visit: 8 } }).costs.include_travel, normalizeSettings({ costs: { include_travel: true } }).costs.include_travel], [false, true]);
+  });
+  test('recleans are always paid: no pay on the visit means the pay is recorded elsewhere', () => {
+    const rateOf = cleanerRateIndex([
+      { teams: [{ id: 7, hours: 3, earned: 75 }] }, { teams: [{ id: 7, hours: 2, earned: 50 }] }, { teams: [{ id: 7, hours: 2, earned: 0 }] },
+      { teams: [{ id: 8, hours: 4, earned: 80 }] },
+    ]);
+    assert.deepEqual([rateOf(7), rateOf(8), rateOf(99)], [25, 20, null]);
+    const C = DEFAULT_SETTINGS.costs;
+    assert.deepEqual(recleanVisitCost({ teams: [{ id: 7, hours: 2, earned: 52 }] }, rateOf, C), { labour: 52, hours: 2, estimated: false }, 'pay on the visit: actual');
+    assert.deepEqual(recleanVisitCost({ teams: [{ id: 7, hours: 3, earned: 0 }] }, rateOf, C), { labour: 75, hours: 3, estimated: true }, '$0 earned: hours x their own rate');
+    assert.deepEqual(recleanVisitCost({ teams: [{ id: 8, hours: null, earned: null }] }, rateOf, C), { labour: 40, hours: 2, estimated: true }, 'no hours booked: 2');
+    assert.deepEqual(recleanVisitCost({ teams: [{ id: 99, hours: 1.5, earned: null }] }, rateOf, C), { labour: 33, hours: 1.5, estimated: true }, 'unknown cleaner: $22');
+    assert.deepEqual(recleanVisitCost({ teams: [{ id: 7, hours: 2, earned: 50 }, { id: 8, hours: 2, earned: 0 }] }, rateOf, C), { labour: 90, hours: 4, estimated: true }, 'two cleaners, one without pay');
+    assert.deepEqual(recleanVisitCost({ teams: [] }, rateOf, C), { labour: 44, hours: 2, estimated: true }, 'no visit on file');
   });
 });
 
@@ -220,13 +246,13 @@ describe('complaints: playbook', () => {
       outcomes.push({ case_id: c.id, day: 60, outcome });
     };
     for (let i = 0; i < 4; i++) add('quality_missed', { rung: 'L3', action: 'reclean_full', cost: 120, outcome: i < 3 ? 'saved' : 'lost' });
-    for (let i = 0; i < 4; i++) add('quality_missed', { rung: 'L5', action: 'refund', cost: 50, outcome: i < 3 ? 'saved' : 'lost' });
+    for (let i = 0; i < 5; i++) add('quality_missed', { rung: 'L5', action: 'refund', cost: 50, outcome: i < 4 ? 'saved' : 'lost' });
     for (let i = 0; i < 3; i++) add('quality_missed', { outcome: 'lost' });
     const pb = buildPlaybook({ cases, resolutions, costs, outcomes, visits: [], from: '2026-05-01', to: '2026-10-31', settings: normalizeSettings({}), today: '2026-11-16' });
     const q = pb.taxonomy.find((t) => t.key === 'quality_missed');
-    assert.equal(q.n, 11);
+    assert.equal(q.n, 12);
     assert.equal(q.confidence, 'fair');
-    assert.equal(q.cheapest_that_works.rung, 'L5', '25%-ish refund kept as many as a reclean for less');
+    assert.equal(q.cheapest_that_works.rung, 'L5', 'the only response with 5 known outcomes of its own');
     const l3 = pb.ladder.find((r) => r.rung === 'L3');
     assert.equal(l3.n, 4);
     assert.equal(l3.confidence, 'thin');
@@ -704,8 +730,9 @@ describe('complaints: every playbook number is traceable', () => {
     assert.equal(t.n, 10);
     assert.equal(t.ids.length, 10);
     assert.equal(t.decided, 5);
-    assert.deepEqual([t.saved_n, t.partial_n, t.lost_n], [2, 1, 2]);
-    assert.equal(t.saved_n + t.partial_n + t.lost_n, t.decided, 'the three verdicts add up to decided');
+    assert.deepEqual([t.saved_n, t.partial_n, t.lost_n], [2, 0, 3], 'a row stored as a partial save counts as lost');
+    assert.equal(t.saved_n + t.lost_n, t.decided, 'saved and lost add up to decided');
+    assert.deepEqual([t.lost_with_review_n, t.lost_no_review_n], [0, 3], 'lost clients split by whether they left a bad review');
     assert.equal(t.saved, 0.4);
     assert.equal(t.excluded_n, 5);
     assert.deepEqual(Object.fromEntries(Object.entries(t.excluded).map(([k, v]) => [k, v.length])), { too_recent: 1, unmatched: 1, one_time: 2, no_outcome: 1 });
@@ -717,22 +744,23 @@ describe('complaints: every playbook number is traceable', () => {
     assert.deepEqual([t.one_time.n, t.one_time.decided, t.one_time.rebooked_120_n, t.one_time.rebooked_120], [2, 2, 1, 0.5]);
   });
 
-  test('"cheapest that works" always answers, with a grade and a reason', () => {
+  test('"cheapest that works" names a response only on 5+ cases with a known outcome of its own', () => {
     const m = mk();
-    m.add('communication', { rung: 'L3', action: 'reclean_full', outcome: 'saved' });
-    m.add('communication', { rung: 'L3', action: 'reclean_full', outcome: 'saved' });
-    m.add('communication', { rung: 'L3', action: 'reclean_full', outcome: 'lost' });
-    m.add('communication', { rung: 'L3', action: 'reclean_full', outcome: 'lost' });
+    for (let i = 0; i < 4; i++) m.add('communication', { rung: 'L3', action: 'reclean_full', outcome: i < 2 ? 'saved' : 'lost' });
     m.add('scope_booking', { outcome: 'pending', opened: '2026-11-05T12:00:00Z' });
     m.add('damage', { rung: 'L1', action: 'credit', outcome: 'saved' });
+    for (let i = 0; i < 6; i++) m.add('punctuality', { rung: 'L2', action: 'credit', outcome: i < 5 ? 'saved' : 'lost', cost: 10 });
+    for (let i = 0; i < 5; i++) m.add('punctuality', { rung: 'L5', action: 'refund', outcome: i < 4 ? 'saved' : 'lost', cost: 60 });
+    for (let i = 0; i < 3; i++) m.add('punctuality', { rung: 'L7', action: 'refund', outcome: 'saved', cost: 150 });
     const pb = m.build();
     const by = (k) => pb.taxonomy.find((x) => x.key === k).cheapest_that_works;
-    assert.deepEqual([by('communication').name, by('communication').grade, by('communication').reason], ['Reclean', 'Low', '4 cases with a known outcome, 2 saved']);
-    assert.equal(by('communication').basis, 'compared');
-    assert.equal(by('damage').basis, 'few');
-    assert.equal(by('damage').reason, '1 case with a known outcome, 1 saved');
-    assert.equal(by('scope_booking').basis, 'no_outcomes');
-    assert.match(by('scope_booking').reason, /no outcomes yet/);
+    for (const k of ['communication', 'damage', 'scope_booking']) {
+      assert.deepEqual([by(k).name, by(k).basis, by(k).grade], [null, 'not_enough', 'Low'], k);
+      assert.match(by(k).reason, /^Not enough data: use the standard ladder/);
+    }
+    assert.match(by('communication').reason, /the most is 4/);
+    // Enough data: the cheapest response within 10 points of the best; three lucky full refunds are not considered.
+    assert.deepEqual([by('punctuality').name, by('punctuality').basis, by('punctuality').n], ['$10 credit', 'compared', 6]);
     assert.ok(pb.taxonomy.every((x) => x.cheapest_that_works && x.cheapest_that_works.grade));
   });
 
@@ -1011,7 +1039,7 @@ describe('complaints: ranked responses for a new complaint', () => {
       solutions: [{ case_id: 1, read_by: 'claude', final_kind: 'same_cleaner', client_end: 'satisfied', offers: [{ kind: 'credit', client_response: 'declined' }] }],
     });
     assert.deepEqual(rows.map((r) => r.response), ['same_cleaner', 'partial_refund', 'apology', 'apology']);
-    assert.deepEqual(rows.map((r) => r.kept), [1, 0.5, 0, null]);
+    assert.deepEqual(rows.map((r) => r.kept), [1, 0, 0, null], 'an old partial save counts as lost: no half credit');
     assert.equal(rows[1].cost, 50);
     assert.equal(rows[0].happy, true);
     assert.equal(rows[2].one_time, true);
@@ -1368,6 +1396,85 @@ describe('complaints: step 0 diagnostics', () => {
     const text = JSON.stringify(lines);
     assert.ok(!/zed|unknownperson|gmail\.com/i.test(text), 'no names or addresses in the log');
     assert.ok(!text.includes('"error"'), text.slice(0, 400));
+    await db.close();
+  });
+});
+
+describe('complaints: the numbers fix (Derek, Nov 28 2026)', () => {
+  test('impossible cause and category pairs are never produced', () => {
+    assert.equal(causeFits('marketing_emails', 'damage'), false);
+    assert.equal(causeFits('marketing_emails', 'communication'), true);
+    assert.equal(causeFits('missed_areas', 'conduct_safety'), false);
+    assert.equal(causeFits('other', 'damage'), true);
+    for (const c of CAUSES) assert.ok(CAUSE_FITS[c.key]?.length, `${c.key} has its categories`);
+    // A system email's footer is not a complaint about marketing emails.
+    const footer = classifyRules('The cleaner broke my lamp and it was damaged. To unsubscribe from these emails click here. Report spam.');
+    assert.equal(footer.category, 'damage');
+    assert.notEqual(footer.cause, 'marketing_emails');
+    assert.equal(classifyRules('Please stop sending me so many emails, I want to unsubscribe.').cause, 'marketing_emails');
+    // Claude proposing a cause that cannot explain the category is overruled.
+    const m = mergeClassification(classifyRules('The cleaner scratched and damaged the floor.'), { category: 'damage', tone: 'angry', severity: 3, areas: [], cause: 'marketing_emails', contributing: ['missed_areas'], cause_evidence: 'x' });
+    assert.deepEqual([m.category, m.cause, m.contributing], ['damage', 'other', []]);
+  });
+
+  test('a month is complete only when every day was read; the baseline averages complete months only', () => {
+    assert.equal(monthRead('2026-06', [{ from: '2026-05-17', to: '2026-11-16' }]), true);
+    assert.equal(monthRead('2026-05', [{ from: '2026-05-17', to: '2026-11-16' }]), false);
+    assert.equal(monthRead('2026-02', [{ from: '2026-01-13', to: '2026-02-12' }, { from: '2026-02-13', to: '2026-03-15' }]), true, 'two runs that meet');
+    const visits = ['2026-06', '2026-07', '2026-08'].map((m, i) => ({ id: i, date: `${m}-10`, at: Date.parse(`${m}-10T12:00:00Z`), revenue: 10000, teams: [] }));
+    const baselineCosts = [
+      { id: 1, opened_at: '2026-06-05T12:00:00Z', kind: 'refund', amount: '100' },
+      { id: 2, opened_at: '2026-08-05T12:00:00Z', kind: 'reclean_labour', amount: '300' },
+      { id: 3, opened_at: '2026-08-06T12:00:00Z', kind: null, amount: null },
+    ];
+    const pb = buildPlaybook({ cases: [], resolutions: [], costs: [], outcomes: [], visits, baselineCosts, readWindows: [{ from: '2026-06-01', to: '2026-06-30' }, { from: '2026-08-01', to: '2026-08-31' }], from: '2026-11-01', to: '2026-11-15', settings: normalizeSettings({}), today: '2026-11-16' });
+    const b = pb.baseline;
+    assert.deepEqual(b.months.map((m) => [m.month, m.cases, m.cost, m.complete]), [['2026-06', 1, 100, true], ['2026-07', 0, 0, false], ['2026-08', 2, 300, true]], 'every month has its cases, whatever dates the page shows');
+    assert.deepEqual([b.included_months, b.incomplete_months], [['2026-06', '2026-08'], ['2026-07']]);
+    assert.equal(b.average, 0.02, 'July, never read, does not drag the average down');
+  });
+
+  test('a rules change recomputes every case first, reading no source', async () => {
+    const { planAuto } = await import('../src/complaints/service.js');
+    const j = planAuto({ mined: [{ from: '2025-11-19', to: '2026-11-18' }], today: '2026-11-19', historyDays: 365, recentDone: '2026-11-19', rulesPending: true });
+    assert.deepEqual([j.kind, j.from, j.to], ['rules', '2025-11-19', '2026-11-18']);
+    assert.equal(planAuto({ mined: [{ from: '2025-11-19', to: '2026-11-18' }], today: '2026-11-19', historyDays: 365, recentDone: '2026-11-19' }), null);
+  });
+
+  test('end to end: recleans found only in a conversation get a cost; a failed run leaves its dates unread; impossible causes are cleared', async () => {
+    const db = await openDb();
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const fetchImpl = createMockLaunch27({ password: 'demo' });
+    const schedule = createSchedule({ db, config, fetchImpl, log: quiet });
+    const reports = createReports({ db, config, fetchImpl, schedule, log: quiet });
+    await schedule.sync();
+    await reports.sync();
+    const to = (await reports.visitsSnapshot()).to;
+    const from = new Date(Date.parse(to) - 182 * 86_400_000).toISOString().slice(0, 10);
+    const complaints = createComplaints({ db, config, reports, fetchImpl, log: quiet });
+    await complaints.run({ from, to });
+    const all = await complaints.listCases({ from, to });
+    const target = all.find((c) => c.l27_customer_id && Number(c.total_cost) === 0 && !/Reclean/.test(c.rungs || ''));
+    assert.ok(target, 'needs a matched case with no cost and no reclean');
+    // The conversation shows a reclean the client took; a cause that cannot explain the category.
+    await db.query("INSERT INTO complaint_resolutions (case_id, step, rung, action, accepted, source, source_id) VALUES ($1, 4, 'L3', 'reclean_full', 'yes', 'conversation', $2)", [target.id, `conversation:case:${target.id}:0`]);
+    await db.query("UPDATE complaint_cases SET category = 'damage', cause = 'marketing_emails', cause_by = 'rules', classified_by = 'human' WHERE id = $1", [target.id]);
+    // An old travel line from before the rule change.
+    await db.query("INSERT INTO complaint_costs (case_id, kind, amount, source, source_ref, estimated) VALUES ($1, 'reclean_travel', 8, 'model', 'old', true)", [target.id]);
+    await complaints.run({ from, to, sources: false });
+    const d = await complaints.getCase(target.id);
+    const lines = d.costs.filter((k) => /^reclean/.test(k.kind));
+    assert.deepEqual(lines.map((k) => k.kind), ['reclean_labour'], 'one labour line; no travel, no lost slot');
+    assert.ok(Number(lines[0].amount) >= 2 * 15 && lines[0].estimated === true, `2 hours at the cleaner's rate, estimated: ${lines[0].amount}`);
+    assert.equal(d.cause, null, 'the impossible cause was cleared');
+    assert.ok(d.outcomes.every((o) => o.outcome !== 'partial_save'));
+    // The rules-only pass is not "reading" those dates, and a run whose Kustomer read failed isn't either.
+    const st = await complaints.status();
+    assert.equal(st.mined.length, 1, 'only the real run counts as read');
+    await db.query(`INSERT INTO complaint_runs (window_from, window_to, status, finished_at, log) VALUES ('2026-01-01', '2026-01-31', 'partial', now(), '[{"level":"error","msg":"Kustomer skipped: timeout"}]'::jsonb),
+      ('2026-02-01', '2026-02-28', 'partial', now(), '[{"level":"error","msg":"Slack skipped: not_in_channel"}]'::jsonb)`);
+    const after = (await complaints.status()).mined.map((m) => String(m.window_from).slice(0, 15));
+    assert.equal(after.length, 2, 'the run where only Slack failed counts; the one where Kustomer failed does not');
     await db.close();
   });
 });

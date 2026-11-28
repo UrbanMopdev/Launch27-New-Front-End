@@ -50,8 +50,12 @@ function whyExcluded(c) {
 function outcomeStats(list) {
   const decided = list.filter((c) => c.outcome60 && c.outcome60 !== 'pending');
   const costs = list.map((c) => c.cost);
-  const of = (o) => decided.filter((c) => c.outcome60 === o);
-  const [saved, partial, lost] = [of('saved'), of('partial_save'), of('lost')];
+  const of = (...o) => decided.filter((c) => o.includes(c.outcome60));
+  // No "partial save" (Derek, Nov 28 2026): a client who left is lost. Rows stored under the old
+  // rule count as lost until they are recomputed. Whether a lost client also left a 1-2 star
+  // review is kept beside it, so responses that prevented reviews can still be seen.
+  const [saved, partial, lost] = [of('saved'), [], of('lost', 'partial_save')];
+  const lostReviewed = lost.filter((c) => c.review60 != null && c.review60 <= 2);
   const excluded = {};
   for (const c of list) if (!decided.includes(c)) (excluded[whyExcluded(c)] ||= []).push(c.id);
   return {
@@ -68,6 +72,10 @@ function outcomeStats(list) {
     lost: share(lost.length, decided.length),
     lost_n: lost.length,
     lost_ids: ids(lost),
+    lost_with_review_n: lostReviewed.length,
+    lost_with_review_ids: ids(lostReviewed),
+    lost_no_review_n: lost.length - lostReviewed.length,
+    lost_no_review_ids: ids(lost.filter((c) => !lostReviewed.includes(c))),
     excluded_n: list.length - decided.length,
     excluded,
     total_cost: r2(sum(list)),
@@ -104,7 +112,7 @@ function oneTimeStats(list) {
   };
 }
 
-export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions = [], reviews = [], reviewTotals = null, visits = [], from, to, settings, today, mining = false }) {
+export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions = [], reviews = [], reviewTotals = null, baselineCosts = null, readWindows = null, visits = [], from, to, settings, today, mining = false }) {
   const byCase = (rows) => {
     const m = new Map();
     for (const r of rows) {
@@ -129,6 +137,7 @@ export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions =
       costBy: Object.fromEntries(['refund', 'credit', 'reclean', 'damage'].map((t) => [t, k.filter((x) => x.kind.startsWith(t)).reduce((s, x) => s + Number(x.amount), 0)])),
       estimatedCost: k.some((x) => x.estimated),
       outcome60: (O.get(id) || []).find((o) => o.day === 60)?.outcome || null,
+      review60: (O.get(id) || []).find((o) => o.day === 60)?.public_review_stars ?? null,
       outcome90: (O.get(id) || []).find((o) => o.day === 90)?.outcome || null,
       outcome120: (O.get(id) || []).find((o) => o.day === 120)?.outcome || null,
       one_time: !!c.one_time,
@@ -353,7 +362,21 @@ export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions =
     if (!months.has(m)) months.set(m, { month: m, revenue: 0, cost: 0, refunds: 0, credits: 0, recleans: 0, cases: 0, case_ids: [] });
     months.get(m).revenue += v.revenue || 0;
   }
-  for (const c of rows) {
+  // Every month of history counts here, whatever dates the page is showing: the page's own
+  // cases only (the old behaviour) made every month outside those dates read $0 / 0 cases.
+  const baseRows = baselineCosts
+    ? (() => {
+        const by = new Map();
+        for (const r of baselineCosts) {
+          const id = Number(r.id);
+          if (!by.has(id)) by.set(id, { id, opened_at: r.opened_at, costBy: { refund: 0, credit: 0, reclean: 0, damage: 0 } });
+          const t = ['refund', 'credit', 'reclean', 'damage'].find((k) => String(r.kind || '').startsWith(k));
+          if (t) by.get(id).costBy[t] += Number(r.amount) || 0;
+        }
+        return [...by.values()];
+      })()
+    : rows;
+  for (const c of baseRows) {
     const m = new Date(c.opened_at).toISOString().slice(0, 7);
     if (!months.has(m)) months.set(m, { month: m, revenue: 0, cost: 0, refunds: 0, credits: 0, recleans: 0, cases: 0, case_ids: [] });
     const x = months.get(m);
@@ -364,16 +387,21 @@ export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions =
     x.recleans += c.costBy.reclean;
     x.cost += c.costBy.refund + c.costBy.credit + c.costBy.reclean;
   }
-  const monthly = [...months.values()].filter((m) => m.revenue > 0 && m.month < today.slice(0, 7)).sort((a, b) => a.month.localeCompare(b.month)).map((m) => ({ ...m, revenue: Math.round(m.revenue), cost: r2(m.cost), rate: share(m.cost, m.revenue) }));
-  const rates = monthly.map((m) => m.rate).filter((x) => x != null);
+  // A month is complete when every one of its days has been read from Kustomer and info@.
+  // Only complete months go into the average and the target; the rest are shown, marked.
+  const complete = (m) => (readWindows ? monthRead(m, readWindows) : true);
+  const monthly = [...months.values()].filter((m) => m.revenue > 0 && m.month < today.slice(0, 7)).sort((a, b) => a.month.localeCompare(b.month)).map((m) => ({ ...m, revenue: Math.round(m.revenue), cost: r2(m.cost), rate: share(m.cost, m.revenue), complete: complete(m.month) }));
+  const rates = monthly.filter((m) => m.complete).map((m) => m.rate).filter((x) => x != null);
   const avg = rates.length ? rates.reduce((s, x) => s + x, 0) / rates.length : null;
   const baseline = {
     months: monthly,
     average: avg == null ? null : Math.round(avg * 10000) / 10000,
-    best: monthly.length ? monthly.reduce((a, b) => (b.rate < a.rate ? b : a)) : null,
-    worst: monthly.length ? monthly.reduce((a, b) => (b.rate > a.rate ? b : a)) : null,
+    best: monthly.some((m) => m.complete) ? monthly.filter((m) => m.complete).reduce((a, b) => (b.rate < a.rate ? b : a)) : null,
+    worst: monthly.some((m) => m.complete) ? monthly.filter((m) => m.complete).reduce((a, b) => (b.rate > a.rate ? b : a)) : null,
+    included_months: monthly.filter((m) => m.complete).map((m) => m.month),
+    incomplete_months: monthly.filter((m) => !m.complete).map((m) => m.month),
     default_target: avg == null ? null : Math.round(avg * (1 - settings.budget.below_average_by) * 10000) / 10000,
-    caveat: 'Only complaints the engine has found are counted, so this is a floor until the backfill is complete. Revenue is Launch27 booking totals; QuickBooks reconciliation is not connected yet.',
+    caveat: 'The average and the target use only months that have been fully read from Kustomer and info@; months still being read are shown but left out. Revenue is Launch27 booking totals; QuickBooks reconciliation is not connected yet.',
   };
 
   // Response and handling
@@ -429,20 +457,33 @@ export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions =
   };
 }
 
-// "Cheapest that works" always answers, and says how much to trust the answer.
+/** Has every day of month 'YYYY-MM' been read? windows: [{from, to}] as YYYY-MM-DD. Pure. */
+export function monthRead(month, windows) {
+  const [y, m] = month.split('-').map(Number);
+  const days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  for (let d = 1; d <= days; d++) {
+    const day = `${month}-${String(d).padStart(2, '0')}`;
+    if (!windows.some((w) => w.from <= day && w.to >= day)) return false;
+  }
+  return true;
+}
+
+// "Cheapest that works" names a response only when the data supports it.
 //   compared:    the cheapest response whose save rate is within 10 points of the best one,
 //                among responses with at least 3 known outcomes
 //   few:         fewer than 3 known outcomes anywhere: the best-saving response we have seen
 //   no_outcomes: nothing decided yet: only what we usually did
 // The grade here is by number of known outcomes (30+ High, 10-29 Medium, under 10 Low).
+export const CHEAPEST_MIN_CASES = 5;
 function cheapestThatWorks(byRung, typical) {
-  const withOutcome = byRung.filter((b) => b.decided >= 1 && b.saved != null);
-  const solid = withOutcome.filter((b) => b.decided >= 3);
-  const pool = solid.length ? solid : withOutcome;
+  // Never name a response on fewer than CHEAPEST_MIN_CASES cases with a known outcome of its own
+  // (Derek, Nov 28 2026): say there isn't enough data and point to the standard ladder instead.
+  const pool = byRung.filter((b) => b.decided >= CHEAPEST_MIN_CASES && b.saved != null);
+  const solid = pool;
   if (!pool.length) {
     const b = byRung.find((x) => x.rung === typical);
-    if (!b) return null;
-    return { rung: b.rung, name: b.name, saved: null, saved_n: 0, avg_cost: b.avg_cost, n: 0, cases: b.n, ids: b.ids, basis: 'no_outcomes', grade: 'Low', reason: `no outcomes yet: this is only what we usually did (${b.n} ${b.n === 1 ? 'case' : 'cases'})` };
+    const most = byRung.reduce((m, x) => Math.max(m, x.decided || 0), 0);
+    return { rung: null, name: null, saved: null, saved_n: 0, avg_cost: null, n: 0, cases: b?.n || 0, ids: [], basis: 'not_enough', grade: 'Low', reason: `Not enough data: use the standard ladder (no response has ${CHEAPEST_MIN_CASES} cases with a known outcome here; the most is ${most})`, usual: b?.name || null };
   }
   const best = pool.reduce((m, b) => Math.max(m, b.saved), 0);
   const b = pool.filter((x) => x.saved >= best - 0.1).sort((x, y) => (x.avg_cost ?? 0) - (y.avg_cost ?? 0))[0];

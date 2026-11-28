@@ -204,6 +204,53 @@ repo is public and they carry reviewers' names).
 Not yet: reviews don't feed the rankings as their own column (they count through LOST), and
 there is no live connection to Google, so new reviews need a fresh export.
 
+### The numbers fix (Derek's rules, Nov 28 2026)
+
+Phase 2 is blocked until the cost and retention numbers can be trusted. Rules, confirmed by Derek:
+
+1. **Reclean cost** = the reclean's hours x the wage of the cleaner who did it. Hours: those
+   booked on the reclean visit, else 2. Wage: that cleaner's real rate from Launch27 pay (the
+   median of pay / hours over their visits), else $22. No travel, no lost-slot margin
+   (`settings.costs.include_travel` / `include_lost_slot` switch them back on).
+2. **Recleans are always paid.** A $0 or missing "earned" on a reclean visit means the pay was
+   recorded elsewhere: hours x wage, marked estimated. Actual only when the pay is on the visit.
+3. **A client who left is LOST**, review or no review. There is no "partial save" and no half
+   credit in the rankings. Whether a lost client also posted a 1-2 star review is kept beside
+   the outcome.
+4. **SAVED** = a recurring client still booking 60+ days after the complaint, not gone within
+   90 days (rule 3 wins over the day-60 check), and no 1-2 star review.
+5. **Never suggest a refund in exchange for removing a review.**
+
+What changed in the code:
+
+- `journey.js`: `outcomeAt` (rules 3 and 4, `LEFT_WITHIN_DAYS` = 90), `recleanVisitCost`,
+  `cleanerRateIndex`, `recleanCost` without travel or lost slot.
+- Every reclean gets a cost line, including ones found only in the conversation, the Kustomer
+  status or our reply (2 hours at the original cleaner's rate, estimated).
+- **History holes.** A run counted as having read its dates even when its Kustomer listing or a
+  month of email failed (status `partial`). May 17 to Aug 15 2026 was never read from Kustomer
+  or info@ because of this. Only runs where both came through count now (`RUN_READ`), so the
+  automatic update reads the hole.
+- **Budget baseline** counts every month's cases whatever dates the page shows (it used the
+  page's cases only, so months outside them read $0 / 0 cases), and averages only months fully
+  read; the rest are shown as incomplete.
+- **Impossible pairings.** `CAUSE_FITS` in `taxonomy.js` lists which categories each root cause
+  can explain; anything else is dropped at classification and cleared from stored cases.
+  "Too many marketing emails" had matched the word "unsubscribe" in system email footers.
+- **"Cheapest that works"** names a response only when it has 5+ cases with a known outcome of
+  its own; otherwise "Not enough data: use the standard ladder".
+- **A rules change recomputes everything once** (`RULES_VERSION`): the first automatic update
+  after a deploy is a rules-only pass over all history that reads no source.
+
+Step 0 (counts in the log before any change, Nov 28): 684 cases; by month Nov 2025 to Nov 2026
+22, 48, 71, 41, 55, 62, 33, 10, 26, 92, 88, 61, 75; 244 unmatched, of which 134 came from
+launch27mail.com and 61 from ringcentral.com (system senders, where the client is named in the
+message, not the sender); 157 cases with a reclean, 20 costed at $0; travel and lost slot were
+$6,208 of $13,589 reclean cost.
+
+Still open in this fix: system senders (find the client inside the message), the data-quality
+funnel, the severity split on the page, and the before/after table.
+
 ### Still to come
 
 2. Cost lines per case (actual vs estimated) and the escalation audit.

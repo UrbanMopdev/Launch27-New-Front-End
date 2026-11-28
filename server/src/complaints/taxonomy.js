@@ -72,7 +72,7 @@ export const CAUSES = [
     definition: 'The client is annoyed by how many promotional emails or texts we send.',
     examples: ['Please stop sending me so many emails.', 'I get three promotions a week from you.'],
     not_when: 'It is about a missing reply from the office (office slow or not responding).',
-    re: /\b((too many|so many|constant(ly)?|keep (getting|sending)|stop sending( me)?) (e-?mails|emails|promo(tion)?s?|newsletters?|texts|marketing)|unsubscribe|spam(ming)?)\b/i,
+    re: /\b((too many|so many|constant(ly)?|keep (getting|sending)|stop sending( me)?) (e-?mails|emails|promo(tion)?s?|newsletters?|texts|marketing)|(please |want to |tried to |can'?t |cannot )unsubscribe|(stop|your|keep) spamming|(you|you guys|urbanmop) (keep |are )?spam(ming)? (me|us))\b/i,
   },
   {
     key: 'team_size', group: 'communication', label: 'Number of cleaners miscommunicated',
@@ -132,6 +132,28 @@ export const CAUSES = [
   },
 ];
 export const CAUSE_KEYS = CAUSES.map((c) => c.key);
+// Which complaints a cause can explain. A cause outside its row is an impossible pairing
+// ("too many marketing emails" as the root cause of a breakage) and is dropped, whoever
+// proposed it: the keyword rules, Claude, or the Launch27 facts. Checked by Derek's request
+// after the Nov 28 run (A0d). 'other' and the hard categories keep only causes that fit them.
+const QUALITY = ['quality_missed', 'quality_rushed'];
+export const CAUSE_FITS = {
+  regular_left: [...QUALITY, 'cleaner_change', 'communication', 'other'],
+  changed_unannounced: [...QUALITY, 'cleaner_change', 'communication', 'other'],
+  no_regular: [...QUALITY, 'cleaner_change', 'communication', 'other'],
+  requested_unavailable: [...QUALITY, 'cleaner_change', 'communication', 'scope_booking', 'other'],
+  replacement_quality: [...QUALITY, 'cleaner_change', 'other'],
+  marketing_emails: ['communication', 'other'],
+  team_size: [...QUALITY, 'scope_booking', 'punctuality', 'communication', 'pricing_billing', 'other'],
+  language: [...QUALITY, 'communication', 'conduct_safety', 'scope_booking', 'cleaner_change', 'damage', 'other'],
+  office_unresponsive: ['communication', 'scope_booking', 'pricing_billing', 'punctuality', 'damage', 'missing_item', 'conduct_safety', 'property_condition', ...QUALITY, 'cleaner_change', 'other'],
+  booking_unclear: ['scope_booking', 'pricing_billing', 'communication', 'punctuality', 'property_condition', ...QUALITY, 'other'],
+  missed_areas: [...QUALITY, 'scope_booking', 'property_condition', 'pricing_billing', 'other'],
+  rushed: [...QUALITY, 'punctuality', 'scope_booking', 'pricing_billing', 'other'],
+  new_cleaner: [...QUALITY, 'cleaner_change', 'damage', 'conduct_safety', 'punctuality', 'other'],
+  instructions_ignored: [...QUALITY, 'scope_booking', 'damage', 'conduct_safety', 'communication', 'property_condition', 'other'],
+};
+export const causeFits = (cause, category) => !cause || cause === 'other' || !category || (CAUSE_FITS[cause] || []).includes(category);
 export const causeLabel = (key) => CAUSES.find((c) => c.key === key)?.label || (key === 'other' ? 'Other / not on the list' : key ? key : 'Not set');
 const CAUSE_RE = {
   ...Object.fromEntries(CAUSES.filter((c) => c.re).map((c) => [c.key, c.re])),
@@ -219,7 +241,9 @@ export function classifyRules(text, { claimAmount = null } = {}) {
   const amount = claimAmount ?? Math.max(0, ...amountsIn(t));
   const hard = hardRouteFor({ category, text: t, amount });
   const severity = hard ? 4 : tone === 'threat_review' || tone === 'threat_leave' ? 3 : tone === 'angry' || category === 'damage' ? 3 : tone === 'frustrated' ? 2 : 1;
-  const why = causeRules(t);
+  const all = causeRules(t);
+  const fitting = [all.cause, ...all.contributing].filter((k) => k && causeFits(k, category));
+  const why = { cause: fitting[0] || null, contributing: fitting.slice(1, 3) };
   return {
     category, secondary: hits.slice(1, 3).map((h) => h.key), tone, areas, hard_route: hard, severity, confidence: hits.length ? Math.min(0.7, 0.35 + 0.1 * hits[0].n) : 0.2,
     cause: why.cause, contributing: why.contributing, cause_evidence: null, cause_by: why.cause ? 'rules' : null,
@@ -242,13 +266,15 @@ export function mergeClassification(rules, model) {
   const hard = rules.hard_route || (model.hard_route && HARD_ROUTES[model.hard_route] ? model.hard_route : null);
   // Once Claude has read the case its answer stands, even "none of these" (so the case is never
   // sent again just for a cause). Its "other" doesn't wipe out a cause the keyword rules found.
-  const modelCause = CAUSE_KEYS.includes(model.cause) ? model.cause : null;
-  const cause = modelCause || rules.cause || 'other';
+  // A cause must fit the final category (CAUSE_FITS): Claude's if it does, else the rules'.
+  const modelCause = CAUSE_KEYS.includes(model.cause) && causeFits(model.cause, category) ? model.cause : null;
+  const rulesCause = causeFits(rules.cause, category) ? rules.cause : null;
+  const cause = modelCause || rulesCause || 'other';
   return {
     cause,
-    contributing: [...new Set((modelCause ? model.contributing || [] : rules.contributing || []).filter((k) => CAUSE_KEYS.includes(k) && k !== cause))].slice(0, 2),
+    contributing: [...new Set((modelCause ? model.contributing || [] : rules.contributing || []).filter((k) => CAUSE_KEYS.includes(k) && k !== cause && causeFits(k, category)))].slice(0, 2),
     cause_evidence: modelCause ? String(model.cause_evidence || '').slice(0, 300) || null : null,
-    cause_by: modelCause || !rules.cause ? 'claude' : 'rules',
+    cause_by: modelCause || !rulesCause ? 'claude' : 'rules',
     category,
     secondary: rules.secondary,
     tone: TONES.includes(model.tone) ? model.tone : rules.tone,

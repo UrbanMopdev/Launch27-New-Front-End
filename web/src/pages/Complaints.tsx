@@ -259,7 +259,7 @@ function StatCells({ s, name, labels, open }: { s: OutcomeStats; name: string; l
   return (
     <>
       <RateCell s={s} k="saved" name={name} open={open} />
-      <RateCell s={s} k="partial" name={name} open={open} />
+      <td className="small">{s.lost_n ? <><Num ids={s.lost_no_review_ids} title={`${name}: left, no 1–2★ review`} open={open}>{s.lost_no_review_n}</Num> of {s.lost_n} lost{s.lost_with_review_n ? <> · <Num ids={s.lost_with_review_ids} title={`${name}: left and posted a 1–2★ review`} open={open}>{s.lost_with_review_n}</Num> with a 1–2★ review</> : null}</> : <span className="muted">—</span>}</td>
       <RateCell s={s} k="lost" name={name} open={open} />
       <ExcludedCell s={s} name={name} labels={labels} open={open} />
       <CostCell s={s} name={name} open={open} />
@@ -269,9 +269,9 @@ function StatCells({ s, name, labels, open }: { s: OutcomeStats; name: string; l
 }
 const STAT_HEADS = (
   <>
-    <th title="Still booking 60 days after the complaint, as a share of decided cases">Saved</th>
-    <th title="Still a client 60 days later but booking less, as a share of decided cases">Partial</th>
-    <th title="Stopped booking within 60 days, as a share of decided cases">Lost</th>
+    <th title="Still booking 60+ days after the complaint, not gone within 90 days, and no 1–2★ review, as a share of decided cases">Saved</th>
+    <th title="Of the clients we lost, how many left without posting a 1–2★ review. Leaving is lost either way; this shows which responses at least prevented a bad review. Only reviews matched to the complaint are counted.">Left, no bad review</th>
+    <th title="Left within 90 days of the complaint (no visit for a full normal gap), or posted a 1–2★ review, as a share of decided cases">Lost</th>
     <th title="Cases with no saved / lost verdict, and why">Not counted</th>
     <th title="Average cost over every case, then over the decided cases the rates use">Avg cost</th>
     <th>Confidence</th>
@@ -398,7 +398,7 @@ function PlaybookTab({ period, isAdmin }: { period: Period; isAdmin: boolean }) 
                     <td>{pct(x.share)} <span className="small muted cmp-nd"><Num ids={x.ids} title={`${name}: every case`} open={open}>{x.n}</Num> of {x.total_n}</span></td>
                     <td>{x.typical_name || '—'}</td>
                     <StatCells s={x} name={name} labels={L} open={open} />
-                    <td className="small">{c ? <><b>{c.name}</b>, {c.grade} confidence: <Num ids={c.ids} title={`${name}: ${c.name}`} open={open}>{c.reason}</Num>{c.saved != null ? ` (${pct(c.saved)} saved, avg ${money(c.avg_cost)})` : ''}</> : <span className="muted">no cases</span>}</td>
+                    <td className="small">{c && !c.name ? <span className="muted">{c.reason}{c.usual ? `. We usually do: ${c.usual}` : ''}</span> : c ? <><b>{c.name}</b>, {c.grade} confidence: <Num ids={c.ids} title={`${name}: ${c.name}`} open={open}>{c.reason}</Num>{c.saved != null ? ` (${pct(c.saved)} saved, avg ${money(c.avg_cost)})` : ''}</> : <span className="muted">no cases</span>}</td>
                   </tr>
                 );
               })}
@@ -510,7 +510,7 @@ function WhyItHappened({ p, open, labels }: { p: Playbook; open: Open; labels: R
                       <td>{x.contributing_n ? <Num ids={x.contributing_ids} title={`${x.label}: a contributing cause`} open={open}>{x.contributing_n}</Num> : <span className="muted">—</span>}</td>
                       <td className="small">{x.by_category.slice(0, 3).map((k, i) => <span key={k.key}>{i ? ', ' : ''}{catLabel(k.key)} <Num ids={k.ids} title={`${x.label} → ${catLabel(k.key)}`} open={open}>{k.n}</Num></span>)}{x.by_category.length > 3 ? ', …' : ''}</td>
                       <StatCells s={x} name={x.label} labels={labels} open={open} />
-                      <td className="small">{c ? <><b>{c.name}</b>, {c.grade}: <Num ids={c.ids} title={`${x.label}: ${c.name}`} open={open}>{c.reason}</Num></> : <span className="muted">—</span>}</td>
+                      <td className="small">{c && !c.name ? <span className="muted">Not enough data: use the standard ladder</span> : c ? <><b>{c.name}</b>, {c.grade}: <Num ids={c.ids} title={`${x.label}: ${c.name}`} open={open}>{c.reason}</Num></> : <span className="muted">—</span>}</td>
                     </tr>
                   );
                 }),
@@ -802,10 +802,11 @@ function Baseline({ b, open }: { b: Playbook['baseline']; open: Open }) {
   return (
     <section className="card">
       <h2>Refund budget baseline: complaint cost as a % of Residential revenue</h2>
-      <p className="muted small">Refunds + credits + recleans, by month. Average {pct(b.average, 2)} · best {b.best ? `${b.best.month} ${pct(b.best.rate, 2)}` : '—'} · worst {b.worst ? `${b.worst.month} ${pct(b.worst.rate, 2)}` : '—'} · default target {pct(b.default_target, 2)} (20% below average).</p>
+      <p className="small">The average and target use <b>{b.included_months.length}</b> fully read {b.included_months.length === 1 ? 'month' : 'months'}{b.included_months.length ? ` (${b.included_months[0]} to ${b.included_months[b.included_months.length - 1]})` : ''}.{b.incomplete_months.length ? <span className="warn"> Left out, still being read from Kustomer and info@: {b.incomplete_months.join(', ')}.</span> : null}</p>
+      <p className="muted small">Refunds + credits + recleans, by month, for every month of history whatever dates are selected above. Average {pct(b.average, 2)} · best {b.best ? `${b.best.month} ${pct(b.best.rate, 2)}` : '—'} · worst {b.worst ? `${b.worst.month} ${pct(b.worst.rate, 2)}` : '—'} · default target {pct(b.default_target, 2)} (20% below average).</p>
       <div className="cmp-bars" role="img" aria-label="Monthly complaint cost as a share of revenue">
         {b.months.map((m) => (
-          <div key={m.month} className="cmp-bar" title={`${m.month}: ${pct(m.rate, 2)} (${money(m.cost)} of ${money(m.revenue)}, ${m.cases} cases)`}>
+          <div key={m.month} className="cmp-bar" style={m.complete ? undefined : { opacity: 0.4 }} title={`${m.month}: ${pct(m.rate, 2)} (${money(m.cost)} of ${money(m.revenue)}, ${m.cases} cases)`}>
             <span style={{ height: `${((m.rate || 0) / max) * 100}%` }} />
             <small>{m.month.slice(5)}</small>
           </div>
@@ -817,7 +818,7 @@ function Baseline({ b, open }: { b: Playbook['baseline']; open: Open }) {
           <tbody>
             {b.months.map((m) => (
               <tr key={m.month} className="static">
-                <td>{m.month}</td>
+                <td>{m.month}{!m.complete && <span className="pill late" title="Not every day of this month has been read from Kustomer and info@ yet, so it is left out of the average"> incomplete</span>}</td>
                 <td><b>{pct(m.rate, 2)}</b> <span className="small muted cmp-nd">{money(m.cost)} of {money(m.revenue)}</span></td>
                 <td>{money(m.cost)}</td><td>{money(m.refunds)}</td><td>{money(m.credits)}</td><td>{money(m.recleans)}</td>
                 <td>{money(m.revenue)}</td>

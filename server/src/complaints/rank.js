@@ -79,7 +79,7 @@ export function caseRows({ cases, resolutions = [], costs = [], outcomes = [], s
     const o = O.get(id) || [];
     const one = !!c.one_time;
     const out = one ? o.find((x) => x.day === 120)?.outcome : o.find((x) => x.day === 60)?.outcome;
-    const kept = out === 'saved' || out === 'rebooked' ? 1 : out === 'partial_save' ? 0.5 : out === 'lost' || out === 'not_rebooked' ? 0 : null;
+    const kept = out === 'saved' || out === 'rebooked' ? 1 : out === 'lost' || out === 'partial_save' || out === 'not_rebooked' ? 0 : null;
     return {
       id,
       category: c.category,
