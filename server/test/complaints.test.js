@@ -7,6 +7,7 @@ import { classifyRules, mergeClassification, hardRouteFor, causeRules, causeFact
 import { redact } from '../src/complaints/redact.js';
 import { outcomeAt, journeyAt, recleanCost, recleanVisitCost, cleanerRateIndex, cleanerLastWorkedIndex, regularCleaner, planValue } from '../src/complaints/journey.js';
 import { normalizeSettings, canApprove, rungForRefund, budgetStatus, DEFAULT_SETTINGS } from '../src/complaints/settings.js';
+import { clientHints, systemNotice, isSystemSender } from '../src/complaints/hints.js';
 import { buildPlaybook, monthRead } from '../src/complaints/playbook.js';
 import { formatThread, offerToResolution, normalizeSolution } from '../src/complaints/solutions.js';
 import { caseRows, rankResponses, threatOf, valueTier } from '../src/complaints/rank.js';
@@ -1548,5 +1549,73 @@ describe('complaints: data-quality funnel and cost per response', () => {
     const reclean = pb.by_response.find((r) => r.key === 'reclean');
     assert.deepEqual(reclean.by_threat.map((t) => [t.label, t.n, t.saved_n, t.lost_n]), [['No threat', 1, 1, 0], ['Threatened to leave', 1, 0, 1]]);
     assert.deepEqual(reclean.by_severity.map((t) => [t.label, t.n]), [['Minor', 1], ['Serious', 1]]);
+  });
+});
+
+describe('complaints: the client behind a message a system sent', () => {
+  test('hints: Reply-To, addresses, phones and booking numbers; never our own or the system', () => {
+    const h = clientHints({
+      replyTo: 'Odalys Brennock <odalys.brennock@example.net>',
+      subject: 'From odalys.brennock@example.net Re: Important: Cleaning Reminder',
+      body: 'Please call me at (613) 555-0142 about booking #48213. Sent via notifications@launch27mail.com, cc info@urbanmop.ca. Total $1,234.50 on 2026-11-20.',
+    });
+    assert.deepEqual(h.emails, ['odalys.brennock@example.net']);
+    assert.deepEqual(h.phones, ['+16135550142']);
+    assert.deepEqual(h.booking_ids, [48213]);
+    assert.deepEqual(clientHints({ subject: 'New Voice Message from UM Ops on 11/20/2026 on 2:30 PM', body: 'From: 613-555-0177\nTo: 613.555.0100' }, { ownPhones: ['+16135550100'] }).phones, ['+16135550177']);
+    assert.deepEqual(clientHints({ subject: 'nothing here' }), { emails: [], phones: [], booking_ids: [] });
+  });
+
+  test('a notice is not a client message; a relayed reply is', () => {
+    const l = 'notifications@launch27mail.com';
+    assert.equal(systemNotice(l, 'Ratings 2026-11-20 with comments'), 'ratings_digest');
+    assert.equal(systemNotice(l, 'New booking by staff'), 'booking_notice');
+    assert.equal(systemNotice(l, 'Important: Booking Cancellation'), 'cancellation_notice');
+    assert.equal(systemNotice(l, '11/24 - Upcoming schedule'), 'schedule_notice');
+    assert.equal(systemNotice(l, 'From someone@example.net Re: Booking Cancellation'), null);
+    assert.equal(systemNotice(l, 'From someone@example.net Re: Important: Cleaning Reminder'), null);
+    assert.equal(systemNotice('meetings@e.read.ai', 'Touchpoint meeting'), 'meeting_notes');
+    assert.equal(systemNotice('someone@example.net', 'New booking by staff'), null);
+    assert.equal(isSystemSender('no-reply@service.ringcentral.com'), true);
+    assert.equal(isSystemSender('someone@example.net'), false);
+  });
+
+  test('stored cases: notices are left out with the reason, relayed messages are tied to the client inside', async () => {
+    const db = await openDb();
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const fetchImpl = createMockLaunch27({ password: 'demo' });
+    const schedule = createSchedule({ db, config, fetchImpl, log: quiet });
+    const reports = createReports({ db, config, fetchImpl, schedule, log: quiet });
+    const bodies = { v1: 'Voicemail transcript: the cleaner was late. Caller: (613) 555-0177' };
+    const gmail = { accounts: ['info@urbanmop.ca'], client: { message: async (_a, id) => ({ id, threadId: id, payload: { headers: [{ name: 'From', value: 'no-reply@ringcentral.com' }, { name: 'Subject', value: 'New Voice Message' }], mimeType: 'text/plain', body: { data: Buffer.from(bodies[id] || '').toString('base64url') } } }) } };
+    const complaints = createComplaints({ db, config, reports, fetchImpl, gmail, log: quiet });
+    const add = (id, subject, email) => db.query(
+      `INSERT INTO complaint_cases (brand, source, source_id, opened_at, status, category, customer_name, customer_email, classified_by, raw) VALUES ('residential', 'gmail', $1, now() - interval '70 days', 'resolved', 'punctuality', 'System', $2, 'rules', $3::jsonb)`,
+      [`info@urbanmop.ca:${id}`, email, JSON.stringify({ subject })],
+    );
+    await add('n1', 'Ratings 2026-09-01 with comments', 'notifications@launch27mail.com');
+    await add('r1', 'From odalys.brennock@example.net Re: Important: Cleaning Reminder', 'notifications@launch27mail.com');
+    await add('v1', 'New Voice Message from UM Ops on 9/1/2026 on 2:30 PM', 'no-reply@ringcentral.com');
+    await add('b1', 'Question about booking #7001', 'notifications@launch27mail.com');
+    await add('x1', 'New Voice Message from UM Ops on 9/2/2026 on 9:00 AM', 'no-reply@ringcentral.com');
+    const contact = async (name, l27, kind, value) => {
+      const { rows } = await db.query('INSERT INTO contacts (name, l27_customer_id) VALUES ($1, $2) RETURNING id', [name, l27]);
+      await db.query('INSERT INTO contact_identities (contact_id, kind, value) VALUES ($1, $2, $3)', [rows[0].id, kind, value]);
+    };
+    await contact('Odalys Brennock', 501, 'email', 'odalys.brennock@example.net');
+    await contact('Ferris Abendroth', 502, 'phone', '+16135550177');
+    const linked = await complaints.relinkSystemSenders({ visits: [{ id: 7001, customer_id: 503 }], bearer: null });
+    assert.equal(linked.length, 3);
+    const rows = Object.fromEntries((await db.query("SELECT split_part(source_id, ':', 2) AS k, l27_customer_id, client_match, excluded_why, customer_email, customer_phone, customer_name FROM complaint_cases")).rows.map((r) => [r.k, r]));
+    assert.equal(rows.n1.excluded_why, 'ratings_digest');
+    assert.equal(Number(rows.r1.l27_customer_id), 501);
+    assert.equal(rows.r1.customer_email, 'odalys.brennock@example.net');
+    assert.equal(rows.r1.customer_name, null);
+    assert.equal(Number(rows.v1.l27_customer_id), 502);
+    assert.equal(rows.v1.customer_phone, '+16135550177');
+    assert.equal(Number(rows.b1.l27_customer_id), 503);
+    assert.equal(rows.b1.client_match, 'message');
+    assert.equal(rows.x1.l27_customer_id, null); // nothing inside names a client: stays unmatched
+    await db.close();
   });
 });

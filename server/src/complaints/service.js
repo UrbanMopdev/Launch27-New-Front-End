@@ -18,6 +18,7 @@ import { formatThread, normalizeSolution, offerToResolution } from './solutions.
 import { caseRows, rankResponses } from './rank.js';
 import { parseTakeout, matchCase, nameKey as reviewerKey } from './reviews.js';
 import { redact } from './redact.js';
+import { SYSTEM_DOMAINS, isSystemSender, clientHints, systemNotice } from './hints.js';
 import { journeyAt, outcomeAt, oneTimeOutcomeAt, cleanerStatsIndex, cleanerLastWorkedIndex, cleanerRateIndex, recleanCost, recleanVisitCost, unitEconomics } from './journey.js';
 import { normalizeSettings, rungForRefund } from './settings.js';
 import { parseRefundPost } from './slackRefunds.js';
@@ -44,9 +45,6 @@ const RUN_READ = `(status = 'done' OR (status = 'partial' AND NOT EXISTS (
 const RULES_VERSION = 'v2_nov28';
 const SOLUTION_BATCHES = 5;
 const OWN_DOMAINS = ['@urbanmop.ca', '@urbanmop.com'];
-// Mail these domains send is written by a system, not by the client: the sender's address says
-// nothing about who the client is.
-const SYSTEM_DOMAINS = ['launch27mail.com', 'ringcentral.com', 'stripe.com', 'e.read.ai'];
 // Run fn over items with at most n in flight.
 async function pool(items, n, fn) {
   let i = 0;
@@ -186,11 +184,16 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
       const dropped = await dropImpossibleCauses();
       if (dropped) note('info', `Root causes: ${dropped} that could not explain their category were cleared`);
 
-      // Cases still without a Launch27 client, from any date: try the contact records and the name.
-      const newlyLinked = await linkClients(ctx, note).catch((err) => {
-        note('warn', `Clients not matched: ${err.message}`);
+      // Mail a system sent: leave out its notices, and find the client named inside the rest.
+      const viaMessage = await relinkSystemSenders(ctx, note).catch((err) => {
+        note('warn', `System senders not matched: ${err.message}`);
         return [];
       });
+      // Cases still without a Launch27 client, from any date: try the contact records and the name.
+      const newlyLinked = viaMessage.concat(await linkClients(ctx, note).catch((err) => {
+        note('warn', `Clients not matched: ${err.message}`);
+        return [];
+      }));
       await linkReviews().catch((err) => note('warn', `Google reviews not matched: ${err.message}`));
       await enrich(refreshFrom && refreshFrom < from ? refreshFrom : from, to, ctx, settings, note, newlyLinked);
       // Read conversations in batches until the never-read backlog is gone (up to 5 batches a run).
@@ -319,6 +322,80 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     return linked;
   }
 
+  // A Launch27 booking number named in a message: the Residential client that booking belongs to.
+  function customerByBooking(ctx, bookingIds = []) {
+    for (const b of bookingIds || []) {
+      const v = ctx.visits.find((x) => Number(x.id) === Number(b));
+      if (v?.customer_id) return Number(v.customer_id);
+    }
+    return null;
+  }
+
+  // Unmatched cases whose sender is a system (Launch27 mail, RingCentral, Stripe). Notices that
+  // are not a client's message are excluded, with the reason. For the rest the client is looked
+  // for inside the message: first in the subject we stored, then (when Gmail is connected) in the
+  // message itself, read again. Read-only on Gmail and Launch27; nothing from the message is
+  // stored except the client's own email or phone on their case.
+  const RELINK_FETCH_MAX = 200;
+  async function relinkSystemSenders(ctx, note = () => {}) {
+    const open = await many(db, `SELECT id, source_id, customer_email, l27_customer_id, raw->>'subject' AS subject FROM complaint_cases
+      WHERE source = 'gmail' AND merged_into IS NULL AND excluded_at IS NULL AND split_part(lower(coalesce(customer_email, '')), '@', 2) = ANY($1::text[])`, [SYSTEM_DOMAINS]);
+    let excluded = 0;
+    let already = 0;
+    let fetched = 0;
+    const how = { subject: 0, message: 0, booking: 0 };
+    const linked = [];
+    const resolve = async (hints) => {
+      for (const [kind, v] of [...hints.emails.map((e) => ['email', e]), ...hints.phones.map((x) => ['phone', x])]) {
+        const ids = new Set((await many(db, 'SELECT DISTINCT k.l27_customer_id FROM contact_identities i JOIN contacts k ON k.id = i.contact_id WHERE i.kind = $1 AND i.value = $2 AND k.l27_customer_id IS NOT NULL', [kind, v])).map((r) => Number(r.l27_customer_id)));
+        let id = ids.size === 1 ? [...ids][0] : null;
+        if (!id && ids.size === 0) id = await customerByEmail(ctx, kind === 'email' ? [v] : [], kind === 'phone' ? [v] : []).catch(() => null);
+        if (id) return { id, kind, value: v };
+      }
+      const byBooking = customerByBooking(ctx, hints.booking_ids);
+      return byBooking ? { id: byBooking, kind: 'booking', value: null } : null;
+    };
+    for (const c of open) {
+      const why = systemNotice(c.customer_email, c.subject);
+      if (why) {
+        await db.query('UPDATE complaint_cases SET excluded_at = now(), excluded_why = $2, updated_at = now() WHERE id = $1', [c.id, why]);
+        excluded++;
+        continue;
+      }
+      if (c.l27_customer_id) {
+        already++;
+        continue;
+      }
+      let found = await resolve(clientHints({ subject: c.subject }));
+      let via = 'subject';
+      if (!found && gmail && fetched < RELINK_FETCH_MAX) {
+        const [account, thread] = String(c.source_id).split(/:(?=[^:]*$)/);
+        fetched++;
+        try {
+          const m = parseGmailMessage(await gmail.client.message(account, thread));
+          found = await resolve(clientHints({ replyTo: m.replyTo, subject: m.subject, body: m.fullBody || m.body }));
+          via = 'message';
+        } catch {
+          // The first message of the thread is gone or unreadable: the case stays unmatched.
+        }
+      }
+      if (!found) continue;
+      await db.query(
+        `UPDATE complaint_cases SET l27_customer_id = $2, client_match = 'message', customer_name = NULL,
+           customer_email = CASE WHEN $3 = 'email' THEN $4 ELSE customer_email END, customer_phone = CASE WHEN $3 = 'phone' THEN $4 ELSE customer_phone END, updated_at = now()
+         WHERE id = $1 AND l27_customer_id IS NULL`,
+        [c.id, found.id, found.kind, found.value],
+      );
+      linked.push(Number(c.id));
+      how[found.kind === 'booking' ? 'booking' : via]++;
+    }
+    if (linked.length || excluded) rankCache = null;
+    const left = open.length - excluded - linked.length - already;
+    note('info', `System senders: ${open.length} cases from Launch27 mail, RingCentral and Stripe. ${excluded} were notices, not client messages, and are left out; ${linked.length} tied to the client named inside (${how.subject} from the subject, ${how.message} from the message, ${how.booking} by booking number); ${left} still unmatched${fetched >= RELINK_FETCH_MAX ? ' (more are read on the next update)' : ''}`);
+    log.info('complaints coverage', { section: 'system_senders', value: JSON.stringify({ cases: open.length, notices_excluded: excluded, linked: linked.length, ...how, still_unmatched: left, fetched }) });
+    return linked;
+  }
+
   async function customerByEmail(ctx, emails = [], phones = []) {
     if (!l27 || !ctx.bearer) return null;
     for (const [kind, v] of [...emails.map((e) => ['email', e]), ...phones.map((p) => ['phone', p])]) {
@@ -413,6 +490,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     };
     const out = [];
     let skipped = 0;
+    let notices = 0;
     let failedWindows = 0;
     for (const account of gmail.accounts.filter((a) => /^info@/.test(a))) {
       const seenThreads = new Set();
@@ -433,15 +511,26 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
               }
               if (m.autoSubmitted || !m.from || seenThreads.has(m.threadId)) continue;
               seenThreads.add(m.threadId);
+              // A system's notice to us is not a client's message; a client's message that a
+              // system relayed (a reply to a reminder, a voicemail) names the client inside it.
+              if (systemNotice(m.from, m.subject)) {
+                notices++;
+                continue;
+              }
+              const system = isSystemSender(m.from);
+              const hints = system ? clientHints({ replyTo: m.replyTo, subject: m.subject, body: m.fullBody || m.body }) : null;
               out.push({
                 source: 'gmail',
                 source_id: `${account}:${m.threadId}`,
                 opened_at: (m.date || new Date()).toISOString(),
                 channel: 'email',
                 status: 'resolved',
-                customer_name: m.fromName,
-                customer_email: m.from,
-                emails: [m.from],
+                customer_name: system ? null : m.fromName,
+                customer_email: system ? hints.emails[0] || m.from : m.from,
+                customer_phone: system ? hints.phones[0] || null : null,
+                emails: system ? hints.emails : [m.from],
+                phones: system ? hints.phones : [],
+                hint_bookings: system ? hints.booking_ids : [],
                 text: [m.subject, m.body].filter(Boolean).join('\n'),
                 raw: { subject: m.subject },
               });
@@ -455,11 +544,12 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
         }
       }
     }
-    note('info', `info@ email: ${out.length} candidate threads (Claude/rules keep only complaints)${skipped ? `, ${skipped} messages unreadable` : ''}${failedWindows ? `, ${failedWindows} month(s) skipped` : ''}`);
+    note('info', `info@ email: ${out.length} candidate threads (Claude/rules keep only complaints)${skipped ? `, ${skipped} messages unreadable` : ''}${failedWindows ? `, ${failedWindows} month(s) skipped` : ''}${notices ? `, ${notices} system notices left out (rating digests, booking and schedule notices, meeting notes)` : ''}`);
     const byEmail = new Map();
     for (const c of out) {
-      if (!byEmail.has(c.customer_email)) byEmail.set(c.customer_email, await customerByEmail(ctx, c.emails, []).catch(() => null));
-      c.l27_customer_id = byEmail.get(c.customer_email);
+      const key = `${c.emails.join(',')}|${(c.phones || []).join(',')}`;
+      if (!byEmail.has(key)) byEmail.set(key, await customerByEmail(ctx, c.emails, c.phones || []).catch(() => null));
+      c.l27_customer_id = byEmail.get(key) || customerByBooking(ctx, c.hint_bookings);
     }
     return out;
   }
@@ -1430,7 +1520,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     return buildReviewStats(rows, waiting);
   }
 
-  return { subjectPatterns, linkClients, coverage, logCoverage, importReviews, linkReviews, reviewsSummary, rankFor, mineSolutions, getSettings, saveSettings, kustomerDiscover, start, run, status, markInterrupted, maybeRun, listCases, getCase, setCategory, playbook, clients, sources, reviewQueue, reviewCase, reviewStats };
+  return { subjectPatterns, relinkSystemSenders, linkClients, coverage, logCoverage, importReviews, linkReviews, reviewsSummary, rankFor, mineSolutions, getSettings, saveSettings, kustomerDiscover, start, run, status, markInterrupted, maybeRun, listCases, getCase, setCategory, playbook, clients, sources, reviewQueue, reviewCase, reviewStats };
 }
 
 // Measured accuracy from hand checks: of the cases the engine put in a category, how many a
