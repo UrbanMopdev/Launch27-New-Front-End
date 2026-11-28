@@ -1371,3 +1371,33 @@ describe('complaints: step 0 diagnostics', () => {
     await db.close();
   });
 });
+
+describe('complaints: system senders', () => {
+  test('subject lines are logged as templates only: no names, no numbers', async () => {
+    const db = await openDb();
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const fetchImpl = createMockLaunch27({ password: 'demo' });
+    const schedule = createSchedule({ db, config, fetchImpl, log: quiet });
+    const reports = createReports({ db, config, fetchImpl, schedule, log: quiet });
+    const lines = [];
+    const complaints = createComplaints({ db, config, reports, fetchImpl, log: { ...quiet, info: (m, a) => lines.push([m, a]) } });
+    const add = (i, subject, email, name = 'Launch27') => db.query(
+      `INSERT INTO complaint_cases (brand, source, source_id, opened_at, status, category, customer_name, customer_email, classified_by, raw) VALUES ('residential', 'gmail', $1, now() - interval '70 days', 'resolved', 'quality_missed', $2, $3, 'rules', $4::jsonb)`,
+      [`test:sys${i}`, name, email, JSON.stringify({ subject })],
+    );
+    const people = ['Quentin Zeller', 'Bartholomew Ng', 'Ottoline Varga', 'Ignatius Pell', 'Wilhelmina Oduya', 'Thaddeus Kraw'];
+    for (const [i, n] of people.entries()) await add(i, `New rating from ${n} for booking #${48200 + i}: 2 stars`, 'notifications@launch27mail.com');
+    await add(20, 'Something entirely different about Persephone', 'notifications@launch27mail.com');
+    await add(30, 'The kitchen was missed', 'quentin.zeller@gmail.com', 'Quentin Zeller');
+    await db.query("INSERT INTO contacts (name) VALUES ('Persephone Adair')");
+    const p = await complaints.subjectPatterns();
+    assert.deepEqual(Object.keys(p), ['launch27mail.com']);
+    assert.equal(p['launch27mail.com'].cases, 7);
+    assert.deepEqual(p['launch27mail.com'].subjects, { 'new rating from _ for booking # stars': 6, _: 1 });
+    const text = JSON.stringify(p);
+    for (const w of ['quentin', 'zeller', 'ottoline', 'persephone', '48200', 'kitchen']) assert.ok(!text.toLowerCase().includes(w), `${w} is not logged`);
+    await complaints.logCoverage().catch(() => {});
+    assert.ok(lines.some(([m, a]) => m === 'complaints system sender' && a.domain === 'launch27mail.com' && a.part === 'subjects'));
+    await db.close();
+  });
+});
