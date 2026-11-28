@@ -401,3 +401,28 @@ first read of #finance-refunds. Final categories come out of the 6-month pilot.
   stripped first (reusing `server/src/qa/anonymize.js`), and only the text needed is sent.
 - The engine recommends; a person approves and sends.
 - Every conclusion in the playbook states how many cases it rests on.
+
+### System senders, the funnel and cost per response (Nov 28 2026, part 2)
+
+What the production log showed about the unmatched cases (subject templates only, no names):
+
+- `launch27mail.com`, 155 cases: 47 are the "Ratings … with comments" digest (every rating in it
+  is already its own case from the Launch27 ratings source), 23 "New booking by staff", 25
+  "Booking cancellation", 8 "Upcoming schedule". Those are notices to us, not client messages.
+  About 36 are a client's reply to a reminder, relayed by Launch27 ("From <address> Re: …").
+- `ringcentral.com`, 61 cases, none matched: voicemail and call-note notices. The caller's number
+  is inside the message.
+- `e.read.ai`, 5: our own meeting notes. `stripe.com`, 4.
+
+What changed (`hints.js`, `relinkSystemSenders` in `service.js`, migration 0050):
+
+- Notices are left out at ingest, and stored ones are excluded with the reason in
+  `complaint_cases.excluded_why`.
+- For a relayed client message the client is looked for inside it: Reply-To, an email address or
+  phone number in the subject or text, a Launch27 booking number. Stored cases are checked from
+  the stored subject first, then by reading the message again (read-only, up to 200 a run).
+  Matched cases get `client_match = 'message'`.
+- The playbook opens with a data-quality funnel (`buildFunnel`): all cases, matched, recurring,
+  old enough, outcome known, with the cases that drop out at each step and why cases are unmatched.
+- "What each response cost and kept" (`by_response`): cost and Saved rate per response over that
+  response's own cases only, split by threat level and by severity. Correlation, not cause.
