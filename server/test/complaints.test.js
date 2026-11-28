@@ -1442,8 +1442,6 @@ describe('complaints: the numbers fix (Derek, Nov 28 2026)', () => {
   });
 
   test('end to end: recleans found only in a conversation get a cost; a failed run leaves its dates unread; impossible causes are cleared', async () => {
-describe('complaints: system senders', () => {
-  test('subject lines are logged as templates only: no names, no numbers', async () => {
     const db = await openDb();
     const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
     const fetchImpl = createMockLaunch27({ password: 'demo' });
@@ -1477,6 +1475,17 @@ describe('complaints: system senders', () => {
       ('2026-02-01', '2026-02-28', 'partial', now(), '[{"level":"error","msg":"Slack skipped: not_in_channel"}]'::jsonb)`);
     const after = (await complaints.status()).mined.map((m) => String(m.window_from).slice(0, 15));
     assert.equal(after.length, 2, 'the run where only Slack failed counts; the one where Kustomer failed does not');
+    await db.close();
+  });
+});
+
+describe('complaints: system senders', () => {
+  test('subject lines are logged as templates only: no names, no numbers', async () => {
+    const db = await openDb();
+    const config = loadConfig({ APP_ENV: 'development', L27_MODE: 'mock', MOCK_PASSWORD: 'demo' });
+    const fetchImpl = createMockLaunch27({ password: 'demo' });
+    const schedule = createSchedule({ db, config, fetchImpl, log: quiet });
+    const reports = createReports({ db, config, fetchImpl, schedule, log: quiet });
     const lines = [];
     const complaints = createComplaints({ db, config, reports, fetchImpl, log: { ...quiet, info: (m, a) => lines.push([m, a]) } });
     const add = (i, subject, email, name = 'Launch27') => db.query(
