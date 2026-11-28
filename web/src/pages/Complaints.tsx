@@ -366,6 +366,8 @@ function PlaybookTab({ period, isAdmin }: { period: Period; isAdmin: boolean }) 
         <Kpi label="First reply (median)" value={p.response.first_response_median_hours == null ? '—' : `${p.response.first_response_median_hours} h`} note={`${p.response.with_response_time} cases with reply times`} />
       </div>
 
+      <Funnel p={p} open={open} />
+
       <section className="card">
         <h2>How the totals are counted</h2>
         <p className="muted small">Click any underlined number on this page to see the exact cases behind it and download them.</p>
@@ -410,6 +412,8 @@ function PlaybookTab({ period, isAdmin }: { period: Period; isAdmin: boolean }) 
       <WhyItHappened p={p} open={open} labels={L} />
 
       <WhatWeOffered p={p} open={open} labels={L} />
+
+      <ByResponse p={p} open={open} labels={L} />
 
       <Threats p={p} open={open} labels={L} />
 
@@ -662,6 +666,53 @@ function ValueTiers({ p, open, labels }: { p: Playbook; open: Open; labels: Reco
   );
 }
 
+// The data-quality funnel: how many cases make it to a saved / lost verdict, and where the
+// rest drop out. Every rate on the page rests on the last step.
+function Funnel({ p, open }: { p: Playbook; open: Open }) {
+  const f = p.funnel;
+  if (!f) return null;
+  const total = f.steps[0]?.n || 0;
+  return (
+    <section className="card">
+      <h2>How much of the data the numbers rest on</h2>
+      <p className="muted small">Every Saved and Lost rate on this page rests on the last box. Click a number to see the cases, or the cases that dropped out at that step.</p>
+      <div className="cmp-arms">
+        {f.steps.map((s) => (
+          <div className="cmp-arm" key={s.key}>
+            <span className="small muted">{s.label}</span>
+            <span className="cmp-arm-value"><Num ids={s.ids} title={s.label} open={open}>{s.n}</Num></span>
+            <span className="small muted">{s.key === 'total' ? 'in these dates' : <>{pct(s.of_total)} of all{s.dropped_n ? <> · <Num ids={s.dropped_ids} title={`Dropped out: ${s.dropped_label}`} open={open}>{s.dropped_n}</Num> {s.dropped_label}</> : null}</>}</span>
+          </div>
+        ))}
+      </div>
+      {f.unmatched_reasons.length > 0 && (
+        <div className={`cmp-note ${f.unmatched_high ? '' : 'ok'}`}>
+          <b>{f.unmatched_high ? `Too many cases are not matched to a client (${pct(f.unmatched_share)} of ${total}; the aim is under 10%).` : `${pct(f.unmatched_share)} of cases are not matched to a client.`}</b> Why:{' '}
+          {f.unmatched_reasons.map((r, i) => <span key={r.key}>{i ? ' · ' : ''}<Num ids={r.ids} title={`Not matched: ${r.label}`} open={open}>{r.n}</Num> {r.label.charAt(0).toLowerCase() + r.label.slice(1)}</span>)}. Unmatched cases have no outcome, so they are in no rate.
+        </div>
+      )}
+    </section>
+  );
+}
+
+// What each response cost and kept, split by how hard the client pushed or how serious it was.
+function ByResponse({ p, open, labels }: { p: Playbook; open: Open; labels: Record<ExcludedReason, string> }) {
+  const [by, setBy] = useState<'threat' | 'severity'>('threat');
+  const rows = (p.by_response || []).filter((r) => r.n > 0);
+  if (!rows.length) return null;
+  return (
+    <SplitSection
+      title="What each response cost and kept"
+      intro={<>Each response's cost and Saved rate rest only on the cases that got that response (the count is beside every figure), never on an average over all cases. The response is the final answer in the conversation where we have read one, otherwise the highest step we took. <b>This is correlation, not cause:</b> angrier clients and more serious complaints get bigger responses, so a refund can look worse than an apology only because of who got it. Compare a response with itself inside one row of the split, and treat anything under {p.thin_threshold} decided cases as a hint.</>}
+      controls={<p className="small">Split each response by: <button type="button" className={`chip-btn ${by === 'threat' ? 'active' : ''}`} aria-pressed={by === 'threat'} onClick={() => setBy('threat')}>How hard the client pushed</button> <button type="button" className={`chip-btn ${by === 'severity' ? 'active' : ''}`} aria-pressed={by === 'severity'} onClick={() => setBy('severity')}>How serious it was</button></p>}
+      rowHead={by === 'threat' ? 'Response, then threat level' : 'Response, then severity'}
+      levels={rows.map((r) => ({ ...r, by_response: by === 'threat' ? r.by_threat : r.by_severity }))}
+      open={open}
+      labels={labels}
+    />
+  );
+}
+
 // Threats: does giving more keep a client who threatens to leave or to post a review?
 function Threats({ p, open, labels }: { p: Playbook; open: Open; labels: Record<ExcludedReason, string> }) {
   const levels = (p.threats || []).filter((t) => t.n > 0);
@@ -678,23 +729,24 @@ function Threats({ p, open, labels }: { p: Playbook; open: Open; labels: Record<
 }
 
 type SplitLevel = OutcomeStats & { key: string; label: string; share: number | null; extra?: string; by_response: (OutcomeStats & { response: string; label: string })[] };
-function SplitSection({ title, intro, levels, open, labels }: { title: string; intro: React.ReactNode; levels: SplitLevel[]; open: Open; labels: Record<ExcludedReason, string> }) {
+function SplitSection({ title, intro, levels, open, labels, rowHead = 'What we did', controls }: { title: string; intro: React.ReactNode; levels: SplitLevel[]; open: Open; labels: Record<ExcludedReason, string>; rowHead?: string; controls?: React.ReactNode }) {
   return (
     <section className="card">
       <h2>{title}</h2>
       <p className="muted small">{intro}</p>
+      {controls}
       <div className="cmp-arms">
         {levels.map((t) => (
           <div className="cmp-arm" key={t.key}>
             <span className="small muted">{t.label}</span>
             <span className="cmp-arm-value"><Num ids={t.ids} title={`${t.label}: every case`} open={open}>{t.n}</Num></span>
-            <span className="small muted">{pct(t.share)} of complaints{t.extra ? ` · ${t.extra}` : ''}{t.decided ? ` · ${pct(t.saved)} kept (${t.saved_n} of ${t.decided}) · avg cost ${money(t.avg_cost)}` : ''}</span>
+            <span className="small muted">{pct(t.share)} of complaints{t.extra ? ` · ${t.extra}` : ''}{t.decided ? ` · ${pct(t.saved)} kept (${t.saved_n} of ${t.decided}) · avg cost ${money(t.avg_cost)} over these ${t.n} cases` : ''}</span>
           </div>
         ))}
       </div>
       <div className="table-scroll">
         <table>
-          <thead><tr><th>What we did</th><th>Cases</th>{STAT_HEADS}</tr></thead>
+          <thead><tr><th>{rowHead}</th><th>Cases</th>{STAT_HEADS}</tr></thead>
           <tbody>
             {levels.map((t) => [
               <tr key={`t-${t.key}`} className="static"><th colSpan={8}>{t.label}</th></tr>,

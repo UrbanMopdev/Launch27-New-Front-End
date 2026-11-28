@@ -1508,3 +1508,45 @@ describe('complaints: system senders', () => {
     await db.close();
   });
 });
+
+describe('complaints: data-quality funnel and cost per response', () => {
+  const mk = (id, over = {}) => ({ id, source: 'kustomer', opened_at: '2026-06-10T12:00:00Z', category: 'quality_missed', tone: 'mild', severity: 1, l27_customer_id: 100 + id, one_time: false, ...over });
+  const cases = [
+    mk(1), mk(2, { tone: 'threat_leave', severity: 3 }), mk(3),
+    mk(4, { opened_at: '2026-11-01T12:00:00Z' }), // too recent
+    mk(5, { one_time: true }),
+    mk(6, { l27_customer_id: null, unmatched_why: 'system_sender' }),
+    mk(7, { l27_customer_id: null, unmatched_why: 'system_sender' }),
+    mk(8, { l27_customer_id: null }),
+  ];
+  const resolutions = [{ case_id: 1, rung: 'L3', action: 'reclean_full' }, { case_id: 2, rung: 'L3', action: 'reclean_full' }];
+  const costs = [{ case_id: 1, kind: 'reclean_labour', amount: 40 }, { case_id: 2, kind: 'reclean_labour', amount: 60 }, { case_id: 3, kind: 'credit', amount: 10 }];
+  const outcomes = [{ case_id: 1, day: 60, outcome: 'saved' }, { case_id: 2, day: 60, outcome: 'lost' }, { case_id: 3, day: 60, outcome: 'saved' }, { case_id: 4, day: 60, outcome: 'pending' }];
+  const pb = buildPlaybook({ cases, resolutions, costs, outcomes, visits: [], from: '2026-05-01', to: '2026-11-15', settings: normalizeSettings({}), today: '2026-11-16' });
+
+  test('the funnel counts each step, lists who dropped out, and ends on the decided count', () => {
+    const n = Object.fromEntries(pb.funnel.steps.map((s) => [s.key, s.n]));
+    assert.deepEqual(n, { total: 8, matched: 5, recurring: 4, old_enough: 3, outcome_known: 3 });
+    assert.equal(pb.funnel.steps.at(-1).n, pb.totals.decided);
+    assert.deepEqual(pb.funnel.steps.find((s) => s.key === 'matched').dropped_ids, [6, 7, 8]);
+    assert.deepEqual(pb.funnel.steps.find((s) => s.key === 'old_enough').dropped_ids, [4]);
+    assert.equal(pb.funnel.unmatched_high, true); // 3 of 8 is over a quarter
+    assert.deepEqual(pb.funnel.unmatched_reasons.map((r) => [r.key, r.n]), [['system_sender', 2], ['not_in_launch27', 1]]);
+  });
+
+  test("a response's average cost rests only on the cases that got that response", () => {
+    const reclean = pb.by_response.find((r) => r.key === 'reclean');
+    assert.equal(reclean.n, 2);
+    assert.equal(reclean.avg_cost, 50); // $100 over its own 2 cases, not over all 8
+    assert.deepEqual(reclean.ids, [1, 2]);
+    const apology = pb.by_response.find((r) => r.key === 'apology');
+    assert.equal(apology.n, 6);
+    assert.equal(apology.total_cost, 10);
+  });
+
+  test('each response is split by threat and by severity', () => {
+    const reclean = pb.by_response.find((r) => r.key === 'reclean');
+    assert.deepEqual(reclean.by_threat.map((t) => [t.label, t.n, t.saved_n, t.lost_n]), [['No threat', 1, 1, 0], ['Threatened to leave', 1, 0, 1]]);
+    assert.deepEqual(reclean.by_severity.map((t) => [t.label, t.n]), [['Minor', 1], ['Serious', 1]]);
+  });
+});

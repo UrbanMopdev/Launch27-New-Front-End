@@ -326,6 +326,20 @@ export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions =
   });
   const noValue = rows.filter((c) => tierOf(c) == null);
 
+  // What each response cost and kept. Every figure on a row rests only on the cases that got
+  // that response (never an all-case average), and each row is split by how hard the client
+  // pushed and by how serious the complaint was: angrier, more serious complaints get bigger
+  // responses, so a response's overall rate says as much about who got it as about what it did.
+  const splitBy = (list, keyOf, levels) => levels.map((l) => ({ response: String(l.key), label: l.label, ...outcomeStats(list.filter((c) => keyOf(c) === l.key)) })).filter((x) => x.n);
+  const respGroups = new Map();
+  for (const c of rows) respGroups.set(responseOf(c), [...(respGroups.get(responseOf(c)) || []), c]);
+  const sevOf = (c) => Math.min(4, Math.max(1, Number(c.severity) || 1));
+  const byResponse = [...respGroups]
+    .map(([k, l]) => ({ key: k, label: offerLabel(k), share: share(l.length, rows.length), ...outcomeStats(l), by_threat: splitBy(l, levelOf, THREATS), by_severity: splitBy(l, sevOf, SEVERITIES) }))
+    .sort((a, b) => b.n - a.n);
+
+  const funnel = buildFunnel(rows);
+
   // Ladder: cost and retention per rung (hard-routed cases excluded: they're not on the ladder)
   const ladder = RUNGS.map((r) => ({ ...r, ...outcomeStats(ladderRows.filter((c) => c.rung === r.rung)) }));
 
@@ -437,6 +451,8 @@ export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions =
     threats,
     reviews: reviewView,
     value_tiers: valueTiers,
+    funnel,
+    by_response: byResponse,
     value_unknown_ids: ids(noValue),
     cause_groups: causeGroups,
     ladder,
@@ -454,6 +470,52 @@ export function buildPlaybook({ cases, resolutions, costs, outcomes, solutions =
     gaps,
     thin_threshold: THIN,
     excluded_labels: EXCLUDED_LABEL,
+  };
+}
+
+export const SEVERITIES = [
+  { key: 1, label: 'Minor' },
+  { key: 2, label: 'Moderate' },
+  { key: 3, label: 'Serious' },
+  { key: 4, label: 'Severe (damage, safety, legal)' },
+];
+
+export const UNMATCHED_WHY = {
+  system_sender: 'Sent by a system (a Launch27 notice, a RingCentral voicemail or text, Stripe), so the sender is not the client',
+  no_contact: 'No email or phone on the case',
+  not_in_launch27: 'Email, phone and name not found in Launch27',
+};
+
+/**
+ * The data-quality funnel: how many cases survive each step on the way to a saved / lost
+ * verdict, and which cases drop out at each one. The last step is the "decided" count every
+ * rate on the page rests on. Pure.
+ */
+export function buildFunnel(rows) {
+  const known = (c) => !!c.outcome60 && c.outcome60 !== 'pending';
+  const steps = [
+    ['total', 'All complaint cases', () => true, null],
+    ['matched', 'Matched to a Launch27 client', (c) => !!c.l27_customer_id, 'not matched to a Launch27 client'],
+    ['recurring', 'Recurring client', (c) => !c.one_time, 'one-time clients (measured on booking again instead)'],
+    ['old_enough', '60+ days old (or already lost)', (c) => known(c) || (c.age_days != null && c.age_days >= 60), 'not yet 60 days old'],
+    ['outcome_known', 'Outcome known: saved or lost', known, 'no outcome recorded yet'],
+  ];
+  let cur = rows;
+  const out = [];
+  for (const [key, label, test, dropped] of steps) {
+    const next = cur.filter(test);
+    const gone = cur.filter((c) => !next.includes(c));
+    out.push({ key, label, n: next.length, ids: ids(next), of_total: share(next.length, rows.length), dropped_n: gone.length, dropped_ids: ids(gone), dropped_label: dropped });
+    cur = next;
+  }
+  const unmatched = rows.filter((c) => !c.l27_customer_id);
+  const why = new Map();
+  for (const c of unmatched) why.set(c.unmatched_why || 'not_in_launch27', [...(why.get(c.unmatched_why || 'not_in_launch27') || []), c.id]);
+  return {
+    steps: out,
+    unmatched_share: share(unmatched.length, rows.length),
+    unmatched_high: rows.length > 0 && unmatched.length / rows.length > 0.25,
+    unmatched_reasons: [...why].map(([k, l]) => ({ key: k, label: UNMATCHED_WHY[k] || k, n: l.length, ids: l })).sort((a, b) => b.n - a.n),
   };
 }
 

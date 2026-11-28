@@ -75,6 +75,13 @@ export interface Playbook {
   threats: (OutcomeStats & { key: string; label: string; share: number | null; by_response: (OutcomeStats & { response: string; label: string })[] })[];
   value_tiers: (OutcomeStats & { key: string; label: string; share: number | null; avg_spend: number | null; by_response: (OutcomeStats & { response: string; label: string })[] })[];
   value_unknown_ids: number[];
+  funnel: {
+    steps: { key: string; label: string; n: number; ids: number[]; of_total: number | null; dropped_n: number; dropped_ids: number[]; dropped_label: string | null }[];
+    unmatched_share: number | null;
+    unmatched_high: boolean;
+    unmatched_reasons: { key: string; label: string; n: number; ids: number[] }[];
+  };
+  by_response: (OutcomeStats & { key: string; label: string; share: number | null; by_threat: (OutcomeStats & { response: string; label: string })[]; by_severity: (OutcomeStats & { response: string; label: string })[] })[];
   reviews: {
     imported: number; imported_negative: number; first_at: string | null; last_at: string | null;
     matched_ids: number[]; low_ids: number[]; high_ids: number[];

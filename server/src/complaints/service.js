@@ -44,6 +44,9 @@ const RUN_READ = `(status = 'done' OR (status = 'partial' AND NOT EXISTS (
 const RULES_VERSION = 'v2_nov28';
 const SOLUTION_BATCHES = 5;
 const OWN_DOMAINS = ['@urbanmop.ca', '@urbanmop.com'];
+// Mail these domains send is written by a system, not by the client: the sender's address says
+// nothing about who the client is.
+const SYSTEM_DOMAINS = ['launch27mail.com', 'ringcentral.com', 'stripe.com', 'e.read.ai'];
 // Run fn over items with at most n in flight.
 async function pool(items, n, fn) {
   let i = 0;
@@ -1170,7 +1173,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
   // is not template wording taken out. A word is kept only if it appears in the subjects of at
   // least 5 different cases from that mail domain and is not part of any client's or contact's
   // name; every other word becomes "_" and every number "#". So no name or address is logged.
-  async function subjectPatterns(domains = ['launch27mail.com', 'ringcentral.com', 'stripe.com', 'e.read.ai']) {
+  async function subjectPatterns(domains = SYSTEM_DOMAINS) {
     const names = new Set();
     for (const r of await many(db, `SELECT customer_name AS n FROM complaint_cases WHERE customer_name IS NOT NULL AND lower(customer_email) NOT LIKE ALL($1::text[])
       UNION SELECT name FROM contacts WHERE name IS NOT NULL`, [domains.map((d) => `%@${d}`)])) {
@@ -1308,9 +1311,13 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
 
   async function playbook({ from, to }) {
     const settings = await getSettings();
-    const cases = await many(db, `SELECT j.*, c.id, c.source, c.opened_at, c.category, c.tone, c.severity, c.hard_route, c.first_response_at, c.exchanges, c.handled_by, c.l27_customer_id, c.l27_booking_id, c.classified_by, c.cause, c.contributing_causes, c.cause_by
+    const cases = await many(db, `SELECT j.*, c.id, c.source, c.opened_at, c.category, c.tone, c.severity, c.hard_route, c.first_response_at, c.exchanges, c.handled_by, c.l27_customer_id, c.l27_booking_id, c.classified_by, c.cause, c.contributing_causes, c.cause_by,
+        CASE WHEN c.l27_customer_id IS NOT NULL THEN NULL
+             WHEN split_part(lower(coalesce(c.customer_email, '')), '@', 2) = ANY($3::text[]) THEN 'system_sender'
+             WHEN coalesce(c.customer_email, '') = '' AND coalesce(c.customer_phone, '') = '' THEN 'no_contact'
+             ELSE 'not_in_launch27' END AS unmatched_why
       FROM complaint_cases c LEFT JOIN complaint_journeys j ON j.case_id = c.id
-      WHERE c.merged_into IS NULL AND c.excluded_at IS NULL AND c.opened_at >= $1 AND c.opened_at < $2::date + 1`, [from, to]);
+      WHERE c.merged_into IS NULL AND c.excluded_at IS NULL AND c.opened_at >= $1 AND c.opened_at < $2::date + 1`, [from, to, SYSTEM_DOMAINS]);
     const ids = cases.map((c) => c.id);
     const [resolutions, costs, outcomes, solutions] = ids.length
       ? await Promise.all([
