@@ -426,3 +426,15 @@ What changed (`hints.js`, `relinkSystemSenders` in `service.js`, migration 0050)
   old enough, outcome known, with the cases that drop out at each step and why cases are unmatched.
 - "What each response cost and kept" (`by_response`): cost and Saved rate per response over that
   response's own cases only, split by threat level and by severity. Correlation, not cause.
+
+### The method in three names (shown on the playbook page)
+
+- **The 90-day rule.** A recurring client who leaves within 90 days of the complaint is LOST,
+  with or without a bad review. Leaving after day 90 is not put down to the complaint.
+- **Two missed cycles.** A client has left once two of their own cycles pass with no visit done
+  or booked after their last one, and never sooner than 3 weeks: weekly 21 days, biweekly 28,
+  every 3 weeks 42, monthly 56 (`leftAfterDays` in `journey.js`). A plan we can't read counts as
+  biweekly. This replaced a flat 21 days (35 for monthly), which read one skipped biweekly
+  clean as leaving.
+- **Saved at 60 days.** Still booking 60+ days after the complaint and no 1-2 star review. A
+  1-2 star review is always LOST. One-time clients: booked again within 90 / 120 days.

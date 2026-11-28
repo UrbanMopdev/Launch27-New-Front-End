@@ -42,7 +42,7 @@ const RUN_READ = `(status = 'done' OR (status = 'partial' AND NOT EXISTS (
   SELECT 1 FROM jsonb_array_elements(coalesce(log, '[]'::jsonb)) e
    WHERE e->>'level' IN ('error', 'warn') AND e->>'msg' ~* '(kustomer|info@ email)' AND e->>'msg' ~* '(skipped|failed|couldn|aborted|timeout)')))`;
 // Bump when the cost or outcome rules change: every stored case is then recomputed once.
-const RULES_VERSION = 'v2_nov28';
+const RULES_VERSION = 'v3_nov28';
 const SOLUTION_BATCHES = 5;
 const OWN_DOMAINS = ['@urbanmop.ca', '@urbanmop.com'];
 // Run fn over items with at most n in flight.

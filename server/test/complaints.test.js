@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { parseRefundPost, reasonKind } from '../src/complaints/slackRefunds.js';
 import { classifyRules, mergeClassification, hardRouteFor, causeRules, causeFacts, causeFits, CAUSES, CAUSE_FITS, CAUSE_GROUPS } from '../src/complaints/taxonomy.js';
 import { redact } from '../src/complaints/redact.js';
-import { outcomeAt, journeyAt, recleanCost, recleanVisitCost, cleanerRateIndex, cleanerLastWorkedIndex, regularCleaner, planValue } from '../src/complaints/journey.js';
+import { leftAfterDays, outcomeAt, journeyAt, recleanCost, recleanVisitCost, cleanerRateIndex, cleanerLastWorkedIndex, regularCleaner, planValue } from '../src/complaints/journey.js';
 import { normalizeSettings, canApprove, rungForRefund, budgetStatus, DEFAULT_SETTINGS } from '../src/complaints/settings.js';
 import { clientHints, systemNotice, isSystemSender } from '../src/complaints/hints.js';
 import { buildPlaybook, monthRead } from '../src/complaints/playbook.js';
@@ -145,11 +145,17 @@ describe('complaints: outcomes and journey', () => {
     const o = outcomeAt([V(0), V(80), V(190)], at0 + DAY, 60, { today, negativeReview: { stars: 1, platform: 'google' } });
     assert.deepEqual([o.outcome, o.public_review_stars], ['lost', 1]);
   });
-  test('too recent to tell = pending; gone for a full normal gap = lost already', () => {
+  test('too recent to tell = pending; two missed cycles = lost already', () => {
     assert.equal(outcomeAt([V(0), V(14), V(28)], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'pending', 'last visit 12 days ago');
-    assert.equal(outcomeAt([V(0), V(14)], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'lost', 'nothing for 26 days on a biweekly plan');
+    assert.equal(outcomeAt([V(0), V(14)], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'pending', 'biweekly, 26 days: one missed clean is not leaving');
+    assert.equal(outcomeAt([V(0), V(14)], at0 + DAY, 60, { today: at0 + 43 * DAY }).outcome, 'lost', 'biweekly, 29 days: two missed cycles');
     assert.equal(outcomeAt([V(0), V(14), V(49)], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'pending', 'a visit is booked ahead');
-    assert.equal(outcomeAt([V(0, { freq: 'Monthly' }), V(14, { freq: 'Monthly' })], at0 + DAY, 60, { today: at0 + 40 * DAY }).outcome, 'pending', 'monthly clients get 35 days');
+    const M = { freq: 'Monthly' };
+    assert.equal(outcomeAt([V(0, M), V(14, M)], at0 + DAY, 60, { today: at0 + 65 * DAY }).outcome, 'pending', 'monthly, 51 days');
+    assert.equal(outcomeAt([V(0, M), V(14, M)], at0 + DAY, 60, { today: at0 + 71 * DAY }).outcome, 'lost', 'monthly, 57 days: two missed cycles');
+  });
+  test('two missed cycles, in days, by plan', () => {
+    assert.deepEqual(['Weekly', 'Biweekly', 'Tri-weekly', 'Monthly', 'Every 4 weeks', null].map(leftAfterDays), [21, 28, 42, 56, 56, 28]);
   });
   test('journey: cleaner change and price change', () => {
     const list = [V(-42), V(-28), V(-14, { revenue: 200, teams: [{ id: 9, name: 'Cleaner 9', hours: 3 }] })];

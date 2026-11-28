@@ -109,16 +109,22 @@ export function cleanerStatsIndex(visits) {
  *   saved        – still booking 60+ days after, and no 1–2★ public review
  *   lost         – stopped booking within 60 days, and/or a 1–2★ public review
  *   pending      – too early to tell (the 30-day check is never final)
- * "Still booking at the mark" = a visit or an upcoming booking on/after the mark, or a last
- * visit within the client's normal gap before it (21 days; 35 for monthly clients), once
- * that gap has fully passed.
+ * "Still booking at the mark" = a visit or an upcoming booking on/after the mark.
  */
 export const LEFT_WITHIN_DAYS = 90;
+// The "two missed cycles" rule: a client has left once two of their own cycles have passed
+// since their last visit (done or booked) with nothing after it, and never sooner than three
+// weeks, so one skipped clean or a holiday is not read as leaving. Weekly 21 days (the
+// minimum), biweekly 28, every three weeks 42, monthly 56. A plan we can't read counts as biweekly.
+export const MISSED_CYCLES = 2;
+export const LEFT_MIN_DAYS = 21;
+const CYCLE_DAYS = { weekly: 7, bi: 14, tri: 21, monthly: 28, one: 14 };
+export const leftAfterDays = (freq) => Math.max(LEFT_MIN_DAYS, MISSED_CYCLES * CYCLE_DAYS[/4 ?week/i.test(String(freq || '')) ? 'monthly' : freqKind(freq)]);
 export function outcomeAt(list, at, day, { today, upcoming = [], negativeReview = null, repeatCaseId = null }) {
   // Derek's rules (Nov 28 2026):
   //   LOST   the client left within LEFT_WITHIN_DAYS of the complaint, review or no review, or
-  //          posted a 1-2 star review. "Left" = no visit, done or booked, for a full normal gap
-  //          after their last one (21 days; 35 for monthly clients).
+  //          posted a 1-2 star review. "Left" = two missed cycles (leftAfterDays): no visit,
+  //          done or booked, for two of their own cycles after their last one.
   //   SAVED  still booking 60+ days after the complaint, no 1-2 star review, and not gone
   //          within LEFT_WITHIN_DAYS. A client saved at day 60 who then stops before day 90
   //          becomes LOST.
@@ -128,7 +134,8 @@ export function outcomeAt(list, at, day, { today, upcoming = [], negativeReview 
   const all = [...(list || []), ...upcoming].sort((a, b) => a.at - b.at);
   const after = all.filter((v) => v.at > at);
   const last = all[all.length - 1] || null;
-  const grace = /month|4 ?week/i.test(String(last?.freq || '')) ? 35 : 21;
+  // Their plan is the one on their latest recurring visit (a one-off extra clean doesn't change it).
+  const grace = leftAfterDays(all.filter((v) => freqKind(v.freq) !== 'one').slice(-1)[0]?.freq || last?.freq);
   const negative = negativeReview?.stars != null && negativeReview.stars <= 2;
   const base = {
     day,
