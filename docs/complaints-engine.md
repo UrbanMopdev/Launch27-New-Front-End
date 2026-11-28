@@ -204,6 +204,53 @@ repo is public and they carry reviewers' names).
 Not yet: reviews don't feed the rankings as their own column (they count through LOST), and
 there is no live connection to Google, so new reviews need a fresh export.
 
+### The numbers fix (Derek's rules, Nov 28 2026)
+
+Phase 2 is blocked until the cost and retention numbers can be trusted. Rules, confirmed by Derek:
+
+1. **Reclean cost** = the reclean's hours x the wage of the cleaner who did it. Hours: those
+   booked on the reclean visit, else 2. Wage: that cleaner's real rate from Launch27 pay (the
+   median of pay / hours over their visits), else $22. No travel, no lost-slot margin
+   (`settings.costs.include_travel` / `include_lost_slot` switch them back on).
+2. **Recleans are always paid.** A $0 or missing "earned" on a reclean visit means the pay was
+   recorded elsewhere: hours x wage, marked estimated. Actual only when the pay is on the visit.
+3. **A client who left is LOST**, review or no review. There is no "partial save" and no half
+   credit in the rankings. Whether a lost client also posted a 1-2 star review is kept beside
+   the outcome.
+4. **SAVED** = a recurring client still booking 60+ days after the complaint, not gone within
+   90 days (rule 3 wins over the day-60 check), and no 1-2 star review.
+5. **Never suggest a refund in exchange for removing a review.**
+
+What changed in the code:
+
+- `journey.js`: `outcomeAt` (rules 3 and 4, `LEFT_WITHIN_DAYS` = 90), `recleanVisitCost`,
+  `cleanerRateIndex`, `recleanCost` without travel or lost slot.
+- Every reclean gets a cost line, including ones found only in the conversation, the Kustomer
+  status or our reply (2 hours at the original cleaner's rate, estimated).
+- **History holes.** A run counted as having read its dates even when its Kustomer listing or a
+  month of email failed (status `partial`). May 17 to Aug 15 2026 was never read from Kustomer
+  or info@ because of this. Only runs where both came through count now (`RUN_READ`), so the
+  automatic update reads the hole.
+- **Budget baseline** counts every month's cases whatever dates the page shows (it used the
+  page's cases only, so months outside them read $0 / 0 cases), and averages only months fully
+  read; the rest are shown as incomplete.
+- **Impossible pairings.** `CAUSE_FITS` in `taxonomy.js` lists which categories each root cause
+  can explain; anything else is dropped at classification and cleared from stored cases.
+  "Too many marketing emails" had matched the word "unsubscribe" in system email footers.
+- **"Cheapest that works"** names a response only when it has 5+ cases with a known outcome of
+  its own; otherwise "Not enough data: use the standard ladder".
+- **A rules change recomputes everything once** (`RULES_VERSION`): the first automatic update
+  after a deploy is a rules-only pass over all history that reads no source.
+
+Step 0 (counts in the log before any change, Nov 28): 684 cases; by month Nov 2025 to Nov 2026
+22, 48, 71, 41, 55, 62, 33, 10, 26, 92, 88, 61, 75; 244 unmatched, of which 134 came from
+launch27mail.com and 61 from ringcentral.com (system senders, where the client is named in the
+message, not the sender); 157 cases with a reclean, 20 costed at $0; travel and lost slot were
+$6,208 of $13,589 reclean cost.
+
+Still open in this fix: system senders (find the client inside the message), the data-quality
+funnel, the severity split on the page, and the before/after table.
+
 ### Still to come
 
 2. Cost lines per case (actual vs estimated) and the escalation audit.
@@ -354,3 +401,40 @@ first read of #finance-refunds. Final categories come out of the 6-month pilot.
   stripped first (reusing `server/src/qa/anonymize.js`), and only the text needed is sent.
 - The engine recommends; a person approves and sends.
 - Every conclusion in the playbook states how many cases it rests on.
+
+### System senders, the funnel and cost per response (Nov 28 2026, part 2)
+
+What the production log showed about the unmatched cases (subject templates only, no names):
+
+- `launch27mail.com`, 155 cases: 47 are the "Ratings … with comments" digest (every rating in it
+  is already its own case from the Launch27 ratings source), 23 "New booking by staff", 25
+  "Booking cancellation", 8 "Upcoming schedule". Those are notices to us, not client messages.
+  About 36 are a client's reply to a reminder, relayed by Launch27 ("From <address> Re: …").
+- `ringcentral.com`, 61 cases, none matched: voicemail and call-note notices. The caller's number
+  is inside the message.
+- `e.read.ai`, 5: our own meeting notes. `stripe.com`, 4.
+
+What changed (`hints.js`, `relinkSystemSenders` in `service.js`, migration 0050):
+
+- Notices are left out at ingest, and stored ones are excluded with the reason in
+  `complaint_cases.excluded_why`.
+- For a relayed client message the client is looked for inside it: Reply-To, an email address or
+  phone number in the subject or text, a Launch27 booking number. Stored cases are checked from
+  the stored subject first, then by reading the message again (read-only, up to 200 a run).
+  Matched cases get `client_match = 'message'`.
+- The playbook opens with a data-quality funnel (`buildFunnel`): all cases, matched, recurring,
+  old enough, outcome known, with the cases that drop out at each step and why cases are unmatched.
+- "What each response cost and kept" (`by_response`): cost and Saved rate per response over that
+  response's own cases only, split by threat level and by severity. Correlation, not cause.
+
+### The method in three names (shown on the playbook page)
+
+- **The 90-day rule.** A recurring client who leaves within 90 days of the complaint is LOST,
+  with or without a bad review. Leaving after day 90 is not put down to the complaint.
+- **Two missed cycles.** A client has left once two of their own cycles pass with no visit done
+  or booked after their last one, and never sooner than 3 weeks: weekly 21 days, biweekly 28,
+  every 3 weeks 42, monthly 56 (`leftAfterDays` in `journey.js`). A plan we can't read counts as
+  biweekly. This replaced a flat 21 days (35 for monthly), which read one skipped biweekly
+  clean as leaving.
+- **Saved at 60 days.** Still booking 60+ days after the complaint and no 1-2 star review. A
+  1-2 star review is always LOST. One-time clients: booked again within 90 / 120 days.

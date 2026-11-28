@@ -13,12 +13,13 @@ import { indexVisits } from '../reports/compute.js';
 import { frequencyKind } from '../schedule/rules.js';
 import { normalizeEmail, normalizePhone } from '../inbox/normalize.js';
 import { parseGmailMessage } from '../inbox/email/mime.js';
-import { classifyRules, mergeClassification, amountsIn, causeFacts, categoryLabel, CAUSE_KEYS } from './taxonomy.js';
+import { classifyRules, mergeClassification, amountsIn, causeFacts, causeFits, categoryLabel, CAUSE_KEYS } from './taxonomy.js';
 import { formatThread, normalizeSolution, offerToResolution } from './solutions.js';
 import { caseRows, rankResponses } from './rank.js';
 import { parseTakeout, matchCase, nameKey as reviewerKey } from './reviews.js';
 import { redact } from './redact.js';
-import { journeyAt, outcomeAt, oneTimeOutcomeAt, cleanerStatsIndex, cleanerLastWorkedIndex, recleanCost, unitEconomics } from './journey.js';
+import { SYSTEM_DOMAINS, isSystemSender, clientHints, systemNotice } from './hints.js';
+import { journeyAt, outcomeAt, oneTimeOutcomeAt, cleanerStatsIndex, cleanerLastWorkedIndex, cleanerRateIndex, recleanCost, recleanVisitCost, unitEconomics } from './journey.js';
 import { normalizeSettings, rungForRefund } from './settings.js';
 import { parseRefundPost } from './slackRefunds.js';
 import { createKustomerClient, discover, listComplaints, toCase as kustomerToCase, customer as kustomerCustomer, conversationsAround } from './sources/kustomer.js';
@@ -34,6 +35,14 @@ const CREDIT_RE = /\$\s?(\d{1,3})(?:\.\d{2})?\s*(?:off|credit|discount)\b|\bcred
 
 const CLASSIFY_CONCURRENCY = 6;
 const SOLUTIONS_PER_RUN = 300;
+// A run has read its dates only if Kustomer and info@ both came through. A 'partial' run whose
+// Kustomer listing or a month of email failed left a hole (May 17 to Aug 15 2026 was one):
+// its dates must be read again, so they don't count. A partial run where only Slack failed does.
+const RUN_READ = `(status = 'done' OR (status = 'partial' AND NOT EXISTS (
+  SELECT 1 FROM jsonb_array_elements(coalesce(log, '[]'::jsonb)) e
+   WHERE e->>'level' IN ('error', 'warn') AND e->>'msg' ~* '(kustomer|info@ email)' AND e->>'msg' ~* '(skipped|failed|couldn|aborted|timeout)')))`;
+// Bump when the cost or outcome rules change: every stored case is then recomputed once.
+const RULES_VERSION = 'v3_nov28';
 const SOLUTION_BATCHES = 5;
 const OWN_DOMAINS = ['@urbanmop.ca', '@urbanmop.com'];
 // Run fn over items with at most n in flight.
@@ -82,8 +91,10 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
   // ---------- the run ----------
   // bearer: the Launch27 login of the admin who started the run. Used when there's no
   // L27_SYNC_EMAIL service login (production today), the same way "Refresh now" works.
-  async function run({ from, to, userId = null, bearer = null, label = null, refreshFrom = null }) {
-    const runRow = await one(db, 'INSERT INTO complaint_runs (started_by, window_from, window_to) VALUES ($1,$2,$3) RETURNING id', [userId, from, to]);
+  // sources: false = a rules-only pass: nothing is read from Kustomer, Gmail or Slack; every
+  // stored case in the dates gets its client, costs and outcome recomputed under the current rules.
+  async function run({ from, to, userId = null, bearer = null, label = null, refreshFrom = null, sources: readSources = true }) {
+    const runRow = await one(db, 'INSERT INTO complaint_runs (started_by, window_from, window_to, label) VALUES ($1,$2,$3,$4) RETURNING id', [userId, from, to, readSources ? null : 'rules']);
     const runLog = [];
     const note = (level, msg, extra = {}) => {
       runLog.push({ at: new Date(now()).toISOString(), level, msg, ...extra });
@@ -157,6 +168,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
         note('info', `${label}: ${kept} complaint case${kept === 1 ? '' : 's'} saved${screened ? ` (${screened} screened out as not complaints)` : ''}${reused ? `, ${reused} already classified` : ''}`);
       };
 
+      if (readSources) {
       if (config.kustomerApiKey) await save('Kustomer', await guarded('Kustomer', () => fromKustomer(from, to, ctx, note)));
       else note('warn', 'Kustomer skipped: KUSTOMER_API_KEY is not set');
       const ratings = fromRatings(from, to, ctx);
@@ -168,12 +180,20 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
 
       if (config.slackBotToken) await guarded('Slack', () => fromSlack(from, to, ctx, note));
       else note('warn', 'Slack refund history skipped: SLACK_BOT_TOKEN is not set');
+      }
+      const dropped = await dropImpossibleCauses();
+      if (dropped) note('info', `Root causes: ${dropped} that could not explain their category were cleared`);
 
-      // Cases still without a Launch27 client, from any date: try the contact records and the name.
-      const newlyLinked = await linkClients(ctx, note).catch((err) => {
-        note('warn', `Clients not matched: ${err.message}`);
+      // Mail a system sent: leave out its notices, and find the client named inside the rest.
+      const viaMessage = await relinkSystemSenders(ctx, note).catch((err) => {
+        note('warn', `System senders not matched: ${err.message}`);
         return [];
       });
+      // Cases still without a Launch27 client, from any date: try the contact records and the name.
+      const newlyLinked = viaMessage.concat(await linkClients(ctx, note).catch((err) => {
+        note('warn', `Clients not matched: ${err.message}`);
+        return [];
+      }));
       await linkReviews().catch((err) => note('warn', `Google reviews not matched: ${err.message}`));
       await enrich(refreshFrom && refreshFrom < from ? refreshFrom : from, to, ctx, settings, note, newlyLinked);
       // Read conversations in batches until the never-read backlog is gone (up to 5 batches a run).
@@ -221,13 +241,22 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     }
     const bearer = (syncBearer ? await syncBearer().catch(() => null) : null) || userBearer;
     if (!bearer) note('warn', 'No Launch27 login for lookups: clients are matched by name only and Launch27 refund amounts are skipped');
-    return { snap, visits, byCustomer, byName, bearer, cleanerStatsAt: cleanerStatsIndex(visits), cleanerLastWorked: cleanerLastWorkedIndex(visits, now()), econ: unitEconomics(visits, now() - 90 * DAY) };
+    return { snap, visits, byCustomer, byName, bearer, cleanerStatsAt: cleanerStatsIndex(visits), cleanerLastWorked: cleanerLastWorkedIndex(visits, now()), cleanerRate: cleanerRateIndex(snap.visits), econ: unitEconomics(visits, now() - 90 * DAY) };
   }
 
   const customerByName = (ctx, name) => {
     const ids = ctx.byName.get(nameKey(name));
     return ids && ids.size === 1 ? [...ids][0] : null; // ambiguous names are left unlinked
   };
+  // A cause that cannot explain its category (taxonomy.js CAUSE_FITS) is cleared, unless a
+  // person set it. The case then shows "not set" and is given a cause again when next read.
+  async function dropImpossibleCauses() {
+    const rows = await many(db, "SELECT id, category, cause FROM complaint_cases WHERE cause IS NOT NULL AND cause <> 'other' AND cause_by IS DISTINCT FROM 'human'");
+    const bad = rows.filter((r) => !causeFits(r.cause, r.category)).map((r) => Number(r.id));
+    if (bad.length) await db.query("UPDATE complaint_cases SET cause = NULL, cause_by = NULL, cause_evidence = NULL, contributing_causes = '[]'::jsonb WHERE id = ANY($1::bigint[])", [bad]);
+    return bad.length;
+  }
+
   // ---------- tying cases to clients after the fact ----------
   // A case is first matched when it is read: Launch27's own lookup of the sender's email or
   // phone. Many info@ complaints come from another address than the one on the booking, so
@@ -290,6 +319,80 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     }
     if (linked.length) rankCache = null;
     note('info', `Clients: ${linked.length} of ${open.length} unmatched cases tied to a Launch27 client (${how.contact} through a contact, ${how.contact_name} through a contact's name, ${how.name} by the sender's name). Still unmatched: ${why.nobody_by_that_name} have no Residential client by that name in the last 12 months, ${why.no_full_name} have no full name, ${why.several_clients_share_the_name} share a name with another client, ${why.our_own_address} are from our own addresses`);
+    return linked;
+  }
+
+  // A Launch27 booking number named in a message: the Residential client that booking belongs to.
+  function customerByBooking(ctx, bookingIds = []) {
+    for (const b of bookingIds || []) {
+      const v = ctx.visits.find((x) => Number(x.id) === Number(b));
+      if (v?.customer_id) return Number(v.customer_id);
+    }
+    return null;
+  }
+
+  // Unmatched cases whose sender is a system (Launch27 mail, RingCentral, Stripe). Notices that
+  // are not a client's message are excluded, with the reason. For the rest the client is looked
+  // for inside the message: first in the subject we stored, then (when Gmail is connected) in the
+  // message itself, read again. Read-only on Gmail and Launch27; nothing from the message is
+  // stored except the client's own email or phone on their case.
+  const RELINK_FETCH_MAX = 200;
+  async function relinkSystemSenders(ctx, note = () => {}) {
+    const open = await many(db, `SELECT id, source_id, customer_email, l27_customer_id, raw->>'subject' AS subject FROM complaint_cases
+      WHERE source = 'gmail' AND merged_into IS NULL AND excluded_at IS NULL AND split_part(lower(coalesce(customer_email, '')), '@', 2) = ANY($1::text[])`, [SYSTEM_DOMAINS]);
+    let excluded = 0;
+    let already = 0;
+    let fetched = 0;
+    const how = { subject: 0, message: 0, booking: 0 };
+    const linked = [];
+    const resolve = async (hints) => {
+      for (const [kind, v] of [...hints.emails.map((e) => ['email', e]), ...hints.phones.map((x) => ['phone', x])]) {
+        const ids = new Set((await many(db, 'SELECT DISTINCT k.l27_customer_id FROM contact_identities i JOIN contacts k ON k.id = i.contact_id WHERE i.kind = $1 AND i.value = $2 AND k.l27_customer_id IS NOT NULL', [kind, v])).map((r) => Number(r.l27_customer_id)));
+        let id = ids.size === 1 ? [...ids][0] : null;
+        if (!id && ids.size === 0) id = await customerByEmail(ctx, kind === 'email' ? [v] : [], kind === 'phone' ? [v] : []).catch(() => null);
+        if (id) return { id, kind, value: v };
+      }
+      const byBooking = customerByBooking(ctx, hints.booking_ids);
+      return byBooking ? { id: byBooking, kind: 'booking', value: null } : null;
+    };
+    for (const c of open) {
+      const why = systemNotice(c.customer_email, c.subject);
+      if (why) {
+        await db.query('UPDATE complaint_cases SET excluded_at = now(), excluded_why = $2, updated_at = now() WHERE id = $1', [c.id, why]);
+        excluded++;
+        continue;
+      }
+      if (c.l27_customer_id) {
+        already++;
+        continue;
+      }
+      let found = await resolve(clientHints({ subject: c.subject }));
+      let via = 'subject';
+      if (!found && gmail && fetched < RELINK_FETCH_MAX) {
+        const [account, thread] = String(c.source_id).split(/:(?=[^:]*$)/);
+        fetched++;
+        try {
+          const m = parseGmailMessage(await gmail.client.message(account, thread));
+          found = await resolve(clientHints({ replyTo: m.replyTo, subject: m.subject, body: m.fullBody || m.body }));
+          via = 'message';
+        } catch {
+          // The first message of the thread is gone or unreadable: the case stays unmatched.
+        }
+      }
+      if (!found) continue;
+      await db.query(
+        `UPDATE complaint_cases SET l27_customer_id = $2, client_match = 'message', customer_name = NULL,
+           customer_email = CASE WHEN $3 = 'email' THEN $4 ELSE customer_email END, customer_phone = CASE WHEN $3 = 'phone' THEN $4 ELSE customer_phone END, updated_at = now()
+         WHERE id = $1 AND l27_customer_id IS NULL`,
+        [c.id, found.id, found.kind, found.value],
+      );
+      linked.push(Number(c.id));
+      how[found.kind === 'booking' ? 'booking' : via]++;
+    }
+    if (linked.length || excluded) rankCache = null;
+    const left = open.length - excluded - linked.length - already;
+    note('info', `System senders: ${open.length} cases from Launch27 mail, RingCentral and Stripe. ${excluded} were notices, not client messages, and are left out; ${linked.length} tied to the client named inside (${how.subject} from the subject, ${how.message} from the message, ${how.booking} by booking number); ${left} still unmatched${fetched >= RELINK_FETCH_MAX ? ' (more are read on the next update)' : ''}`);
+    log.info('complaints coverage', { section: 'system_senders', value: JSON.stringify({ cases: open.length, notices_excluded: excluded, linked: linked.length, ...how, still_unmatched: left, fetched }) });
     return linked;
   }
 
@@ -387,6 +490,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     };
     const out = [];
     let skipped = 0;
+    let notices = 0;
     let failedWindows = 0;
     for (const account of gmail.accounts.filter((a) => /^info@/.test(a))) {
       const seenThreads = new Set();
@@ -407,15 +511,26 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
               }
               if (m.autoSubmitted || !m.from || seenThreads.has(m.threadId)) continue;
               seenThreads.add(m.threadId);
+              // A system's notice to us is not a client's message; a client's message that a
+              // system relayed (a reply to a reminder, a voicemail) names the client inside it.
+              if (systemNotice(m.from, m.subject)) {
+                notices++;
+                continue;
+              }
+              const system = isSystemSender(m.from);
+              const hints = system ? clientHints({ replyTo: m.replyTo, subject: m.subject, body: m.fullBody || m.body }) : null;
               out.push({
                 source: 'gmail',
                 source_id: `${account}:${m.threadId}`,
                 opened_at: (m.date || new Date()).toISOString(),
                 channel: 'email',
                 status: 'resolved',
-                customer_name: m.fromName,
-                customer_email: m.from,
-                emails: [m.from],
+                customer_name: system ? null : m.fromName,
+                customer_email: system ? hints.emails[0] || m.from : m.from,
+                customer_phone: system ? hints.phones[0] || null : null,
+                emails: system ? hints.emails : [m.from],
+                phones: system ? hints.phones : [],
+                hint_bookings: system ? hints.booking_ids : [],
                 text: [m.subject, m.body].filter(Boolean).join('\n'),
                 raw: { subject: m.subject },
               });
@@ -429,11 +544,12 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
         }
       }
     }
-    note('info', `info@ email: ${out.length} candidate threads (Claude/rules keep only complaints)${skipped ? `, ${skipped} messages unreadable` : ''}${failedWindows ? `, ${failedWindows} month(s) skipped` : ''}`);
+    note('info', `info@ email: ${out.length} candidate threads (Claude/rules keep only complaints)${skipped ? `, ${skipped} messages unreadable` : ''}${failedWindows ? `, ${failedWindows} month(s) skipped` : ''}${notices ? `, ${notices} system notices left out (rating digests, booking and schedule notices, meeting notes)` : ''}`);
     const byEmail = new Map();
     for (const c of out) {
-      if (!byEmail.has(c.customer_email)) byEmail.set(c.customer_email, await customerByEmail(ctx, c.emails, []).catch(() => null));
-      c.l27_customer_id = byEmail.get(c.customer_email);
+      const key = `${c.emails.join(',')}|${(c.phones || []).join(',')}`;
+      if (!byEmail.has(key)) byEmail.set(key, await customerByEmail(ctx, c.emails, c.phones || []).catch(() => null));
+      c.l27_customer_id = byEmail.get(key) || customerByBooking(ctx, c.hint_bookings);
     }
     return out;
   }
@@ -570,6 +686,8 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     const reviewOf = new Map();
     for (const r of await many(db, 'SELECT case_id, stars FROM google_reviews WHERE case_id IS NOT NULL ORDER BY stars DESC')) reviewOf.set(Number(r.case_id), { stars: Number(r.stars), platform: 'google' });
     const todayMs = now();
+    // Cases whose conversation shows a reclean the client took, or that ended in one.
+    const convRecleans = new Set((await many(db, "SELECT DISTINCT case_id FROM complaint_resolutions WHERE source = 'conversation' AND action LIKE 'reclean%'")).map((r) => Number(r.case_id)));
     let refundsFound = 0;
     let recleans = 0;
     for (const c of rows) {
@@ -598,23 +716,33 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
         }
       }
 
-      // Reclean: a $0 visit for the same client within 14 days after the complaint, or the
-      // Kustomer status / our reply says so.
+      // Reclean: a $0 visit for the same client within 14 days after the complaint; or the
+      // Kustomer status, our reply, or the conversation (solutions.js) says one was done.
+      // Cost (Derek's rules, Nov 28 2026): hours x the wage of the cleaner who did it. Recleans
+      // are always paid, so a visit with no pay on it is costed at the cleaner's own rate and
+      // marked estimated; a reclean with no visit on file is 2 hours at the original cleaner's
+      // rate ($22 if unknown), estimated. Every reclean gets a cost line.
       const free = list.find((v) => v.at > at && v.at < at + 14 * DAY && (v.reclean || (v.revenue || 0) === 0));
-      const mentioned = c.source_status && /reclean/i.test(c.source_status) || RECLEAN_RE.test(c.raw?.resolution_text || '') || RECLEAN_RE.test(c.raw?.our_replies_excerpt || '');
+      const mentioned = c.source_status && /reclean/i.test(c.source_status) || RECLEAN_RE.test(c.raw?.resolution_text || '') || RECLEAN_RE.test(c.raw?.our_replies_excerpt || '') || convRecleans.has(Number(c.id));
+      await db.query("DELETE FROM complaint_costs WHERE case_id = $1 AND kind LIKE 'reclean%'", [c.id]);
       if (free || mentioned) {
         recleans++;
-        const t = free?.teams?.[0];
-        const cost = recleanCost({ hours: free ? free.teams.reduce((s, x) => s + (x.hours || 0), 0) : null, cleanerHourly: t?.earned && t?.hours ? t.earned / t.hours : ctx.econ.cleanerHourly, marginPerHour: ctx.econ.marginPerHour }, settings.costs);
         const ref = free ? `booking:${free.id}` : `case:${c.id}`;
         await db.query(
           `INSERT INTO complaint_resolutions (case_id, step, rung, action, accepted, offered_at, source, source_id) VALUES ($1, 5, 'L3', $2, $3, $4, $5, $6)
            ON CONFLICT (source, source_id) DO NOTHING`,
           [c.id, free ? 'reclean_full' : 'reclean_spot', free ? 'yes' : 'unknown', free ? new Date(free.at).toISOString() : null, free ? 'launch27' : c.source, `reclean:${ref}`],
         );
-        await addCost(c.id, 'reclean_labour', free && t?.earned != null ? free.teams.reduce((s, x) => s + (x.earned || 0), 0) : cost.labour, 'model', ref, !(free && t?.earned != null));
-        await addCost(c.id, 'reclean_travel', cost.travel, 'model', ref, true);
-        await addCost(c.id, 'reclean_lost_slot', cost.lost_slot, 'model', ref, true);
+        const original = visit?.teams?.[0]?.id ?? null;
+        const rc = free
+          ? recleanVisitCost(free, ctx.cleanerRate, settings.costs)
+          : recleanVisitCost({ teams: [{ id: original, hours: null, earned: null }] }, ctx.cleanerRate, settings.costs);
+        await addCost(c.id, 'reclean_labour', rc.labour, free ? 'launch27' : 'model', ref, rc.estimated);
+        if (settings.costs.include_travel || settings.costs.include_lost_slot) {
+          const extra = recleanCost({ hours: rc.hours, marginPerHour: ctx.econ.marginPerHour }, settings.costs);
+          if (settings.costs.include_travel) await addCost(c.id, 'reclean_travel', extra.travel, 'model', ref, true);
+          if (settings.costs.include_lost_slot) await addCost(c.id, 'reclean_lost_slot', extra.lost_slot, 'model', ref, true);
+        }
       }
 
       // Small credits written into our replies ("$10 off your next clean").
@@ -656,7 +784,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
         // Nothing in the client's words names a cause, but Launch27 does: fill it in from the facts
         // (marked 'facts', so the checks measure it separately). Only for complaints a cleaner
         // change can explain, and only the strong signals.
-        const fact = (!c.cause || c.cause === 'other') && c.cause_by !== 'human' && FACT_CATEGORIES.has(c.category) ? causeFacts(j).find((f) => FACT_CAUSES.has(f.cause)) : null;
+        const fact = (!c.cause || c.cause === 'other') && c.cause_by !== 'human' && FACT_CATEGORIES.has(c.category) ? causeFacts(j).find((f) => FACT_CAUSES.has(f.cause) && causeFits(f.cause, c.category)) : null;
         if (fact) await db.query("UPDATE complaint_cases SET cause = $2, cause_by = 'facts', cause_evidence = $3 WHERE id = $1 AND (cause IS NULL OR cause = 'other') AND cause_by IS DISTINCT FROM 'human'", [c.id, fact.cause, fact.text]);
         const repeat = allCases.find((x) => Number(x.l27_customer_id) === Number(c.l27_customer_id) && x.id !== c.id && new Date(x.opened_at) > new Date(c.opened_at) && new Date(x.opened_at) - new Date(c.opened_at) <= 90 * DAY);
         // Recurring clients: still booking at 30/60/90 days. One-time clients: did they book
@@ -712,14 +840,15 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     const settings = await getSettings();
     if (!settings.auto.enabled) return null;
     const today = torontoDay(now());
-    const mined = await many(db, "SELECT window_from::text AS f, window_to::text AS t FROM complaint_runs WHERE status IN ('done', 'partial')");
+    const mined = await many(db, `SELECT window_from::text AS f, window_to::text AS t FROM complaint_runs WHERE ${RUN_READ} AND label IS DISTINCT FROM 'rules'`);
+    const rules = await one(db, "SELECT cursor FROM complaint_sync_state WHERE source = 'auto_rules'");
     const recent = await one(db, "SELECT cursor FROM complaint_sync_state WHERE source = 'auto_recent'");
     // Root causes for the last CAUSE_BACKFILL_DAYS: once, and only while cases there have none
     // and Claude is available to read them (no need to re-read the whole history).
     const causesDone = await one(db, "SELECT cursor FROM complaint_sync_state WHERE source = 'auto_causes'");
     const missing = causesDone || !classifier ? null : await one(db, `SELECT count(*)::int AS n FROM complaint_cases
       WHERE merged_into IS NULL AND excluded_at IS NULL AND cause_by IS NULL AND opened_at >= now() - make_interval(days => $1)`, [CAUSE_BACKFILL_DAYS]);
-    return planAuto({ mined: mined.map((m) => ({ from: m.f.slice(0, 10), to: m.t.slice(0, 10) })), today, historyDays: Math.round(settings.auto.history_months * 30.44), recentDone: recent?.cursor || null, causesPending: Number(missing?.n) > 0 });
+    return planAuto({ mined: mined.map((m) => ({ from: m.f.slice(0, 10), to: m.t.slice(0, 10) })), today, historyDays: Math.round(settings.auto.history_months * 30.44), recentDone: recent?.cursor || null, causesPending: Number(missing?.n) > 0, rulesPending: rules?.cursor !== RULES_VERSION });
   }
   async function maybeRun({ bearer = null } = {}) {
     if (running) return false;
@@ -734,8 +863,9 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     if (running) return false;
     lastAutoAttempt = now();
     heldBearer = login;
-    running = run({ from: job.from, to: job.to, bearer: login, label: job.label, refreshFrom: job.refreshFrom })
+    running = run({ from: job.from, to: job.to, bearer: login, label: job.label, refreshFrom: job.refreshFrom, sources: job.kind !== 'rules' })
       .then(async (r) => {
+        if (job.kind === 'rules' && !r?.error) await db.query("INSERT INTO complaint_sync_state (source, cursor, last_run_at, last_ok_at) VALUES ('auto_rules', $1, now(), now()) ON CONFLICT (source) DO UPDATE SET cursor = EXCLUDED.cursor, last_run_at = now(), last_ok_at = now()", [RULES_VERSION]);
         if (job.kind === 'recent') await db.query("INSERT INTO complaint_sync_state (source, cursor, last_run_at, last_ok_at) VALUES ('auto_recent', $1, now(), now()) ON CONFLICT (source) DO UPDATE SET cursor = EXCLUDED.cursor, last_run_at = now(), last_ok_at = now()", [torontoDay(now())]);
         // One pass is enough: a case Claude can't read (no text stored) shouldn't keep it coming back.
         if (job.kind === 'causes' && !r?.error) await db.query("INSERT INTO complaint_sync_state (source, cursor, last_run_at, last_ok_at) VALUES ('auto_causes', $1, now(), now()) ON CONFLICT (source) DO UPDATE SET cursor = EXCLUDED.cursor, last_run_at = now(), last_ok_at = now()", [torontoDay(now())]);
@@ -1002,6 +1132,18 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
       contact_emails: (await q(`WITH n AS (SELECT contact_id, count(*)::int AS n FROM contact_identities WHERE kind = 'email' GROUP BY 1)
         SELECT count(*)::int AS contacts_with_email, count(*) FILTER (WHERE n >= 5)::int AS with_five_or_more_emails, count(*) FILTER (WHERE n >= 50)::int AS with_fifty_or_more_emails, max(n)::int AS most_emails_on_one_contact FROM n`))[0],
       unmatched_by_category: pairs(await q(`SELECT category AS k, count(*)::int AS n FROM complaint_cases c WHERE ${live} AND l27_customer_id IS NULL GROUP BY 1 ORDER BY 2 DESC`)),
+      // Refunds, Slack against Launch27, month by month (counts and dollars only). Posts: refund
+      // posts read from the finance channels. Costs: refunds Launch27 shows on a complaint's
+      // booking, and Slack posts on cases where Launch27 shows none.
+      refund_posts_by_month: Object.fromEntries((await q(`SELECT to_char(date_trunc('month', occurred_at), 'YYYY_Mon') AS k, min(occurred_at) AS o, count(*)::int AS posts, count(case_id)::int AS linked,
+          round(coalesce(sum(nullif(data->>'amount', '')::numeric), 0))::int AS dollars, count(*) FILTER (WHERE data->>'amount' IS NULL)::int AS no_amount
+        FROM complaint_source_items WHERE source = 'slack' AND occurred_at > now() - interval '400 days' GROUP BY 1 ORDER BY 2`)).map((r) => [r.k ?? 'error', r.error || [r.posts, 'posts', r.dollars, 'dollars', r.linked, 'linked to a case', r.no_amount, 'with no amount'].join(' ')])),
+      refund_posts_by_channel: pairs(await q(`SELECT coalesce(data->>'channel', 'none') || ' / ' || kind AS k, count(*)::int AS n FROM complaint_source_items WHERE source = 'slack' AND occurred_at > now() - interval '400 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 20`)),
+      refund_costs_by_month: Object.fromEntries((await q(`SELECT to_char(date_trunc('month', c.opened_at), 'YYYY_Mon') AS k, min(c.opened_at) AS o,
+          count(DISTINCT c.id) FILTER (WHERE k.source = 'launch27')::int AS l_n, round(coalesce(sum(k.amount) FILTER (WHERE k.source = 'launch27'), 0))::int AS l_d,
+          count(DISTINCT c.id) FILTER (WHERE k.source = 'slack')::int AS s_n, round(coalesce(sum(k.amount) FILTER (WHERE k.source = 'slack'), 0))::int AS s_d,
+          count(DISTINCT c.id) FILTER (WHERE k.source NOT IN ('launch27', 'slack'))::int AS o_n, round(coalesce(sum(k.amount) FILTER (WHERE k.source NOT IN ('launch27', 'slack')), 0))::int AS o_d
+        FROM complaint_cases c JOIN complaint_costs k ON k.case_id = c.id AND k.kind = 'refund' WHERE ${live} AND c.opened_at > now() - interval '400 days' GROUP BY 1 ORDER BY 2`)).map((r) => [r.k ?? 'error', r.error || ['launch27', r.l_n, 'cases', r.l_d, 'dollars; slack only', r.s_n, 'cases', r.s_d, 'dollars; other', r.o_n, 'cases', r.o_d, 'dollars'].join(' ')])),
       matched_how: pairs(await q(`SELECT coalesce(client_match, 'when_read') AS k, count(*)::int AS n FROM complaint_cases c WHERE ${live} AND l27_customer_id IS NOT NULL GROUP BY 1`)),
       // Step 0 of the numbers fix (docs/complaints-engine.md): where the history is, what the
       // page says today per response, and which cause/category pairs exist. Month keys are
@@ -1133,7 +1275,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
   // is not template wording taken out. A word is kept only if it appears in the subjects of at
   // least 5 different cases from that mail domain and is not part of any client's or contact's
   // name; every other word becomes "_" and every number "#". So no name or address is logged.
-  async function subjectPatterns(domains = ['launch27mail.com', 'ringcentral.com', 'stripe.com', 'e.read.ai']) {
+  async function subjectPatterns(domains = SYSTEM_DOMAINS) {
     const names = new Set();
     for (const r of await many(db, `SELECT customer_name AS n FROM complaint_cases WHERE customer_name IS NOT NULL AND lower(customer_email) NOT LIKE ALL($1::text[])
       UNION SELECT name FROM contacts WHERE name IS NOT NULL`, [domains.map((d) => `%@${d}`)])) {
@@ -1193,7 +1335,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
   async function status() {
     const last = await one(db, 'SELECT id, started_at, finished_at, status, window_from, window_to, log FROM complaint_runs ORDER BY id DESC LIMIT 1');
     // Which periods have been mined (finished runs), so the page can say what a date range covers.
-    const mined = await many(db, "SELECT window_from, window_to, finished_at, status FROM complaint_runs WHERE status IN ('done', 'partial') ORDER BY window_from");
+    const mined = await many(db, `SELECT window_from, window_to, finished_at, status FROM complaint_runs WHERE ${RUN_READ} AND label IS DISTINCT FROM 'rules' ORDER BY window_from`);
     const settings = await getSettings();
     const next = await nextAuto().catch(() => null);
     const recent = await one(db, "SELECT cursor, last_ok_at FROM complaint_sync_state WHERE source = 'auto_recent'");
@@ -1271,15 +1413,19 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
 
   async function playbook({ from, to }) {
     const settings = await getSettings();
-    const cases = await many(db, `SELECT j.*, c.id, c.source, c.opened_at, c.category, c.tone, c.severity, c.hard_route, c.first_response_at, c.exchanges, c.handled_by, c.l27_customer_id, c.l27_booking_id, c.classified_by, c.cause, c.contributing_causes, c.cause_by
+    const cases = await many(db, `SELECT j.*, c.id, c.source, c.opened_at, c.category, c.tone, c.severity, c.hard_route, c.first_response_at, c.exchanges, c.handled_by, c.l27_customer_id, c.l27_booking_id, c.classified_by, c.cause, c.contributing_causes, c.cause_by,
+        CASE WHEN c.l27_customer_id IS NOT NULL THEN NULL
+             WHEN split_part(lower(coalesce(c.customer_email, '')), '@', 2) = ANY($3::text[]) THEN 'system_sender'
+             WHEN coalesce(c.customer_email, '') = '' AND coalesce(c.customer_phone, '') = '' THEN 'no_contact'
+             ELSE 'not_in_launch27' END AS unmatched_why
       FROM complaint_cases c LEFT JOIN complaint_journeys j ON j.case_id = c.id
-      WHERE c.merged_into IS NULL AND c.excluded_at IS NULL AND c.opened_at >= $1 AND c.opened_at < $2::date + 1`, [from, to]);
+      WHERE c.merged_into IS NULL AND c.excluded_at IS NULL AND c.opened_at >= $1 AND c.opened_at < $2::date + 1`, [from, to, SYSTEM_DOMAINS]);
     const ids = cases.map((c) => c.id);
     const [resolutions, costs, outcomes, solutions] = ids.length
       ? await Promise.all([
           many(db, 'SELECT case_id, rung, action, pct, amount, decided_by, approved_by FROM complaint_resolutions WHERE case_id = ANY($1::bigint[])', [ids]),
           many(db, 'SELECT case_id, kind, amount, estimated FROM complaint_costs WHERE case_id = ANY($1::bigint[])', [ids]),
-          many(db, 'SELECT case_id, day, outcome FROM complaint_outcomes WHERE case_id = ANY($1::bigint[])', [ids]),
+          many(db, 'SELECT case_id, day, outcome, public_review_stars FROM complaint_outcomes WHERE case_id = ANY($1::bigint[])', [ids]),
           many(db, 'SELECT case_id, read_by, asked_for, offers, final_kind, client_end, said_will_leave, said_will_stay FROM complaint_solutions WHERE case_id = ANY($1::bigint[])', [ids]),
         ])
       : [[], [], [], []];
@@ -1294,7 +1440,12 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     for (const c of cases) c.one_time = visitInfo(byId.get(Number(c.l27_booking_id)), c.frequency).client_type === 'one_time';
     const reviews = ids.length ? await many(db, 'SELECT case_id, stars FROM google_reviews WHERE case_id = ANY($1::bigint[])', [ids]) : [];
     const reviewTotals = await one(db, 'SELECT count(*)::int AS imported, count(*) FILTER (WHERE stars <= 2)::int AS negative, min(created_at) AS first_at, max(created_at) AS last_at FROM google_reviews');
-    return buildPlaybook({ cases, resolutions, costs, outcomes, solutions, reviews, reviewTotals, visits, from, to, settings, today: isoDay(now()), mining: !!solutionReader });
+    // The budget baseline looks at every month of history, whatever dates the page is showing,
+    // and knows which months have been fully read.
+    const baselineCosts = await many(db, `SELECT c.id, c.opened_at, k.kind, k.amount FROM complaint_cases c LEFT JOIN complaint_costs k ON k.case_id = c.id
+      WHERE c.merged_into IS NULL AND c.excluded_at IS NULL AND c.opened_at > now() - interval '400 days'`);
+    const readWindows = (await many(db, `SELECT window_from::text AS f, window_to::text AS t FROM complaint_runs WHERE ${RUN_READ} AND label IS DISTINCT FROM 'rules'`)).map((r) => ({ from: r.f.slice(0, 10), to: r.t.slice(0, 10) }));
+    return buildPlaybook({ baselineCosts, readWindows, cases, resolutions, costs, outcomes, solutions, reviews, reviewTotals, visits, from, to, settings, today: isoDay(now()), mining: !!solutionReader });
   }
 
   // Clients view: who complains repeatedly, and who looks at risk of leaving right now.
@@ -1381,7 +1532,7 @@ export function createComplaints({ db, config, reports, fetchImpl = fetch, gmail
     return buildReviewStats(rows, waiting);
   }
 
-  return { subjectPatterns, linkClients, coverage, logCoverage, importReviews, linkReviews, reviewsSummary, rankFor, mineSolutions, getSettings, saveSettings, kustomerDiscover, start, run, status, markInterrupted, maybeRun, listCases, getCase, setCategory, playbook, clients, sources, reviewQueue, reviewCase, reviewStats };
+  return { subjectPatterns, relinkSystemSenders, linkClients, coverage, logCoverage, importReviews, linkReviews, reviewsSummary, rankFor, mineSolutions, getSettings, saveSettings, kustomerDiscover, start, run, status, markInterrupted, maybeRun, listCases, getCase, setCategory, playbook, clients, sources, reviewQueue, reviewCase, reviewStats };
 }
 
 // Measured accuracy from hand checks: of the cases the engine put in a category, how many a
@@ -1461,7 +1612,7 @@ export function buildReviewStats(rows, waiting = []) {
  * 4. Otherwise, once a day: the last two weeks again, refreshing outcomes for ~4 months.
  */
 export const CAUSE_BACKFILL_DAYS = 90;
-export function planAuto({ mined, today, historyDays, recentDone, causesPending = false }) {
+export function planAuto({ mined, today, historyDays, recentDone, causesPending = false, rulesPending = false }) {
   const add = (d, n) => {
     const x = new Date(`${d}T12:00:00Z`);
     x.setUTCDate(x.getUTCDate() + n);
@@ -1469,6 +1620,9 @@ export function planAuto({ mined, today, historyDays, recentDone, causesPending 
   };
   const yesterday = add(today, -1);
   const target = add(today, -historyDays);
+  // The cost or outcome rules changed: recompute every stored case once, before anything else,
+  // so the page never mixes old and new rules. Reads no source.
+  if (rulesPending) return { kind: 'rules', from: target, to: yesterday, refreshFrom: null, label: 'Automatic update: recomputing every case under the current cost and outcome rules' };
   // Walk back from yesterday through everything already read.
   let p = yesterday;
   for (let moved = true; moved && p >= target; ) {

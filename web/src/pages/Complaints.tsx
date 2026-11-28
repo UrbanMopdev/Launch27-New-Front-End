@@ -259,7 +259,7 @@ function StatCells({ s, name, labels, open }: { s: OutcomeStats; name: string; l
   return (
     <>
       <RateCell s={s} k="saved" name={name} open={open} />
-      <RateCell s={s} k="partial" name={name} open={open} />
+      <td className="small">{s.lost_n ? <><Num ids={s.lost_no_review_ids} title={`${name}: left, no 1–2★ review`} open={open}>{s.lost_no_review_n}</Num> of {s.lost_n} lost{s.lost_with_review_n ? <> · <Num ids={s.lost_with_review_ids} title={`${name}: left and posted a 1–2★ review`} open={open}>{s.lost_with_review_n}</Num> with a 1–2★ review</> : null}</> : <span className="muted">—</span>}</td>
       <RateCell s={s} k="lost" name={name} open={open} />
       <ExcludedCell s={s} name={name} labels={labels} open={open} />
       <CostCell s={s} name={name} open={open} />
@@ -269,9 +269,9 @@ function StatCells({ s, name, labels, open }: { s: OutcomeStats; name: string; l
 }
 const STAT_HEADS = (
   <>
-    <th title="Still booking 60 days after the complaint, as a share of decided cases">Saved</th>
-    <th title="Still a client 60 days later but booking less, as a share of decided cases">Partial</th>
-    <th title="Stopped booking within 60 days, as a share of decided cases">Lost</th>
+    <th title="Still booking 60+ days after the complaint, not gone within 90 days, and no 1–2★ review, as a share of decided cases">Saved</th>
+    <th title="Of the clients we lost, how many left without posting a 1–2★ review. Leaving is lost either way; this shows which responses at least prevented a bad review. Only reviews matched to the complaint are counted.">Left, no bad review</th>
+    <th title="The 90-day rule and two missed cycles: left within 90 days of the complaint (no visit for two of their own cycles), or posted a 1–2★ review, as a share of decided cases">Lost</th>
     <th title="Cases with no saved / lost verdict, and why">Not counted</th>
     <th title="Average cost over every case, then over the decided cases the rates use">Avg cost</th>
     <th>Confidence</th>
@@ -366,6 +366,8 @@ function PlaybookTab({ period, isAdmin }: { period: Period; isAdmin: boolean }) 
         <Kpi label="First reply (median)" value={p.response.first_response_median_hours == null ? '—' : `${p.response.first_response_median_hours} h`} note={`${p.response.with_response_time} cases with reply times`} />
       </div>
 
+      <Funnel p={p} open={open} />
+
       <section className="card">
         <h2>How the totals are counted</h2>
         <p className="muted small">Click any underlined number on this page to see the exact cases behind it and download them.</p>
@@ -398,7 +400,7 @@ function PlaybookTab({ period, isAdmin }: { period: Period; isAdmin: boolean }) 
                     <td>{pct(x.share)} <span className="small muted cmp-nd"><Num ids={x.ids} title={`${name}: every case`} open={open}>{x.n}</Num> of {x.total_n}</span></td>
                     <td>{x.typical_name || '—'}</td>
                     <StatCells s={x} name={name} labels={L} open={open} />
-                    <td className="small">{c ? <><b>{c.name}</b>, {c.grade} confidence: <Num ids={c.ids} title={`${name}: ${c.name}`} open={open}>{c.reason}</Num>{c.saved != null ? ` (${pct(c.saved)} saved, avg ${money(c.avg_cost)})` : ''}</> : <span className="muted">no cases</span>}</td>
+                    <td className="small">{c && !c.name ? <span className="muted">{c.reason}{c.usual ? `. We usually do: ${c.usual}` : ''}</span> : c ? <><b>{c.name}</b>, {c.grade} confidence: <Num ids={c.ids} title={`${name}: ${c.name}`} open={open}>{c.reason}</Num>{c.saved != null ? ` (${pct(c.saved)} saved, avg ${money(c.avg_cost)})` : ''}</> : <span className="muted">no cases</span>}</td>
                   </tr>
                 );
               })}
@@ -410,6 +412,8 @@ function PlaybookTab({ period, isAdmin }: { period: Period; isAdmin: boolean }) 
       <WhyItHappened p={p} open={open} labels={L} />
 
       <WhatWeOffered p={p} open={open} labels={L} />
+
+      <ByResponse p={p} open={open} labels={L} />
 
       <Threats p={p} open={open} labels={L} />
 
@@ -510,7 +514,7 @@ function WhyItHappened({ p, open, labels }: { p: Playbook; open: Open; labels: R
                       <td>{x.contributing_n ? <Num ids={x.contributing_ids} title={`${x.label}: a contributing cause`} open={open}>{x.contributing_n}</Num> : <span className="muted">—</span>}</td>
                       <td className="small">{x.by_category.slice(0, 3).map((k, i) => <span key={k.key}>{i ? ', ' : ''}{catLabel(k.key)} <Num ids={k.ids} title={`${x.label} → ${catLabel(k.key)}`} open={open}>{k.n}</Num></span>)}{x.by_category.length > 3 ? ', …' : ''}</td>
                       <StatCells s={x} name={x.label} labels={labels} open={open} />
-                      <td className="small">{c ? <><b>{c.name}</b>, {c.grade}: <Num ids={c.ids} title={`${x.label}: ${c.name}`} open={open}>{c.reason}</Num></> : <span className="muted">—</span>}</td>
+                      <td className="small">{c && !c.name ? <span className="muted">Not enough data: use the standard ladder</span> : c ? <><b>{c.name}</b>, {c.grade}: <Num ids={c.ids} title={`${x.label}: ${c.name}`} open={open}>{c.reason}</Num></> : <span className="muted">—</span>}</td>
                     </tr>
                   );
                 }),
@@ -662,6 +666,62 @@ function ValueTiers({ p, open, labels }: { p: Playbook; open: Open; labels: Reco
   );
 }
 
+// The data-quality funnel: how many cases make it to a saved / lost verdict, and where the
+// rest drop out. Every rate on the page rests on the last step.
+function Funnel({ p, open }: { p: Playbook; open: Open }) {
+  const f = p.funnel;
+  if (!f) return null;
+  const total = f.steps[0]?.n || 0;
+  return (
+    <section className="card">
+      <h2>How much of the data the numbers rest on</h2>
+      <p className="muted small">Every Saved and Lost rate on this page rests on the last box. Click a number to see the cases, or the cases that dropped out at that step.</p>
+      <div className="cmp-arms">
+        {f.steps.map((s) => (
+          <div className="cmp-arm" key={s.key}>
+            <span className="small muted">{s.label}</span>
+            <span className="cmp-arm-value"><Num ids={s.ids} title={s.label} open={open}>{s.n}</Num></span>
+            <span className="small muted">{s.key === 'total' ? 'in these dates' : <>{pct(s.of_total)} of all{s.dropped_n ? <> · <Num ids={s.dropped_ids} title={`Dropped out: ${s.dropped_label}`} open={open}>{s.dropped_n}</Num> {s.dropped_label}</> : null}</>}</span>
+          </div>
+        ))}
+      </div>
+      <div className="cmp-note ok">
+        <b>How we decide Saved and Lost (recurring clients).</b>
+        <ul className="small">
+          <li><b>The 90-day rule:</b> a client who leaves within 90 days of the complaint is Lost, with or without a bad review. Leaving after day 90 is not put down to the complaint.</li>
+          <li><b>Two missed cycles:</b> a client has left once two of their own cycles pass with no visit done or booked: weekly 21 days (never sooner than 3 weeks), biweekly 28, every 3 weeks 42, monthly 56.</li>
+          <li><b>Saved at 60 days:</b> still booking 60+ days after the complaint, and no 1–2★ review. A 1–2★ review is always Lost.</li>
+          <li><b>One-time clients</b> are measured on whether they booked again within 90 and 120 days.</li>
+        </ul>
+      </div>
+      {f.unmatched_reasons.length > 0 && (
+        <div className={`cmp-note ${f.unmatched_high ? '' : 'ok'}`}>
+          <b>{f.unmatched_high ? `Too many cases are not matched to a client (${pct(f.unmatched_share)} of ${total}; the aim is under 10%).` : `${pct(f.unmatched_share)} of cases are not matched to a client.`}</b> Why:{' '}
+          {f.unmatched_reasons.map((r, i) => <span key={r.key}>{i ? ' · ' : ''}<Num ids={r.ids} title={`Not matched: ${r.label}`} open={open}>{r.n}</Num> {r.label.charAt(0).toLowerCase() + r.label.slice(1)}</span>)}. Unmatched cases have no outcome, so they are in no rate.
+        </div>
+      )}
+    </section>
+  );
+}
+
+// What each response cost and kept, split by how hard the client pushed or how serious it was.
+function ByResponse({ p, open, labels }: { p: Playbook; open: Open; labels: Record<ExcludedReason, string> }) {
+  const [by, setBy] = useState<'threat' | 'severity'>('threat');
+  const rows = (p.by_response || []).filter((r) => r.n > 0);
+  if (!rows.length) return null;
+  return (
+    <SplitSection
+      title="What each response cost and kept"
+      intro={<>Each response's cost and Saved rate rest only on the cases that got that response (the count is beside every figure), never on an average over all cases. The response is the final answer in the conversation where we have read one, otherwise the highest step we took. <b>This is correlation, not cause:</b> angrier clients and more serious complaints get bigger responses, so a refund can look worse than an apology only because of who got it. Compare a response with itself inside one row of the split, and treat anything under {p.thin_threshold} decided cases as a hint.</>}
+      controls={<p className="small">Split each response by: <button type="button" className={`chip-btn ${by === 'threat' ? 'active' : ''}`} aria-pressed={by === 'threat'} onClick={() => setBy('threat')}>How hard the client pushed</button> <button type="button" className={`chip-btn ${by === 'severity' ? 'active' : ''}`} aria-pressed={by === 'severity'} onClick={() => setBy('severity')}>How serious it was</button></p>}
+      rowHead={by === 'threat' ? 'Response, then threat level' : 'Response, then severity'}
+      levels={rows.map((r) => ({ ...r, by_response: by === 'threat' ? r.by_threat : r.by_severity }))}
+      open={open}
+      labels={labels}
+    />
+  );
+}
+
 // Threats: does giving more keep a client who threatens to leave or to post a review?
 function Threats({ p, open, labels }: { p: Playbook; open: Open; labels: Record<ExcludedReason, string> }) {
   const levels = (p.threats || []).filter((t) => t.n > 0);
@@ -678,23 +738,24 @@ function Threats({ p, open, labels }: { p: Playbook; open: Open; labels: Record<
 }
 
 type SplitLevel = OutcomeStats & { key: string; label: string; share: number | null; extra?: string; by_response: (OutcomeStats & { response: string; label: string })[] };
-function SplitSection({ title, intro, levels, open, labels }: { title: string; intro: React.ReactNode; levels: SplitLevel[]; open: Open; labels: Record<ExcludedReason, string> }) {
+function SplitSection({ title, intro, levels, open, labels, rowHead = 'What we did', controls }: { title: string; intro: React.ReactNode; levels: SplitLevel[]; open: Open; labels: Record<ExcludedReason, string>; rowHead?: string; controls?: React.ReactNode }) {
   return (
     <section className="card">
       <h2>{title}</h2>
       <p className="muted small">{intro}</p>
+      {controls}
       <div className="cmp-arms">
         {levels.map((t) => (
           <div className="cmp-arm" key={t.key}>
             <span className="small muted">{t.label}</span>
             <span className="cmp-arm-value"><Num ids={t.ids} title={`${t.label}: every case`} open={open}>{t.n}</Num></span>
-            <span className="small muted">{pct(t.share)} of complaints{t.extra ? ` · ${t.extra}` : ''}{t.decided ? ` · ${pct(t.saved)} kept (${t.saved_n} of ${t.decided}) · avg cost ${money(t.avg_cost)}` : ''}</span>
+            <span className="small muted">{pct(t.share)} of complaints{t.extra ? ` · ${t.extra}` : ''}{t.decided ? ` · ${pct(t.saved)} kept (${t.saved_n} of ${t.decided}) · avg cost ${money(t.avg_cost)} over these ${t.n} cases` : ''}</span>
           </div>
         ))}
       </div>
       <div className="table-scroll">
         <table>
-          <thead><tr><th>What we did</th><th>Cases</th>{STAT_HEADS}</tr></thead>
+          <thead><tr><th>{rowHead}</th><th>Cases</th>{STAT_HEADS}</tr></thead>
           <tbody>
             {levels.map((t) => [
               <tr key={`t-${t.key}`} className="static"><th colSpan={8}>{t.label}</th></tr>,
@@ -802,10 +863,11 @@ function Baseline({ b, open }: { b: Playbook['baseline']; open: Open }) {
   return (
     <section className="card">
       <h2>Refund budget baseline: complaint cost as a % of Residential revenue</h2>
-      <p className="muted small">Refunds + credits + recleans, by month. Average {pct(b.average, 2)} · best {b.best ? `${b.best.month} ${pct(b.best.rate, 2)}` : '—'} · worst {b.worst ? `${b.worst.month} ${pct(b.worst.rate, 2)}` : '—'} · default target {pct(b.default_target, 2)} (20% below average).</p>
+      <p className="small">The average and target use <b>{b.included_months.length}</b> fully read {b.included_months.length === 1 ? 'month' : 'months'}{b.included_months.length ? ` (${b.included_months[0]} to ${b.included_months[b.included_months.length - 1]})` : ''}.{b.incomplete_months.length ? <span className="warn"> Left out, still being read from Kustomer and info@: {b.incomplete_months.join(', ')}.</span> : null}</p>
+      <p className="muted small">Refunds + credits + recleans, by month, for every month of history whatever dates are selected above. Average {pct(b.average, 2)} · best {b.best ? `${b.best.month} ${pct(b.best.rate, 2)}` : '—'} · worst {b.worst ? `${b.worst.month} ${pct(b.worst.rate, 2)}` : '—'} · default target {pct(b.default_target, 2)} (20% below average).</p>
       <div className="cmp-bars" role="img" aria-label="Monthly complaint cost as a share of revenue">
         {b.months.map((m) => (
-          <div key={m.month} className="cmp-bar" title={`${m.month}: ${pct(m.rate, 2)} (${money(m.cost)} of ${money(m.revenue)}, ${m.cases} cases)`}>
+          <div key={m.month} className="cmp-bar" style={m.complete ? undefined : { opacity: 0.4 }} title={`${m.month}: ${pct(m.rate, 2)} (${money(m.cost)} of ${money(m.revenue)}, ${m.cases} cases)`}>
             <span style={{ height: `${((m.rate || 0) / max) * 100}%` }} />
             <small>{m.month.slice(5)}</small>
           </div>
@@ -817,7 +879,7 @@ function Baseline({ b, open }: { b: Playbook['baseline']; open: Open }) {
           <tbody>
             {b.months.map((m) => (
               <tr key={m.month} className="static">
-                <td>{m.month}</td>
+                <td>{m.month}{!m.complete && <span className="pill late" title="Not every day of this month has been read from Kustomer and info@ yet, so it is left out of the average"> incomplete</span>}</td>
                 <td><b>{pct(m.rate, 2)}</b> <span className="small muted cmp-nd">{money(m.cost)} of {money(m.revenue)}</span></td>
                 <td>{money(m.cost)}</td><td>{money(m.refunds)}</td><td>{money(m.credits)}</td><td>{money(m.recleans)}</td>
                 <td>{money(m.revenue)}</td>

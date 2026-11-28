@@ -39,6 +39,9 @@ Root cause: the category is WHAT the client complained about; the cause is WHY i
 a complaint about missed areas whose client says their regular cleaner left has category quality_missed and cause regular_left.
 Pick the one cause that best explains why, from this codebook, or "other" when none fits or the text doesn't say:
 ${CAUSES.map((c) => `- ${c.key}: ${c.label}. ${c.definition} Not this when: ${c.not_when}`).join('\n')}
+The cause must be able to explain the category you chose. Never pair marketing_emails with anything but communication or other;
+never give a quality or consistency cause to a damage, missing_item or conduct_safety complaint unless the client says that is why it happened.
+Ignore email footers, signatures and system boilerplate ("unsubscribe", "view in browser") when choosing a cause.
 contributing: up to two other causes from the codebook that clearly also played a part (never the same as cause); usually empty.
 cause_evidence: the client's own words (at most 25, copied exactly, placeholders kept) that show the cause; "" when cause is other.`;
 

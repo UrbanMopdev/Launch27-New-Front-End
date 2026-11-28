@@ -107,19 +107,35 @@ export function cleanerStatsIndex(visits) {
 /**
  * Outcome checked `day` days after the complaint (briefed definitions):
  *   saved        – still booking 60+ days after, and no 1–2★ public review
- *   partial_save – left after day 60, no negative public review
  *   lost         – stopped booking within 60 days, and/or a 1–2★ public review
  *   pending      – too early to tell (the 30-day check is never final)
- * "Still booking at the mark" = a visit or an upcoming booking on/after the mark, or a last
- * visit within the client's normal gap before it (21 days; 35 for monthly clients), once
- * that gap has fully passed.
+ * "Still booking at the mark" = a visit or an upcoming booking on/after the mark.
  */
+export const LEFT_WITHIN_DAYS = 90;
+// The "two missed cycles" rule: a client has left once two of their own cycles have passed
+// since their last visit (done or booked) with nothing after it, and never sooner than three
+// weeks, so one skipped clean or a holiday is not read as leaving. Weekly 21 days (the
+// minimum), biweekly 28, every three weeks 42, monthly 56. A plan we can't read counts as biweekly.
+export const MISSED_CYCLES = 2;
+export const LEFT_MIN_DAYS = 21;
+const CYCLE_DAYS = { weekly: 7, bi: 14, tri: 21, monthly: 28, one: 14 };
+export const leftAfterDays = (freq) => Math.max(LEFT_MIN_DAYS, MISSED_CYCLES * CYCLE_DAYS[/4 ?week/i.test(String(freq || '')) ? 'monthly' : freqKind(freq)]);
 export function outcomeAt(list, at, day, { today, upcoming = [], negativeReview = null, repeatCaseId = null }) {
-  const mark = at + day * DAY;
+  // Derek's rules (Nov 28 2026):
+  //   LOST   the client left within LEFT_WITHIN_DAYS of the complaint, review or no review, or
+  //          posted a 1-2 star review. "Left" = two missed cycles (leftAfterDays): no visit,
+  //          done or booked, for two of their own cycles after their last one.
+  //   SAVED  still booking 60+ days after the complaint, no 1-2 star review, and not gone
+  //          within LEFT_WITHIN_DAYS. A client saved at day 60 who then stops before day 90
+  //          becomes LOST.
+  // There is no "partial save". Whether a lost client left a bad review is kept beside the
+  // outcome (public_review_stars), so responses that prevented reviews can still be seen.
+  const mark = at + 60 * DAY;
   const all = [...(list || []), ...upcoming].sort((a, b) => a.at - b.at);
   const after = all.filter((v) => v.at > at);
-  const last = all.filter((v) => v.at <= Math.max(today, mark)).slice(-1)[0] || all[all.length - 1] || null;
-  const grace = /month|4 ?week/i.test(String(last?.freq || '')) ? 35 : 21;
+  const last = all[all.length - 1] || null;
+  // Their plan is the one on their latest recurring visit (a one-off extra clean doesn't change it).
+  const grace = leftAfterDays(all.filter((v) => freqKind(v.freq) !== 'one').slice(-1)[0]?.freq || last?.freq);
   const negative = negativeReview?.stars != null && negativeReview.stars <= 2;
   const base = {
     day,
@@ -130,22 +146,15 @@ export function outcomeAt(list, at, day, { today, upcoming = [], negativeReview 
     repeat_case_id: repeatCaseId,
   };
   const bookedPast = (m) => after.some((v) => v.at >= m);
-  const goneBy = (m) => !bookedPast(m - grace * DAY) && today >= m; // nothing in the last normal gap before m
   if (negative) return { ...base, still_booking: bookedPast(mark), outcome: 'lost' };
-  if (bookedPast(mark)) return { ...base, still_booking: true, outcome: day >= 60 ? 'saved' : 'pending' };
-  if (today < mark + grace * DAY && !goneBy(mark)) return { ...base, still_booking: null, outcome: 'pending' };
-  // Not booking at the mark. When did they leave?
-  const lastAfter = after.filter((v) => v.at <= today).slice(-1)[0];
-  const leftWithin60 = !lastAfter || lastAfter.at + grace * DAY < at + 60 * DAY;
-  return { ...base, still_booking: false, outcome: leftWithin60 ? 'lost' : 'partial_save' };
+  // Their last visit of all, done or booked. They have left once a full gap has passed since it.
+  const lastAt = last && last.at > at ? last.at : at;
+  const left = today >= lastAt + grace * DAY;
+  if (left && lastAt < at + LEFT_WITHIN_DAYS * DAY) return { ...base, still_booking: false, outcome: 'lost' };
+  if (day < 60) return { ...base, still_booking: left ? false : null, outcome: 'pending' };
+  if (bookedPast(mark)) return { ...base, still_booking: true, outcome: 'saved' };
+  return { ...base, still_booking: null, outcome: 'pending' };
 }
-
-/**
- * One-time clients don't have a schedule to keep, so "still booking" is the wrong test. For
- * them: did they book with us again within `day` days (90 or 120) of the complaint?
- *   rebooked | not_rebooked | pending (the window hasn't passed yet)
- * `list` should already exclude recleans and free visits (those aren't a client coming back).
- */
 export function oneTimeOutcomeAt(list, at, day, { today, upcoming = [], repeatCaseId = null }) {
   const end = at + day * DAY;
   const after = [...(list || []), ...upcoming].filter((v) => v.at > at + DAY).sort((a, b) => a.at - b.at);
@@ -168,14 +177,52 @@ export function oneTimeOutcomeAt(list, at, day, { today, upcoming = [], repeatCa
  * per-visit travel cost. Lost slot = the average gross margin of a residential visit of that
  * length that week (revenue − cleaner pay), because the reclean occupies a bookable slot.
  */
+/**
+ * What a reclean costs (Derek's rule, Nov 28 2026): the reclean's hours times the hourly wage
+ * of the cleaner who did it. Hours: those booked on the reclean visit, else the default (2).
+ * Wage: that cleaner's real rate from Launch27 pay, else the default ($22). No travel and no
+ * lost-slot margin unless switched back on in settings (include_travel, include_lost_slot).
+ */
 export function recleanCost({ hours, cleanerHourly, marginPerHour, travel, spot = false }, settings) {
   const h = (hours || settings.reclean_default_hours) * (spot ? settings.reclean_spot_share : 1);
   const labour = h * (cleanerHourly || settings.cleaner_hourly_default);
-  const slot = h * (marginPerHour ?? settings.margin_per_hour_default);
-  return { hours: Math.round(h * 10) / 10, labour: Math.round(labour * 100) / 100, travel: travel ?? settings.travel_per_visit, lost_slot: Math.round(slot * 100) / 100, total: Math.round((labour + (travel ?? settings.travel_per_visit) + slot) * 100) / 100 };
+  const tr = settings.include_travel ? travel ?? settings.travel_per_visit : 0;
+  const slot = settings.include_lost_slot ? h * (marginPerHour ?? settings.margin_per_hour_default) : 0;
+  return { hours: Math.round(h * 10) / 10, labour: Math.round(labour * 100) / 100, travel: tr, lost_slot: Math.round(slot * 100) / 100, total: Math.round((labour + tr + slot) * 100) / 100 };
 }
 
-/** Effective cleaner hourly pay and gross margin per hour over recent residential visits. */
+/** Each cleaner's real hourly rate: the median of pay / hours over their paid visits. */
+export function cleanerRateIndex(visits) {
+  const by = new Map();
+  for (const v of visits) for (const t of v.teams || []) if (t.earned > 0 && t.hours > 0) by.set(t.id, [...(by.get(t.id) || []), t.earned / t.hours]);
+  const med = (xs) => xs.slice().sort((a, b) => a - b)[Math.floor((xs.length - 1) / 2)];
+  const rates = new Map([...by].map(([id, xs]) => [id, Math.round(med(xs) * 100) / 100]));
+  return (id) => rates.get(id) ?? null;
+}
+
+/**
+ * The cost of one reclean visit: for each cleaner on it, their hours (2 if none booked) times
+ * their wage. Recleans are always paid: a $0 or missing "earned" on the visit means the pay
+ * was recorded somewhere else, so the cleaner's own rate is used (then the default), and the
+ * line is marked estimated. Actual only when every cleaner's pay is on the visit.
+ */
+export function recleanVisitCost(visit, rateOf, settings) {
+  const teams = visit?.teams?.length ? visit.teams : [{ id: null, hours: null, earned: null }];
+  let total = 0;
+  let hours = 0;
+  let actual = true;
+  for (const t of teams) {
+    const h = t.hours > 0 ? t.hours : settings.reclean_default_hours;
+    hours += h;
+    if (t.earned > 0) total += t.earned;
+    else {
+      actual = false;
+      total += h * ((t.id != null && rateOf ? rateOf(t.id) : null) || settings.cleaner_hourly_default);
+    }
+  }
+  return { labour: Math.round(total * 100) / 100, hours: Math.round(hours * 10) / 10, estimated: !actual };
+}
+
 export function unitEconomics(visits, sinceMs) {
   let pay = 0;
   let hours = 0;

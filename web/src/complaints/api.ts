@@ -21,6 +21,9 @@ export interface OutcomeStats {
   saved: number | null; saved_n: number; saved_ids: number[];
   partial: number | null; partial_n: number; partial_ids: number[];
   lost: number | null; lost_n: number; lost_ids: number[];
+  // A client who left is lost, review or no review. Whether they also left a 1-2 star review:
+  lost_with_review_n: number; lost_with_review_ids: number[];
+  lost_no_review_n: number; lost_no_review_ids: number[];
   excluded_n: number;
   excluded: Partial<Record<ExcludedReason, number[]>>;
   total_cost: number;
@@ -30,7 +33,8 @@ export interface OutcomeStats {
   confidence: Confidence;
   one_time: OneTimeStats;
 }
-export interface Cheapest { rung: string; name: string; saved: number | null; saved_n: number; avg_cost: number | null; n: number; cases: number; ids: number[]; basis: 'compared' | 'few' | 'no_outcomes'; grade: 'High' | 'Medium' | 'Low'; reason: string }
+// name is null when no response has 5 cases with a known outcome of its own: "Not enough data: use the standard ladder".
+export interface Cheapest { rung: string | null; name: string | null; saved: number | null; saved_n: number; avg_cost: number | null; n: number; cases: number; ids: number[]; basis: 'compared' | 'not_enough'; grade: 'High' | 'Medium' | 'Low'; reason: string; usual?: string | null }
 
 export interface Rung { rung: string; name: string; tier: string; action: string; label: string; amount?: number; pct?: number }
 
@@ -71,6 +75,13 @@ export interface Playbook {
   threats: (OutcomeStats & { key: string; label: string; share: number | null; by_response: (OutcomeStats & { response: string; label: string })[] })[];
   value_tiers: (OutcomeStats & { key: string; label: string; share: number | null; avg_spend: number | null; by_response: (OutcomeStats & { response: string; label: string })[] })[];
   value_unknown_ids: number[];
+  funnel: {
+    steps: { key: string; label: string; n: number; ids: number[]; of_total: number | null; dropped_n: number; dropped_ids: number[]; dropped_label: string | null }[];
+    unmatched_share: number | null;
+    unmatched_high: boolean;
+    unmatched_reasons: { key: string; label: string; n: number; ids: number[] }[];
+  };
+  by_response: (OutcomeStats & { key: string; label: string; share: number | null; by_threat: (OutcomeStats & { response: string; label: string })[]; by_severity: (OutcomeStats & { response: string; label: string })[] })[];
   reviews: {
     imported: number; imported_negative: number; first_at: string | null; last_at: string | null;
     matched_ids: number[]; low_ids: number[]; high_ids: number[];
@@ -117,7 +128,9 @@ export interface Playbook {
   hard_routes: { key: string; label: string; n: number; ids: number[] }[];
   response: { first_response_median_hours: number | null; with_response_time: number; decided_by: Record<string, number> };
   baseline: {
-    months: { month: string; revenue: number; cost: number; rate: number | null; cases: number; case_ids: number[]; refunds: number; credits: number; recleans: number }[];
+    months: { month: string; revenue: number; cost: number; rate: number | null; cases: number; case_ids: number[]; refunds: number; credits: number; recleans: number; complete: boolean }[];
+    included_months: string[];
+    incomplete_months: string[];
     average: number | null;
     best: { month: string; rate: number | null } | null;
     worst: { month: string; rate: number | null } | null;
@@ -315,7 +328,7 @@ export const complaintsApi = {
   saveSettings: (s: Settings) => call<{ settings: Settings }>('PUT', '/settings', s),
 };
 
-export const OUTCOME_LABEL: Record<string, string> = { saved: 'Saved', partial_save: 'Partial save', lost: 'Lost', pending: 'Too early', rebooked: 'Booked again', not_rebooked: "Didn't book again" };
+export const OUTCOME_LABEL: Record<string, string> = { saved: 'Saved', partial_save: 'Lost', lost: 'Lost', pending: 'Too early', rebooked: 'Booked again', not_rebooked: "Didn't book again" };
 // Plain names for what we did. The L-codes stay behind the scenes (approval limits).
 export const RUNG_NAME: Record<string, string> = {
   L0: 'Apology only', L1: '$5 credit', L2: '$10 credit', L3: 'Reclean', L4: 'Small refund (up to ~20%)', L5: 'Partial refund (~25–40%)', L6: 'Half refund', L7: 'Full refund (over half)',

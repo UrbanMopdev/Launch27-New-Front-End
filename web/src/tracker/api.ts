@@ -95,7 +95,7 @@ export interface Guidance {
   saved?: number | null;
   decided?: number;
   avg_cost?: number | null;
-  cheapest?: { name: string; saved: number | null; avg_cost: number | null; n: number; grade: 'High' | 'Medium' | 'Low'; reason: string } | null;
+  cheapest?: { name: string | null; saved: number | null; avg_cost: number | null; n: number; grade: 'High' | 'Medium' | 'Low'; reason: string } | null;
   options?: GuidanceOption[];
   one_time_stats?: { n: number; decided_90: number; rebooked_90: number | null; decided: number; rebooked_120: number | null } | null;
 }
