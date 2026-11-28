@@ -271,7 +271,7 @@ const STAT_HEADS = (
   <>
     <th title="Still booking 60+ days after the complaint, not gone within 90 days, and no 1–2★ review, as a share of decided cases">Saved</th>
     <th title="Of the clients we lost, how many left without posting a 1–2★ review. Leaving is lost either way; this shows which responses at least prevented a bad review. Only reviews matched to the complaint are counted.">Left, no bad review</th>
-    <th title="Left within 90 days of the complaint (no visit for a full normal gap), or posted a 1–2★ review, as a share of decided cases">Lost</th>
+    <th title="The 90-day rule and two missed cycles: left within 90 days of the complaint (no visit for two of their own cycles), or posted a 1–2★ review, as a share of decided cases">Lost</th>
     <th title="Cases with no saved / lost verdict, and why">Not counted</th>
     <th title="Average cost over every case, then over the decided cases the rates use">Avg cost</th>
     <th>Confidence</th>
@@ -684,6 +684,15 @@ function Funnel({ p, open }: { p: Playbook; open: Open }) {
             <span className="small muted">{s.key === 'total' ? 'in these dates' : <>{pct(s.of_total)} of all{s.dropped_n ? <> · <Num ids={s.dropped_ids} title={`Dropped out: ${s.dropped_label}`} open={open}>{s.dropped_n}</Num> {s.dropped_label}</> : null}</>}</span>
           </div>
         ))}
+      </div>
+      <div className="cmp-note ok">
+        <b>How we decide Saved and Lost (recurring clients).</b>
+        <ul className="small">
+          <li><b>The 90-day rule:</b> a client who leaves within 90 days of the complaint is Lost, with or without a bad review. Leaving after day 90 is not put down to the complaint.</li>
+          <li><b>Two missed cycles:</b> a client has left once two of their own cycles pass with no visit done or booked: weekly 21 days (never sooner than 3 weeks), biweekly 28, every 3 weeks 42, monthly 56.</li>
+          <li><b>Saved at 60 days:</b> still booking 60+ days after the complaint, and no 1–2★ review. A 1–2★ review is always Lost.</li>
+          <li><b>One-time clients</b> are measured on whether they booked again within 90 and 120 days.</li>
+        </ul>
       </div>
       {f.unmatched_reasons.length > 0 && (
         <div className={`cmp-note ${f.unmatched_high ? '' : 'ok'}`}>
